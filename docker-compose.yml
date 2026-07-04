@@ -1,0 +1,78 @@
+services:
+  api:
+    build:
+      context: .
+    container_name: signacore-api
+    env_file:
+      - .env.docker
+    command:
+      - gunicorn
+      - signacore_api.wsgi:application
+      - --bind
+      - 0.0.0.0:8010
+      - --workers
+      - ${GUNICORN_WORKERS:-3}
+      - --timeout
+      - ${GUNICORN_TIMEOUT:-120}
+    volumes:
+      - ${SIGNACORE_STORAGE_ROOT:-/srv/signacore/storage}:/srv/signacore/storage
+      - ${SIGNACORE_STATIC_ROOT:-/srv/signacore/staticfiles}:/srv/signacore/staticfiles
+    ports:
+      - "${SIGNACORE_API_PORT:-8010}:8010"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    restart: unless-stopped
+    networks:
+      - shared-net
+
+  worker:
+    build:
+      context: .
+    container_name: signacore-worker
+    env_file:
+      - .env.docker
+    command:
+      - celery
+      - -A
+      - signacore_api
+      - worker
+      - --loglevel=info
+      - --concurrency=${CELERY_CONCURRENCY:-2}
+    volumes:
+      - ${SIGNACORE_STORAGE_ROOT:-/srv/signacore/storage}:/srv/signacore/storage
+      - ${SIGNACORE_STATIC_ROOT:-/srv/signacore/staticfiles}:/srv/signacore/staticfiles
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    restart: unless-stopped
+    depends_on:
+      - api
+    networks:
+      - shared-net
+
+  beat:
+    build:
+      context: .
+    container_name: signacore-beat
+    env_file:
+      - .env.docker
+    command:
+      - celery
+      - -A
+      - signacore_api
+      - beat
+      - --loglevel=info
+    volumes:
+      - ${SIGNACORE_STORAGE_ROOT:-/srv/signacore/storage}:/srv/signacore/storage
+      - ${SIGNACORE_STATIC_ROOT:-/srv/signacore/staticfiles}:/srv/signacore/staticfiles
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    restart: unless-stopped
+    depends_on:
+      - api
+    networks:
+      - shared-net
+
+networks:
+  shared-net:
+    external: true
+
