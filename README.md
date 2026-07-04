@@ -19,9 +19,10 @@ cd signacore-api
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements/dev.txt
+cp .env.example .env
 python manage.py migrate
 python manage.py test
-python manage.py runserver 0.0.0.0:8010
+python manage.py runserver 127.0.0.1:8010
 ```
 
 ## Current foundation
@@ -45,14 +46,40 @@ This service is set up for container deployment while still using server-hosted 
 
 - `Dockerfile`
 - `docker-compose.yml`
-- `.env.docker.example`
+- `.env.example`
 - `docker/entrypoint.sh`
+
+## Make commands
+
+```bash
+make help
+make makemigrations
+make migrate
+make collectstatic
+make test
+make docker-up
+make docker-down
+make docker-restart
+make docker-destroy
+make docker-build
+make docker-build-no-cache
+```
+
+Short aliases are also available for the Docker lifecycle commands:
+
+```bash
+make up
+make down
+make restart
+make destroy
+make build
+make build-no-cache
+```
 
 ### First run
 
 ```bash
 cd signacore-api
-cp .env.docker.example .env.docker
-docker network create shared-net || true
+cp .env.example .env
 docker compose up --build -d
 ```

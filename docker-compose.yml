@@ -4,7 +4,7 @@ services:
       context: .
     container_name: signacore-api
     env_file:
-      - .env.docker
+      - .env
     command:
       - gunicorn
       - signacore_api.wsgi:application
@@ -16,21 +16,17 @@ services:
       - ${GUNICORN_TIMEOUT:-120}
     volumes:
       - ${SIGNACORE_STORAGE_ROOT:-/srv/signacore/storage}:/srv/signacore/storage
-      - ${SIGNACORE_STATIC_ROOT:-/srv/signacore/staticfiles}:/srv/signacore/staticfiles
+      - ${STATIC_ROOT:-/srv/signacore/staticfiles}:/srv/signacore/staticfiles
     ports:
-      - "${SIGNACORE_API_PORT:-8010}:8010"
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
+      - "127.0.0.1:${SIGNACORE_API_PORT:-8010}:8010"
     restart: unless-stopped
-    networks:
-      - shared-net
 
   worker:
     build:
       context: .
     container_name: signacore-worker
     env_file:
-      - .env.docker
+      - .env
     command:
       - celery
       - -A
@@ -40,21 +36,17 @@ services:
       - --concurrency=${CELERY_CONCURRENCY:-2}
     volumes:
       - ${SIGNACORE_STORAGE_ROOT:-/srv/signacore/storage}:/srv/signacore/storage
-      - ${SIGNACORE_STATIC_ROOT:-/srv/signacore/staticfiles}:/srv/signacore/staticfiles
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
+      - ${STATIC_ROOT:-/srv/signacore/staticfiles}:/srv/signacore/staticfiles
     restart: unless-stopped
     depends_on:
       - api
-    networks:
-      - shared-net
 
   beat:
     build:
       context: .
     container_name: signacore-beat
     env_file:
-      - .env.docker
+      - .env
     command:
       - celery
       - -A
@@ -63,16 +55,12 @@ services:
       - --loglevel=info
     volumes:
       - ${SIGNACORE_STORAGE_ROOT:-/srv/signacore/storage}:/srv/signacore/storage
-      - ${SIGNACORE_STATIC_ROOT:-/srv/signacore/staticfiles}:/srv/signacore/staticfiles
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
+      - ${STATIC_ROOT:-/srv/signacore/staticfiles}:/srv/signacore/staticfiles
     restart: unless-stopped
     depends_on:
       - api
-    networks:
-      - shared-net
 
 networks:
-  shared-net:
+  default:
+    name: shared-net
     external: true
-

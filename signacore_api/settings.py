@@ -1,10 +1,31 @@
 from __future__ import annotations
 
 import os
+import sys
 from pathlib import Path
 
 
 BASE_DIR = Path(__file__).resolve().parent.parent
+
+
+def load_dotenv_file(path: Path) -> None:
+    if not path.exists():
+        return
+
+    for raw_line in path.read_text().splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+
+        key, value = line.split("=", 1)
+        key = key.strip()
+        value = value.strip()
+        if value[:1] == value[-1:] and value[:1] in {'"', "'"}:
+            value = value[1:-1]
+        os.environ.setdefault(key, value)
+
+
+load_dotenv_file(BASE_DIR / ".env")
 
 
 def env(key: str, default: str | None = None) -> str | None:
@@ -123,6 +144,11 @@ SIGNACORE_STORAGE_ROOT = Path(
     )
 )
 MEDIA_ROOT = SIGNACORE_STORAGE_ROOT
+
+if "test" in sys.argv:
+    STATIC_ROOT = BASE_DIR / "staticfiles-test"
+    SIGNACORE_STORAGE_ROOT = BASE_DIR / "storage-test"
+    MEDIA_ROOT = SIGNACORE_STORAGE_ROOT
 
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
