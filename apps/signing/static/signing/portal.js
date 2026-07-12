@@ -125,6 +125,7 @@
   function buildTextField(field) {
     const input = document.createElement("input");
     input.type = "text";
+    input.className = "text-field-input";
     input.placeholder = field.label;
     input.value = getFieldValue(field.id)?.textValue || "";
     input.addEventListener("input", () => {
@@ -159,6 +160,7 @@
 
   function openSignatureModal(fieldId) {
     state.activeFieldId = fieldId;
+    nodes.signatureModal.dataset.activeFieldId = fieldId;
     const field = state.context.fields.find((entry) => entry.id === fieldId);
     const currentValue = getFieldValue(fieldId);
     state.typedSignature = currentValue?.typedText || "";
@@ -170,6 +172,7 @@
 
   function closeSignatureModal() {
     nodes.signatureModal.hidden = true;
+    delete nodes.signatureModal.dataset.activeFieldId;
     state.activeFieldId = "";
   }
 
@@ -216,14 +219,26 @@
           const left = (field.x / pageData.width) * 100;
           const width = (field.width / pageData.width) * 100;
           const height = (field.height / pageData.height) * 100;
+          const typeClassName =
+            field.field_type === "TEXT"
+              ? "field-overlay-text"
+              : field.field_type === "CHECKBOX"
+                ? "field-overlay-checkbox"
+                : "field-overlay-signature";
+          const minHeightPercent =
+            field.field_type === "TEXT"
+              ? 1.4
+              : field.field_type === "CHECKBOX"
+                ? 1.2
+                : 4.5;
 
-          fieldNode.className = `field-overlay ${field.is_required ? "field-overlay-required" : ""} ${
+          fieldNode.className = `field-overlay ${typeClassName} ${field.is_required ? "field-overlay-required" : ""} ${
             state.fieldErrors[field.id] ? "field-error" : ""
           }`;
           fieldNode.style.top = `${top}%`;
           fieldNode.style.left = `${left}%`;
           fieldNode.style.width = `${width}%`;
-          fieldNode.style.height = `${Math.max(height, 4.5)}%`;
+          fieldNode.style.height = `${Math.max(height, minHeightPercent)}%`;
           fieldNode.title = field.label;
 
           let fieldContent;
@@ -345,7 +360,21 @@
     return new Promise((resolve, reject) => {
       try {
         if (typeof canvas.toBlob === "function") {
+          let settled = false;
+          const fallbackTimer = window.setTimeout(() => {
+            if (settled) return;
+            settled = true;
+            try {
+              resolve(dataUrlToBlob(canvas.toDataURL("image/png")));
+            } catch (fallbackError) {
+              reject(fallbackError);
+            }
+          }, 250);
+
           canvas.toBlob((blob) => {
+            if (settled) return;
+            settled = true;
+            window.clearTimeout(fallbackTimer);
             if (blob) {
               resolve(blob);
               return;
@@ -368,15 +397,19 @@
   }
 
   async function saveSignatureField() {
+    const activeFieldId = state.activeFieldId || nodes.signatureModal.dataset.activeFieldId || "";
     if (isSavingSignature) return;
-    if (!state.activeFieldId || !state.context) {
-      setNotice("Unable to save this signature field right now.", "error");
+    if (!activeFieldId || !state.context) {
+      closeSignatureModal();
+      setNotice("Unable to save this signature field right now. Re-open the field and try again.", "error");
       return;
     }
 
-    const field = state.context.fields.find((entry) => entry.id === state.activeFieldId);
+    state.activeFieldId = activeFieldId;
+    const field = state.context.fields.find((entry) => entry.id === activeFieldId);
     if (!field) {
-      setNotice("The selected signature field could not be found.", "error");
+      closeSignatureModal();
+      setNotice("The selected signature field could not be found. Re-open the field and try again.", "error");
       return;
     }
 
@@ -402,13 +435,13 @@
       }
 
       const imageUrl = URL.createObjectURL(blob);
-      state.values[state.activeFieldId] = {
+      state.values[activeFieldId] = {
         type: field.field_type === "INITIALS" ? "INITIALS_PNG" : "SIGNATURE_PNG",
         imageBlob: blob,
         imageUrl,
         typedText: state.signatureMode === "type" ? state.typedSignature : "",
       };
-      delete state.fieldErrors[state.activeFieldId];
+      delete state.fieldErrors[activeFieldId];
       closeSignatureModal();
       renderFieldList();
       renderPages();
@@ -503,6 +536,11 @@
   nodes.closeModalButton.addEventListener("click", closeSignatureModal);
   nodes.signatureModal.addEventListener("click", (event) => {
     if (event.target instanceof HTMLElement && event.target.dataset.closeModal === "true") {
+      closeSignatureModal();
+    }
+  });
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && !nodes.signatureModal.hidden) {
       closeSignatureModal();
     }
   });
