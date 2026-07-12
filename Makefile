@@ -1,8 +1,7 @@
 .DEFAULT_GOAL := help
 
-PYTHON := .venv/bin/python
-MANAGE := $(PYTHON) manage.py
 COMPOSE := docker compose
+RUN_MANAGE := $(COMPOSE) run --rm --entrypoint "" api python manage.py
 
 .PHONY: \
 	help \
@@ -25,10 +24,10 @@ COMPOSE := docker compose
 
 help:
 	@printf "\nSignacore API commands\n\n"
-	@printf "  make makemigrations      Create Django migrations\n"
-	@printf "  make migrate             Apply Django migrations\n"
-	@printf "  make collectstatic       Collect static assets\n"
-	@printf "  make test                Run the Signacore test suite\n"
+	@printf "  make makemigrations      Create Django migrations in Docker\n"
+	@printf "  make migrate             Apply Django migrations in Docker\n"
+	@printf "  make collectstatic       Collect static assets in Docker\n"
+	@printf "  make test                Run the Signacore test suite in Docker\n"
 	@printf "  make docker-up           Start containers in detached mode\n"
 	@printf "  make docker-down         Stop containers\n"
 	@printf "  make docker-restart      Restart containers\n"
@@ -38,16 +37,16 @@ help:
 	@printf "  make up/down/restart/destroy/build/build-no-cache  Short aliases\n\n"
 
 makemigrations:
-	$(MANAGE) makemigrations
+	$(RUN_MANAGE) makemigrations
 
 migrate:
-	$(MANAGE) migrate
+	$(RUN_MANAGE) migrate
 
 collectstatic:
-	$(MANAGE) collectstatic --noinput
+	$(RUN_MANAGE) collectstatic --noinput
 
 test:
-	DB_NAME= $(MANAGE) test
+	$(RUN_MANAGE) test
 
 docker-up:
 	$(COMPOSE) up -d

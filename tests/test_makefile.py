@@ -30,3 +30,6 @@ class MakefileTests(TestCase):
             "docker-build-no-cache:",
         ):
             self.assertIn(target, contents)
+
+        self.assertIn('RUN_MANAGE := $(COMPOSE) run --rm --entrypoint "" api python manage.py', contents)
+        self.assertNotIn(".venv/bin/python", contents)

@@ -53,6 +53,8 @@ This service is set up for container deployment while still using server-hosted 
 
 ## Make commands
 
+These commands are Docker-native and are intended to work on the server without a repo-local virtualenv.
+
 ```bash
 make help
 make makemigrations
