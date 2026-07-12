@@ -172,7 +172,7 @@ EMAIL_PORT = env_int("EMAIL_PORT", 465)
 EMAIL_USE_SSL = env_bool("EMAIL_USE_SSL", True)
 EMAIL_HOST_USER = env("EMAIL_HOST_USER", "resend")
 EMAIL_HOST_PASSWORD = env("EMAIL_HOST_PASSWORD", "")
-DEFAULT_FROM_EMAIL = env("DEFAULT_FROM_EMAIL", "signacore@se7eninc.com")
+DEFAULT_FROM_EMAIL = env("DEFAULT_FROM_EMAIL", "SignaCore - by Se7en <signacore@se7eninc.com>")
 
 REDIS_URL = env("REDIS_URL", "redis://127.0.0.1:6379/3")
 CELERY_BROKER_URL = env("CELERY_BROKER_URL", REDIS_URL)

@@ -40,6 +40,7 @@
 
   const canvasContext = nodes.signatureCanvas.getContext("2d");
   let isDrawing = false;
+  let isSavingSignature = false;
 
   function formatDate(value) {
     if (!value) return "Not set";
@@ -325,40 +326,101 @@
     context.textBaseline = "middle";
     context.font = field.field_type === "INITIALS" ? "120px cursive" : "160px cursive";
     context.fillText(state.typedSignature || "", canvas.width / 2, canvas.height / 2);
-    return new Promise((resolve) => canvas.toBlob(resolve, "image/png"));
+    return canvasToBlob(canvas);
+  }
+
+  function dataUrlToBlob(dataUrl) {
+    const [meta, data] = dataUrl.split(",");
+    const mimeMatch = /data:(.*?);base64/.exec(meta || "");
+    const mimeType = mimeMatch?.[1] || "image/png";
+    const binary = atob(data || "");
+    const bytes = new Uint8Array(binary.length);
+    for (let index = 0; index < binary.length; index += 1) {
+      bytes[index] = binary.charCodeAt(index);
+    }
+    return new Blob([bytes], { type: mimeType });
+  }
+
+  function canvasToBlob(canvas) {
+    return new Promise((resolve, reject) => {
+      try {
+        if (typeof canvas.toBlob === "function") {
+          canvas.toBlob((blob) => {
+            if (blob) {
+              resolve(blob);
+              return;
+            }
+
+            try {
+              resolve(dataUrlToBlob(canvas.toDataURL("image/png")));
+            } catch (fallbackError) {
+              reject(fallbackError);
+            }
+          }, "image/png");
+          return;
+        }
+
+        resolve(dataUrlToBlob(canvas.toDataURL("image/png")));
+      } catch (error) {
+        reject(error);
+      }
+    });
   }
 
   async function saveSignatureField() {
-    if (!state.activeFieldId) return;
-    const field = state.context.fields.find((entry) => entry.id === state.activeFieldId);
-    let blob = null;
-
-    if (state.signatureMode === "type") {
-      blob = await renderTypedSignatureImage(field);
-      if (!blob || !state.typedSignature.trim()) {
-        setNotice("Type a value before saving this field.", "error");
-        return;
-      }
-    } else {
-      blob = await new Promise((resolve) => nodes.signatureCanvas.toBlob(resolve, "image/png"));
-      if (!blob) {
-        setNotice("Draw a signature before saving this field.", "error");
-        return;
-      }
+    if (isSavingSignature) return;
+    if (!state.activeFieldId || !state.context) {
+      setNotice("Unable to save this signature field right now.", "error");
+      return;
     }
 
-    const imageUrl = URL.createObjectURL(blob);
-    state.values[state.activeFieldId] = {
-      type: field.field_type === "INITIALS" ? "INITIALS_PNG" : "SIGNATURE_PNG",
-      imageBlob: blob,
-      imageUrl,
-      typedText: state.signatureMode === "type" ? state.typedSignature : "",
-    };
-    delete state.fieldErrors[state.activeFieldId];
-    closeSignatureModal();
-    renderFieldList();
-    renderPages();
-    updateSubmitState();
+    const field = state.context.fields.find((entry) => entry.id === state.activeFieldId);
+    if (!field) {
+      setNotice("The selected signature field could not be found.", "error");
+      return;
+    }
+
+    let blob = null;
+
+    try {
+      isSavingSignature = true;
+      nodes.saveSignatureButton.disabled = true;
+
+      if (state.signatureMode === "type") {
+        if (!state.typedSignature.trim()) {
+          setNotice("Type a value before saving this field.", "error");
+          return;
+        }
+        blob = await renderTypedSignatureImage(field);
+      } else {
+        blob = await canvasToBlob(nodes.signatureCanvas);
+      }
+
+      if (!blob) {
+        setNotice("Unable to generate the signature image. Please try again.", "error");
+        return;
+      }
+
+      const imageUrl = URL.createObjectURL(blob);
+      state.values[state.activeFieldId] = {
+        type: field.field_type === "INITIALS" ? "INITIALS_PNG" : "SIGNATURE_PNG",
+        imageBlob: blob,
+        imageUrl,
+        typedText: state.signatureMode === "type" ? state.typedSignature : "",
+      };
+      delete state.fieldErrors[state.activeFieldId];
+      closeSignatureModal();
+      renderFieldList();
+      renderPages();
+      updateSubmitState();
+      setNotice(`${field.label} saved.`, "success");
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Unable to save this signature field.";
+      setNotice(message, "error");
+    } finally {
+      isSavingSignature = false;
+      nodes.saveSignatureButton.disabled = false;
+    }
   }
 
   async function submitDocument() {
