@@ -1,0 +1,125 @@
+{% load static %}
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Signacore Signer Portal</title>
+    <link rel="stylesheet" href="{{ signer_portal_css_url }}">
+  </head>
+  <body>
+    <main
+      class="signacore-app"
+      data-signing-token="{{ signing_token }}"
+      data-context-url="/api/sign/{{ signing_token }}/"
+      data-otp-send-url="/api/sign/{{ signing_token }}/otp/send/"
+      data-otp-verify-url="/api/sign/{{ signing_token }}/otp/verify/"
+      data-submit-url="/api/sign/{{ signing_token }}/submit/"
+    >
+      <section class="hero">
+        <div>
+          <p class="eyebrow">Signacore</p>
+          <h1 class="hero-title">Review and sign your document.</h1>
+          <p class="hero-copy">
+            This page is hosted directly by the Signacore service. Verify your email, review the document preview,
+            complete the required fields, and submit your signature.
+          </p>
+        </div>
+        <div class="hero-panel">
+          <div class="hero-metric">
+            <span class="hero-metric-label">Session</span>
+            <strong id="status-badge" class="status-badge">Loading</strong>
+          </div>
+          <div class="hero-metric">
+            <span class="hero-metric-label">Signer</span>
+            <strong id="signer-name">Loading…</strong>
+          </div>
+          <div class="hero-metric">
+            <span class="hero-metric-label">Expires</span>
+            <strong id="expires-at">Loading…</strong>
+          </div>
+        </div>
+      </section>
+
+      <section id="notice" class="notice" hidden></section>
+
+      <section class="workflow-grid">
+        <aside class="workflow-sidebar">
+          <div class="panel">
+            <h2>Verify access</h2>
+            <p class="panel-copy">
+              A six-digit code is sent to the signer email before signing continues. This prevents anyone with a forwarded
+              link from signing as someone else.
+            </p>
+            <button id="send-otp-button" class="primary-button" type="button">Send OTP</button>
+            <p id="otp-target" class="muted-copy"></p>
+          </div>
+
+          <div class="panel">
+            <h2>Enter OTP</h2>
+            <label class="field">
+              <span>Verification code</span>
+              <input id="otp-input" class="text-input" inputmode="numeric" maxlength="6" placeholder="123456">
+            </label>
+            <button id="verify-otp-button" class="secondary-button" type="button">Verify code</button>
+          </div>
+
+          <div class="panel">
+            <h2>Field progress</h2>
+            <div id="field-list" class="field-list"></div>
+            <button id="submit-button" class="primary-button" type="button" disabled>Submit signed document</button>
+          </div>
+        </aside>
+
+        <section class="document-panel">
+          <div class="panel document-shell">
+            <div class="document-header">
+              <div>
+                <h2 id="document-title">Loading document…</h2>
+                <p class="panel-copy">Fields are rendered against server-generated page previews using PDF coordinates from Django.</p>
+              </div>
+            </div>
+            <div id="pages-root" class="pages-root"></div>
+          </div>
+        </section>
+      </section>
+    </main>
+
+    <div id="signature-modal" class="modal" hidden>
+      <div class="modal-backdrop" data-close-modal="true"></div>
+      <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="signature-modal-title">
+        <div class="modal-header">
+          <div>
+            <p class="eyebrow">Field editor</p>
+            <h2 id="signature-modal-title">Capture signature</h2>
+          </div>
+          <button id="close-modal-button" class="icon-button" type="button" aria-label="Close editor">×</button>
+        </div>
+
+        <div class="mode-toggle">
+          <button id="draw-mode-button" class="mode-button mode-button-active" type="button">Draw</button>
+          <button id="type-mode-button" class="mode-button" type="button">Type</button>
+        </div>
+
+        <div id="draw-pane">
+          <canvas id="signature-canvas" class="signature-canvas" width="960" height="280"></canvas>
+        </div>
+
+        <div id="type-pane" hidden>
+          <label class="field">
+            <span>Typed signature</span>
+            <input id="typed-signature-input" class="text-input" placeholder="Type your name">
+          </label>
+          <div id="typed-preview" class="typed-preview"></div>
+        </div>
+
+        <div class="modal-actions">
+          <button id="clear-signature-button" class="secondary-button" type="button">Clear</button>
+          <button id="save-signature-button" class="primary-button" type="button">Use this</button>
+        </div>
+      </div>
+    </div>
+
+    <script src="{{ signer_portal_js_url }}" defer></script>
+  </body>
+</html>

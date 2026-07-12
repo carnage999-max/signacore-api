@@ -37,6 +37,7 @@ class FieldSubmission(models.Model):
         TEXT = "TEXT", "Text"
         SIGNATURE_PNG = "SIGNATURE_PNG", "Signature PNG"
         INITIALS_PNG = "INITIALS_PNG", "Initials PNG"
+        CHECKBOX = "CHECKBOX", "Checkbox"
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     signing_request = models.ForeignKey(SigningRequest, on_delete=models.CASCADE, related_name="submissions")
@@ -45,4 +46,3 @@ class FieldSubmission(models.Model):
     text_value = EncryptedTextField(null=True, blank=True)
     image_value = models.FileField(upload_to="signacore/sigs/", null=True, blank=True)
     submitted_at = models.DateTimeField(auto_now_add=True)
-

@@ -7,6 +7,7 @@ from datetime import timedelta
 
 import fitz
 from django.contrib.auth import get_user_model
+from django.core import mail
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import TestCase, override_settings
 from django.utils import timezone
@@ -31,6 +32,8 @@ def build_png_pixel() -> bytes:
 @override_settings(
     MEDIA_ROOT=TEST_MEDIA_ROOT,
     EMAIL_BACKEND="django.core.mail.backends.locmem.EmailBackend",
+    CELERY_TASK_ALWAYS_EAGER=True,
+    CELERY_TASK_EAGER_PROPAGATES=True,
 )
 class SignerFlowTests(TestCase):
     def setUp(self) -> None:
@@ -91,8 +94,23 @@ class SignerFlowTests(TestCase):
         self.assertEqual(payload["signer_name"], "Jane Doe")
         self.assertEqual(payload["status"], "PENDING")
         self.assertEqual(len(payload["fields"]), 2)
+        self.assertEqual(payload["page_count"], 1)
+        self.assertEqual(len(payload["pages"]), 1)
+
+    def test_signer_portal_page_renders(self) -> None:
+        response = self.client.get(f"/sign/{self.signing_request.id}/")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Signacore Signer Portal")
+
+    def test_signer_preview_endpoint_returns_png(self) -> None:
+        response = self.client.get(f"/api/sign/{self.signing_request.id}/pages/1/preview/")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response["Content-Type"], "image/png")
 
     def test_send_otp_masks_email_and_persists_hash(self) -> None:
+        mail.outbox = []
         response = self.client.post(f"/api/sign/{self.signing_request.id}/otp/send/")
 
         self.assertEqual(response.status_code, 200, response.json())
@@ -101,6 +119,8 @@ class SignerFlowTests(TestCase):
         self.signing_request.refresh_from_db()
         self.assertIsNotNone(self.signing_request.otp_hash)
         self.assertIsNotNone(self.signing_request.otp_expires_at)
+        self.assertEqual(len(mail.outbox), 1)
+        self.assertIn("OTP code", mail.outbox[0].body)
 
     def test_verify_otp_returns_submit_session(self) -> None:
         with self.settings(SIGNACORE_TEST_OTP_CODE="123456"):
@@ -140,7 +160,21 @@ class SignerFlowTests(TestCase):
         self.assertEqual(response.status_code, 400, response.json())
         self.assertIn(str(self.signature_field.id), response.json()["field_errors"])
 
-    def test_submit_completes_single_signer_document_and_generates_signed_pdf(self) -> None:
+    def test_submit_requires_required_checkbox_field_to_be_checked(self) -> None:
+        checkbox_field = DocumentField.objects.create(
+            document=self.document,
+            field_type=DocumentField.FieldTypeEnum.CHECKBOX,
+            label="Email notices consent",
+            page=1,
+            x=72,
+            y=460,
+            width=12,
+            height=12,
+            is_required=True,
+            detection_source=DocumentField.DetectionSourceEnum.MANUAL,
+            order=3,
+        )
+
         with self.settings(SIGNACORE_TEST_OTP_CODE="123456"):
             self.client.post(f"/api/sign/{self.signing_request.id}/otp/send/")
             verify_response = self.client.post(
@@ -162,9 +196,57 @@ class SignerFlowTests(TestCase):
                     build_png_pixel(),
                     content_type="image/png",
                 ),
+                f"field_{checkbox_field.id}_type": "CHECKBOX",
+                f"field_{checkbox_field.id}_checked": "false",
             },
             format="multipart",
         )
+
+        self.assertEqual(response.status_code, 400, response.json())
+        self.assertIn(str(checkbox_field.id), response.json()["field_errors"])
+
+    def test_submit_completes_single_signer_document_and_generates_signed_pdf(self) -> None:
+        mail.outbox = []
+        checkbox_field = DocumentField.objects.create(
+            document=self.document,
+            field_type=DocumentField.FieldTypeEnum.CHECKBOX,
+            label="Email notices consent",
+            page=1,
+            x=72,
+            y=460,
+            width=12,
+            height=12,
+            is_required=True,
+            detection_source=DocumentField.DetectionSourceEnum.MANUAL,
+            order=3,
+        )
+        with self.settings(SIGNACORE_TEST_OTP_CODE="123456"):
+            self.client.post(f"/api/sign/{self.signing_request.id}/otp/send/")
+            verify_response = self.client.post(
+                f"/api/sign/{self.signing_request.id}/otp/verify/",
+                {"otp": "123456"},
+                format="json",
+            )
+        session_token = verify_response.json()["session_token"]
+
+        with self.captureOnCommitCallbacks(execute=True):
+            response = self.client.post(
+                f"/api/sign/{self.signing_request.id}/submit/",
+                {
+                    "session_token": session_token,
+                    f"field_{self.text_field.id}_type": "TEXT",
+                    f"field_{self.text_field.id}_value": "Jane Doe",
+                    f"field_{self.signature_field.id}_type": "SIGNATURE_PNG",
+                    f"field_{self.signature_field.id}_image": SimpleUploadedFile(
+                        "signature.png",
+                        build_png_pixel(),
+                        content_type="image/png",
+                    ),
+                    f"field_{checkbox_field.id}_type": "CHECKBOX",
+                    f"field_{checkbox_field.id}_checked": "true",
+                },
+                format="multipart",
+            )
 
         self.assertEqual(response.status_code, 200, response.json())
         payload = response.json()
@@ -174,4 +256,5 @@ class SignerFlowTests(TestCase):
         self.assertEqual(self.signing_request.status, SigningRequest.StatusEnum.SIGNED)
         self.assertEqual(self.document.status, Document.StatusEnum.COMPLETED)
         self.assertTrue(self.document.signed_pdf.name.endswith(".pdf"))
-        self.assertEqual(FieldSubmission.objects.count(), 2)
+        self.assertEqual(FieldSubmission.objects.count(), 3)
+        self.assertGreaterEqual(len(mail.outbox), 2)

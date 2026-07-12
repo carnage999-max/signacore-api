@@ -19,6 +19,8 @@ from rest_framework.views import APIView
 from apps.signing.models import SigningRequest
 from services.pdf_engine import PDFEngine
 from signacore_api.settings import SIGNACORE_SERVICE_USERNAME, SIGNING_LINK_EXPIRY_DAYS
+from tasks.notifications import send_invitation_emails
+from utils.task_dispatch import enqueue_task
 
 from .auth import HasValidSignacoreSecret
 from .models import Document, DocumentField
@@ -212,6 +214,7 @@ class AdminDocumentSendView(APIView):
             document.status = Document.StatusEnum.SENT
             document.save(update_fields=["status", "updated_at"])
 
+        enqueue_task(send_invitation_emails, str(document.id))
         document = Document.objects.prefetch_related("fields", "signing_requests").get(pk=document.pk)
         response_serializer = AdminDocumentDetailSerializer(document)
         payload = response_serializer.data

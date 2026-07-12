@@ -14,7 +14,7 @@ class SignacoreEnumTests(SimpleTestCase):
     def test_document_field_type_enum_matches_spec(self) -> None:
         self.assertEqual(
             [value for value, _ in DocumentField.FieldTypeEnum.choices],
-            ["SIGNATURE", "INITIALS", "TEXT"],
+            ["SIGNATURE", "INITIALS", "TEXT", "CHECKBOX"],
         )
 
     def test_signing_request_status_enum_matches_spec(self) -> None:
@@ -26,6 +26,5 @@ class SignacoreEnumTests(SimpleTestCase):
     def test_field_submission_value_type_enum_matches_spec(self) -> None:
         self.assertEqual(
             [value for value, _ in FieldSubmission.ValueTypeEnum.choices],
-            ["TEXT", "SIGNATURE_PNG", "INITIALS_PNG"],
+            ["TEXT", "SIGNATURE_PNG", "INITIALS_PNG", "CHECKBOX"],
         )
-

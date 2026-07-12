@@ -9,6 +9,7 @@ from django.contrib.auth import get_user_model
 from django.conf import settings
 from django.core.files.base import ContentFile
 from django.core.files.uploadedfile import SimpleUploadedFile
+from django.core import mail
 from django.test import TestCase, override_settings
 from django.utils import timezone
 from rest_framework.test import APIClient
@@ -73,9 +74,30 @@ def build_flat_pdf() -> bytes:
     return pdf_bytes
 
 
+def build_heuristic_signature_checkbox_pdf() -> bytes:
+    document = fitz.open()
+    page = document.new_page(width=612, height=792)
+    page.insert_text((72, 120), "Tenant Signature:________________________ Date:____________")
+    page.insert_text((72, 150), "Print Name:________________________")
+    page.insert_text((72, 180), "Email:_____________________________")
+    page.insert_text((92, 220), "I agree to receive notices by email.")
+    shape = page.new_shape()
+    shape.draw_rect(fitz.Rect(72, 210, 82, 220))
+    shape.finish(width=1, color=(0, 0, 0))
+    shape.commit()
+
+    pdf_bytes = document.tobytes()
+    document.close()
+    return pdf_bytes
+
+
 @override_settings(
     SIGNACORE_SHARED_SECRET="test-signacore-secret",
     SIGNACORE_SERVICE_USERNAME="signacore-service",
+    SIGNING_LINK_BASE_URL="https://signacore.se7eninc.com",
+    EMAIL_BACKEND="django.core.mail.backends.locmem.EmailBackend",
+    CELERY_TASK_ALWAYS_EAGER=True,
+    CELERY_TASK_EAGER_PROPAGATES=True,
 )
 class AdminDocumentUploadTests(TestCase):
     def setUp(self) -> None:
@@ -147,6 +169,38 @@ class AdminDocumentUploadTests(TestCase):
         )
         self.assertTrue(
             any(field["field_type"] == "TEXT" for field in payload["fields"])
+        )
+
+    def test_upload_pdf_detects_inline_signature_date_text_and_checkbox_fields(self) -> None:
+        upload = SimpleUploadedFile(
+            "heuristic-fields.pdf",
+            build_heuristic_signature_checkbox_pdf(),
+            content_type="application/pdf",
+        )
+
+        response = self.client.post(
+            "/api/admin/documents/",
+            {"title": "Heuristic Fields", "pdf_file": upload},
+            format="multipart",
+        )
+
+        self.assertEqual(response.status_code, 201, response.json())
+        payload = response.json()
+        self.assertEqual(payload["detection_summary"]["source"], "HEURISTIC")
+        self.assertEqual(len(payload["fields"]), 5)
+
+        returned_fields = {(field["label"], field["field_type"]) for field in payload["fields"]}
+        self.assertIn(("Tenant Signature", "SIGNATURE"), returned_fields)
+        self.assertIn(("Date", "TEXT"), returned_fields)
+        self.assertIn(("Print Name", "TEXT"), returned_fields)
+        self.assertIn(("Email", "TEXT"), returned_fields)
+        self.assertTrue(
+            any(
+                field["field_type"] == "CHECKBOX"
+                and "I agree to receive notices by email" in field["label"]
+                and field["width"] <= 16
+                for field in payload["fields"]
+            )
         )
 
     def test_upload_pdf_truncates_overlong_detected_labels(self) -> None:
@@ -318,6 +372,7 @@ class AdminDocumentUploadTests(TestCase):
         self.assertFalse(DocumentField.objects.filter(id=field.id).exists())
 
     def test_send_document_creates_signing_requests_and_marks_document_sent(self) -> None:
+        mail.outbox = []
         document = Document.objects.create(
             title="Offer Package",
             original_pdf=SimpleUploadedFile("offer.pdf", build_flat_pdf(), content_type="application/pdf"),
@@ -356,6 +411,8 @@ class AdminDocumentUploadTests(TestCase):
         document.refresh_from_db()
         self.assertEqual(document.status, Document.StatusEnum.SENT)
         self.assertEqual(document.signing_requests.count(), 2)
+        self.assertEqual(len(mail.outbox), 2)
+        self.assertIn("https://signacore.se7eninc.com/sign/", mail.outbox[0].body)
 
     def test_send_document_requires_at_least_one_field(self) -> None:
         document = Document.objects.create(

@@ -39,6 +39,7 @@ class DocumentField(models.Model):
         SIGNATURE = "SIGNATURE", "Signature"
         INITIALS = "INITIALS", "Initials"
         TEXT = "TEXT", "Text"
+        CHECKBOX = "CHECKBOX", "Checkbox"
 
     class DetectionSourceEnum(models.TextChoices):
         ACROFORM = "ACROFORM", "AcroForm"
@@ -63,4 +64,3 @@ class DocumentField(models.Model):
 
     def __str__(self) -> str:
         return f"{self.document.title}: {self.label}"
-
