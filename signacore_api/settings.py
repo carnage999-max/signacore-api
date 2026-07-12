@@ -4,6 +4,7 @@ import os
 import sys
 from pathlib import Path
 
+from corsheaders.defaults import default_headers
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
@@ -163,6 +164,7 @@ REST_FRAMEWORK = {
 }
 
 CORS_ALLOWED_ORIGINS = env_csv("CORS_ALLOWED_ORIGINS")
+CORS_ALLOW_HEADERS = tuple(default_headers) + ("x-signacore-secret",)
 
 EMAIL_BACKEND = "django.core.mail.backends.smtp.EmailBackend"
 EMAIL_HOST = env("EMAIL_HOST", "smtp.resend.com")
@@ -183,6 +185,8 @@ CELERY_BEAT_SCHEDULE = {
 }
 
 FERNET_KEY = env("FERNET_KEY", "WtF08bpUcDm4uvofwRRmm-JO-17mi6T6qwrmeJEC9Gc=")
+SIGNACORE_SHARED_SECRET = env("SIGNACORE_SHARED_SECRET", "")
+SIGNACORE_SERVICE_USERNAME = env("SIGNACORE_SERVICE_USERNAME", "signacore-service")
 SIGNING_LINK_BASE_URL = env("SIGNING_LINK_BASE_URL", "https://signacore.se7eninc.com")
 SIGNING_LINK_EXPIRY_DAYS = env_int("SIGNING_LINK_EXPIRY_DAYS", 7)
 OTP_EXPIRY_MINUTES = env_int("OTP_EXPIRY_MINUTES", 10)

@@ -6,9 +6,10 @@ from datetime import timedelta
 
 import fitz
 from django.contrib.auth import get_user_model
+from django.conf import settings
 from django.core.files.base import ContentFile
 from django.core.files.uploadedfile import SimpleUploadedFile
-from django.test import TestCase
+from django.test import TestCase, override_settings
 from django.utils import timezone
 from rest_framework.test import APIClient
 
@@ -56,6 +57,10 @@ def build_flat_pdf() -> bytes:
     return pdf_bytes
 
 
+@override_settings(
+    SIGNACORE_SHARED_SECRET="test-signacore-secret",
+    SIGNACORE_SERVICE_USERNAME="signacore-service",
+)
 class AdminDocumentUploadTests(TestCase):
     def setUp(self) -> None:
         self.client = APIClient()
@@ -63,7 +68,17 @@ class AdminDocumentUploadTests(TestCase):
             username="admin",
             password="password123",
         )
-        self.client.force_authenticate(user=self.user)
+        self.client.credentials(HTTP_X_SIGNACORE_SECRET=settings.SIGNACORE_SHARED_SECRET)
+
+    def test_admin_routes_require_signacore_secret_header(self) -> None:
+        self.client.credentials()
+
+        response = self.client.get("/api/admin/documents/")
+
+        self.assertEqual(response.status_code, 403, response.json())
+        self.assertEqual(response.json()["detail"], "Invalid Signacore secret.")
+
+        self.client.credentials(HTTP_X_SIGNACORE_SECRET=settings.SIGNACORE_SHARED_SECRET)
 
     def test_upload_pdf_creates_document_and_extracts_acroform_fields(self) -> None:
         upload = SimpleUploadedFile(
@@ -91,7 +106,7 @@ class AdminDocumentUploadTests(TestCase):
         )
 
         document = Document.objects.get(pk=payload["id"])
-        self.assertEqual(document.created_by, self.user)
+        self.assertEqual(document.created_by.username, settings.SIGNACORE_SERVICE_USERNAME)
         self.assertEqual(document.fields.count(), 2)
 
     def test_upload_pdf_falls_back_to_heuristic_detection_when_no_widgets_exist(self) -> None:

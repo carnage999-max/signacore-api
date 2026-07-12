@@ -4,6 +4,7 @@ import fitz
 from datetime import timedelta
 from pathlib import Path
 
+from django.contrib.auth import get_user_model
 from django.db import transaction
 from django.db.models import Count, Q
 from django.http import FileResponse
@@ -17,8 +18,9 @@ from rest_framework.views import APIView
 
 from apps.signing.models import SigningRequest
 from services.pdf_engine import PDFEngine
-from signacore_api.settings import SIGNING_LINK_EXPIRY_DAYS
+from signacore_api.settings import SIGNACORE_SERVICE_USERNAME, SIGNING_LINK_EXPIRY_DAYS
 
+from .auth import HasValidSignacoreSecret
 from .models import Document, DocumentField
 from .serializers import (
     AdminDocumentDetailSerializer,
@@ -31,7 +33,22 @@ from .serializers import (
     ManualDocumentFieldCreateSerializer,
 )
 
+
+def get_signacore_service_user():
+    user_model = get_user_model()
+    user, _ = user_model.objects.get_or_create(
+        username=SIGNACORE_SERVICE_USERNAME,
+        defaults={
+            "is_staff": True,
+            "is_active": True,
+        },
+    )
+    return user
+
+
 class AdminDocumentsView(APIView):
+    authentication_classes = []
+    permission_classes = [HasValidSignacoreSecret]
     parser_classes = [MultiPartParser, FormParser]
 
     def get(self, request):
@@ -70,7 +87,7 @@ class AdminDocumentsView(APIView):
             document = Document.objects.create(
                 title=title,
                 original_pdf=pdf_file,
-                created_by=request.user,
+                created_by=get_signacore_service_user(),
             )
             detected_fields = engine.analyse(document.original_pdf.path)
             DocumentField.objects.bulk_create(
@@ -112,6 +129,9 @@ class AdminDocumentsView(APIView):
 
 
 class AdminDocumentDetailView(APIView):
+    authentication_classes = []
+    permission_classes = [HasValidSignacoreSecret]
+
     def get(self, request, document_id):
         document = get_object_or_404(Document.objects.prefetch_related("fields", "signing_requests"), pk=document_id)
         serializer = AdminDocumentDetailSerializer(document)
@@ -126,6 +146,9 @@ class AdminDocumentDetailView(APIView):
 
 
 class AdminDocumentFieldsView(APIView):
+    authentication_classes = []
+    permission_classes = [HasValidSignacoreSecret]
+
     def post(self, request, document_id):
         document = get_object_or_404(Document, pk=document_id)
         serializer = ManualDocumentFieldCreateSerializer(data=request.data)
@@ -138,6 +161,9 @@ class AdminDocumentFieldsView(APIView):
 
 
 class AdminDocumentFieldDetailView(APIView):
+    authentication_classes = []
+    permission_classes = [HasValidSignacoreSecret]
+
     def patch(self, request, document_id, field_id):
         field = get_object_or_404(DocumentField, pk=field_id, document_id=document_id)
         serializer = DocumentFieldUpdateSerializer(field, data=request.data, partial=True)
@@ -152,6 +178,9 @@ class AdminDocumentFieldDetailView(APIView):
 
 
 class AdminDocumentSendView(APIView):
+    authentication_classes = []
+    permission_classes = [HasValidSignacoreSecret]
+
     def post(self, request, document_id):
         document = get_object_or_404(Document.objects.prefetch_related("fields", "signing_requests"), pk=document_id)
         serializer = DocumentSendSerializer(data=request.data)
@@ -192,6 +221,9 @@ class AdminDocumentSendView(APIView):
 
 
 class AdminDocumentVoidView(APIView):
+    authentication_classes = []
+    permission_classes = [HasValidSignacoreSecret]
+
     def post(self, request, document_id):
         document = get_object_or_404(Document.objects.prefetch_related("signing_requests"), pk=document_id)
         if document.status not in {Document.StatusEnum.SENT, Document.StatusEnum.PARTIALLY_SIGNED}:
@@ -216,6 +248,9 @@ class AdminDocumentVoidView(APIView):
 
 
 class AdminDocumentDownloadView(APIView):
+    authentication_classes = []
+    permission_classes = [HasValidSignacoreSecret]
+
     def get(self, request, document_id):
         document = get_object_or_404(Document, pk=document_id)
         if document.status != Document.StatusEnum.COMPLETED or not document.signed_pdf:
