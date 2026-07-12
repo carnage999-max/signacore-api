@@ -41,6 +41,8 @@ This service is set up for container deployment while still using server-hosted 
 - Redis stays on the server, not in `docker-compose`
 - uploaded and signed documents live on a server bind mount, not S3
 - all Signacore containers join external Docker network `shared-net`
+- Signacore media uses `/mnt/data/media/signa-core/`
+- Signacore static files use `/srv/apps/signacore-api/staticfiles/`
 
 ### Deployment artifacts
 
@@ -81,5 +83,6 @@ make build-no-cache
 ```bash
 cd signacore-api
 cp .env.example .env
+mkdir -p /mnt/data/media/signa-core /srv/apps/signacore-api/staticfiles
 docker compose up --build -d
 ```
