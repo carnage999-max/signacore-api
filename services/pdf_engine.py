@@ -27,6 +27,7 @@ class PDFEngine:
     signature_keywords = ("signature",)
     initials_keywords = ("initials", "int.")
     text_keywords = ("name", "date", "employee")
+    max_label_length = 255
 
     def analyse(self, pdf_path: str | Path) -> list[DetectedField]:
         document = fitz.open(pdf_path)
@@ -48,7 +49,9 @@ class PDFEngine:
                 detected_fields.append(
                     DetectedField(
                         field_type=self._map_widget_type(widget),
-                        label=widget.field_label or widget.field_name or f"Field {order}",
+                        label=self._normalize_label(
+                            widget.field_label or widget.field_name or f"Field {order}"
+                        ),
                         page=page_index,
                         x=rect.x0,
                         y=rect.y0,
@@ -78,7 +81,7 @@ class PDFEngine:
                     detected_fields.append(
                         DetectedField(
                             field_type=DocumentField.FieldTypeEnum.SIGNATURE,
-                            label=f"Signature {order}",
+                            label=self._normalize_label(f"Signature {order}"),
                             page=page_index,
                             x=rect.x0,
                             y=page_height - rect.y1,
@@ -102,7 +105,7 @@ class PDFEngine:
                 detected_fields.append(
                     DetectedField(
                         field_type=field_type,
-                        label=text.strip().rstrip(":"),
+                        label=self._normalize_label(text.strip().rstrip(":")),
                         page=page_index,
                         x=x1 + 8.0,
                         y=page_height - y1,
@@ -164,3 +167,9 @@ class PDFEngine:
         if any(keyword in text for keyword in self.text_keywords) or text.endswith(":"):
             return DocumentField.FieldTypeEnum.TEXT
         return None
+
+    def _normalize_label(self, value: str) -> str:
+        label = str(value or "").strip()
+        if not label:
+            return "Field"
+        return label[: self.max_label_length]

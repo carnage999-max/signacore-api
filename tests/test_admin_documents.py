@@ -42,6 +42,22 @@ def build_acroform_pdf() -> bytes:
     return pdf_bytes
 
 
+def build_acroform_pdf_with_long_label() -> bytes:
+    document = fitz.open()
+    page = document.new_page(width=612, height=792)
+
+    text_widget = fitz.Widget()
+    text_widget.field_name = "employee_name"
+    text_widget.field_label = "L" * 300
+    text_widget.field_type = fitz.PDF_WIDGET_TYPE_TEXT
+    text_widget.rect = fitz.Rect(72, 144, 240, 168)
+    page.add_widget(text_widget)
+
+    pdf_bytes = document.tobytes()
+    document.close()
+    return pdf_bytes
+
+
 def build_flat_pdf() -> bytes:
     document = fitz.open()
     page = document.new_page(width=612, height=792)
@@ -132,6 +148,23 @@ class AdminDocumentUploadTests(TestCase):
         self.assertTrue(
             any(field["field_type"] == "TEXT" for field in payload["fields"])
         )
+
+    def test_upload_pdf_truncates_overlong_detected_labels(self) -> None:
+        upload = SimpleUploadedFile(
+            "long-label.pdf",
+            build_acroform_pdf_with_long_label(),
+            content_type="application/pdf",
+        )
+
+        response = self.client.post(
+            "/api/admin/documents/",
+            {"title": "Long Label Contract", "pdf_file": upload},
+            format="multipart",
+        )
+
+        self.assertEqual(response.status_code, 201, response.json())
+        payload = response.json()
+        self.assertEqual(len(payload["fields"][0]["label"]), 255)
 
     def test_list_documents_returns_signer_progress_counts(self) -> None:
         first = Document.objects.create(
