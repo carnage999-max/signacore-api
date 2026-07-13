@@ -425,6 +425,22 @@ input {
   color: #16314d;
 }
 
+.reuse-signature-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 16px;
+  color: #35516f;
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.reuse-signature-row input {
+  width: 18px;
+  height: 18px;
+  accent-color: #16314d;
+}
+
 .modal-actions {
   display: flex;
   gap: 12px;

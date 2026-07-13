@@ -34,6 +34,9 @@
     signatureCanvas: document.getElementById("signature-canvas"),
     typedSignatureInput: document.getElementById("typed-signature-input"),
     typedPreview: document.getElementById("typed-preview"),
+    reuseSignatureRow: document.getElementById("reuse-signature-row"),
+    reuseSignatureCheckbox: document.getElementById("reuse-signature-checkbox"),
+    reuseSignatureLabel: document.getElementById("reuse-signature-label"),
     clearSignatureButton: document.getElementById("clear-signature-button"),
     saveSignatureButton: document.getElementById("save-signature-button"),
   };
@@ -158,6 +161,26 @@
     return input;
   }
 
+  function getReusableSignatureTargets(activeField) {
+    if (!state.context || !activeField) return [];
+    return state.context.fields.filter(
+      (field) =>
+        field.id !== activeField.id &&
+        field.field_type === activeField.field_type &&
+        (field.field_type === "SIGNATURE" || field.field_type === "INITIALS") &&
+        !fieldIsComplete(field),
+    );
+  }
+
+  function buildSignatureValue(field, blob, imageUrl) {
+    return {
+      type: field.field_type === "INITIALS" ? "INITIALS_PNG" : "SIGNATURE_PNG",
+      imageBlob: blob,
+      imageUrl,
+      typedText: state.signatureMode === "type" ? state.typedSignature : "",
+    };
+  }
+
   function openSignatureModal(fieldId) {
     state.activeFieldId = fieldId;
     nodes.signatureModal.dataset.activeFieldId = fieldId;
@@ -167,6 +190,13 @@
     nodes.typedSignatureInput.value = state.typedSignature;
     nodes.typedPreview.textContent = state.typedSignature || (field?.field_type === "INITIALS" ? "Type initials" : "Type signature");
     clearCanvas();
+    const reusableTargets = getReusableSignatureTargets(field);
+    nodes.reuseSignatureCheckbox.checked = false;
+    nodes.reuseSignatureRow.hidden = reusableTargets.length === 0;
+    nodes.reuseSignatureLabel.textContent =
+      field?.field_type === "INITIALS"
+        ? `Use these initials for ${reusableTargets.length} remaining initials field${reusableTargets.length === 1 ? "" : "s"}`
+        : `Use this signature for ${reusableTargets.length} remaining signature field${reusableTargets.length === 1 ? "" : "s"}`;
     nodes.signatureModal.hidden = false;
   }
 
@@ -435,18 +465,25 @@
       }
 
       const imageUrl = URL.createObjectURL(blob);
-      state.values[activeFieldId] = {
-        type: field.field_type === "INITIALS" ? "INITIALS_PNG" : "SIGNATURE_PNG",
-        imageBlob: blob,
-        imageUrl,
-        typedText: state.signatureMode === "type" ? state.typedSignature : "",
-      };
+      const reusableTargets = nodes.reuseSignatureCheckbox.checked ? getReusableSignatureTargets(field) : [];
+      state.values[activeFieldId] = buildSignatureValue(field, blob, imageUrl);
       delete state.fieldErrors[activeFieldId];
+
+      reusableTargets.forEach((targetField) => {
+        state.values[targetField.id] = buildSignatureValue(targetField, blob, imageUrl);
+        delete state.fieldErrors[targetField.id];
+      });
+
       closeSignatureModal();
       renderFieldList();
       renderPages();
       updateSubmitState();
-      setNotice(`${field.label} saved.`, "success");
+      setNotice(
+        reusableTargets.length > 0
+          ? `${field.label} saved and applied to ${reusableTargets.length} more field${reusableTargets.length === 1 ? "" : "s"}.`
+          : `${field.label} saved.`,
+        "success",
+      );
     } catch (error) {
       const message = error instanceof Error ? error.message : "Unable to save this signature field.";
       setNotice(message, "error");
