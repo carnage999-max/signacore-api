@@ -351,6 +351,10 @@ input {
   z-index: 20;
 }
 
+.modal[hidden] {
+  display: none;
+}
+
 .modal-backdrop {
   position: absolute;
   inset: 0;
