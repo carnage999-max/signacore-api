@@ -15,6 +15,8 @@ class SigningRequestSerializer(serializers.ModelSerializer):
             "otp_expires_at",
             "signed_at",
             "expires_at",
+            "ip_address",
+            "user_agent",
         )
 
 

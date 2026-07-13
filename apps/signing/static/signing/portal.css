@@ -269,11 +269,11 @@ input {
   display: flex;
   align-items: center;
   justify-content: center;
-  padding: 4px;
-  border-radius: 10px;
-  border: 2px solid rgba(21, 63, 105, 0.55);
-  background: rgba(255, 255, 255, 0.66);
-  backdrop-filter: blur(5px);
+  padding: 2px;
+  border-radius: 4px;
+  border: 1px solid rgba(21, 63, 105, 0.28);
+  background: rgba(255, 255, 255, 0.18);
+  backdrop-filter: none;
 }
 
 .field-overlay-text {
@@ -291,8 +291,15 @@ input {
   backdrop-filter: none;
 }
 
+.field-overlay-signature {
+  padding: 0;
+  border-color: rgba(136, 43, 43, 0.5);
+  background: rgba(255, 255, 255, 0.08);
+  backdrop-filter: none;
+}
+
 .field-overlay-required {
-  border-color: rgba(136, 43, 43, 0.52);
+  border-color: rgba(136, 43, 43, 0.48);
 }
 
 .field-overlay input,
@@ -300,8 +307,8 @@ input {
   width: 100%;
   height: 100%;
   border: 0;
-  border-radius: 8px;
-  background: rgba(255, 255, 255, 0.96);
+  border-radius: 3px;
+  background: transparent;
 }
 
 .text-field-input {
@@ -326,10 +333,11 @@ input {
 }
 
 .signature-field-button {
-  padding: 0 10px;
-  font-size: 12px;
+  padding: 0 4px;
+  font-size: 11px;
   font-weight: 700;
-  color: #17324d;
+  color: rgba(23, 50, 77, 0.9);
+  background: rgba(255, 255, 255, 0.08);
 }
 
 .signature-preview-image {

@@ -227,10 +227,10 @@
                 : "field-overlay-signature";
           const minHeightPercent =
             field.field_type === "TEXT"
-              ? 1.4
+              ? 1.15
               : field.field_type === "CHECKBOX"
                 ? 1.2
-                : 4.5;
+                : 1.8;
 
           fieldNode.className = `field-overlay ${typeClassName} ${field.is_required ? "field-overlay-required" : ""} ${
             state.fieldErrors[field.id] ? "field-error" : ""

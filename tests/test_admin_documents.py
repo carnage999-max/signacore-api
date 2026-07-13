@@ -281,6 +281,21 @@ class AdminDocumentUploadTests(TestCase):
         self.assertEqual(payload["id"], str(document.id))
         self.assertEqual(len(payload["fields"]), 1)
         self.assertEqual(payload["fields"][0]["id"], str(field.id))
+        self.assertEqual(payload["page_count"], 1)
+        self.assertEqual(len(payload["pages"]), 1)
+        self.assertIn(f"/api/admin/documents/{document.id}/pages/1/preview/", payload["pages"][0]["preview_url"])
+
+    def test_document_page_preview_returns_png(self) -> None:
+        document = Document.objects.create(
+            title="Previewable",
+            original_pdf=SimpleUploadedFile("preview.pdf", build_flat_pdf(), content_type="application/pdf"),
+            created_by=self.user,
+        )
+
+        response = self.client.get(f"/api/admin/documents/{document.id}/pages/1/preview/")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response["Content-Type"], "image/png")
 
     def test_create_manual_field_persists_to_document(self) -> None:
         document = Document.objects.create(
@@ -430,7 +445,7 @@ class AdminDocumentUploadTests(TestCase):
         self.assertEqual(response.status_code, 400, response.json())
         self.assertIn("fields", response.json())
 
-    def test_send_document_rejects_already_sent_document(self) -> None:
+    def test_send_document_allows_adding_signers_to_sent_document(self) -> None:
         document = Document.objects.create(
             title="Existing Sent Doc",
             original_pdf=SimpleUploadedFile("sent.pdf", build_flat_pdf(), content_type="application/pdf"),
@@ -463,8 +478,46 @@ class AdminDocumentUploadTests(TestCase):
             format="json",
         )
 
+        self.assertEqual(response.status_code, 200, response.json())
+        document.refresh_from_db()
+        self.assertEqual(document.status, Document.StatusEnum.SENT)
+        self.assertEqual(document.signing_requests.count(), 2)
+
+    def test_send_document_rejects_duplicate_active_signer_email(self) -> None:
+        document = Document.objects.create(
+            title="Duplicate Check",
+            original_pdf=SimpleUploadedFile("duplicate.pdf", build_flat_pdf(), content_type="application/pdf"),
+            created_by=self.user,
+            status=Document.StatusEnum.SENT,
+        )
+        DocumentField.objects.create(
+            document=document,
+            field_type=DocumentField.FieldTypeEnum.TEXT,
+            label="Name",
+            page=1,
+            x=72,
+            y=120,
+            width=180,
+            height=24,
+            is_required=True,
+            detection_source=DocumentField.DetectionSourceEnum.MANUAL,
+            order=1,
+        )
+        SigningRequest.objects.create(
+            document=document,
+            signer_email="existing@example.com",
+            signer_name="Existing User",
+            expires_at=timezone.now() + timedelta(days=7),
+        )
+
+        response = self.client.post(
+            f"/api/admin/documents/{document.id}/send/",
+            {"signers": [{"signer_email": "existing@example.com"}]},
+            format="json",
+        )
+
         self.assertEqual(response.status_code, 400, response.json())
-        self.assertIn("status", response.json())
+        self.assertIn("signers", response.json())
 
     def test_patch_document_updates_title(self) -> None:
         document = Document.objects.create(
@@ -510,6 +563,61 @@ class AdminDocumentUploadTests(TestCase):
         self.assertEqual(document.voided_reason, "Sent in error")
         self.assertIsNotNone(document.voided_at)
         self.assertLessEqual(request.expires_at, timezone.now())
+
+    def test_resend_signing_request_reopens_signed_document_and_clears_prior_submission(self) -> None:
+        document = Document.objects.create(
+            title="Reopen Me",
+            original_pdf=SimpleUploadedFile("reopen.pdf", build_flat_pdf(), content_type="application/pdf"),
+            created_by=self.user,
+            status=Document.StatusEnum.COMPLETED,
+        )
+        document.signed_pdf.save(
+            "reopen-signed.pdf",
+            ContentFile(build_flat_pdf()),
+            save=True,
+        )
+        field = DocumentField.objects.create(
+            document=document,
+            field_type=DocumentField.FieldTypeEnum.TEXT,
+            label="Name",
+            page=1,
+            x=72,
+            y=120,
+            width=180,
+            height=24,
+            is_required=True,
+            detection_source=DocumentField.DetectionSourceEnum.MANUAL,
+            order=1,
+        )
+        signing_request = SigningRequest.objects.create(
+            document=document,
+            signer_email="signed@example.com",
+            signer_name="Signed User",
+            status=SigningRequest.StatusEnum.SIGNED,
+            signed_at=timezone.now(),
+            expires_at=timezone.now() + timedelta(days=7),
+            ip_address="127.0.0.1",
+            user_agent="Browser",
+        )
+        signing_request.submissions.create(
+            document_field=field,
+            value_type="TEXT",
+            text_value="Signed Value",
+        )
+
+        response = self.client.post(
+            f"/api/admin/documents/{document.id}/signing-requests/{signing_request.id}/resend/",
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 200, response.json())
+        document.refresh_from_db()
+        signing_request.refresh_from_db()
+        self.assertEqual(document.status, Document.StatusEnum.SENT)
+        self.assertFalse(bool(document.signed_pdf))
+        self.assertEqual(signing_request.status, SigningRequest.StatusEnum.PENDING)
+        self.assertIsNone(signing_request.signed_at)
+        self.assertEqual(signing_request.submissions.count(), 0)
 
     def test_download_signed_document_returns_file(self) -> None:
         document = Document.objects.create(

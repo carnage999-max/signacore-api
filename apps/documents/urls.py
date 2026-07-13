@@ -5,7 +5,9 @@ from .views import (
     AdminDocumentFieldDetailView,
     AdminDocumentFieldsView,
     AdminDocumentDownloadView,
+    AdminDocumentPagePreviewView,
     AdminDocumentSendView,
+    AdminSigningRequestResendView,
     AdminDocumentVoidView,
     AdminDocumentsView,
 )
@@ -16,7 +18,17 @@ urlpatterns = [
     path("documents/<uuid:document_id>/", AdminDocumentDetailView.as_view(), name="admin-document-detail"),
     path("documents/<uuid:document_id>/void/", AdminDocumentVoidView.as_view(), name="admin-document-void"),
     path("documents/<uuid:document_id>/download/", AdminDocumentDownloadView.as_view(), name="admin-document-download"),
+    path(
+        "documents/<uuid:document_id>/pages/<int:page_number>/preview/",
+        AdminDocumentPagePreviewView.as_view(),
+        name="admin-document-page-preview",
+    ),
     path("documents/<uuid:document_id>/send/", AdminDocumentSendView.as_view(), name="admin-document-send"),
+    path(
+        "documents/<uuid:document_id>/signing-requests/<uuid:signing_request_id>/resend/",
+        AdminSigningRequestResendView.as_view(),
+        name="admin-signing-request-resend",
+    ),
     path("documents/<uuid:document_id>/fields/", AdminDocumentFieldsView.as_view(), name="admin-document-fields"),
     path(
         "documents/<uuid:document_id>/fields/<uuid:field_id>/",

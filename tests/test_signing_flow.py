@@ -129,6 +129,7 @@ class SignerFlowTests(TestCase):
                 f"/api/sign/{self.signing_request.id}/otp/verify/",
                 {"otp": "123456"},
                 format="json",
+                HTTP_X_FORWARDED_FOR="203.0.113.10, 10.0.0.2",
             )
 
         self.assertEqual(response.status_code, 200, response.json())
@@ -136,6 +137,7 @@ class SignerFlowTests(TestCase):
         self.assertIn("session_token", payload)
         self.signing_request.refresh_from_db()
         self.assertEqual(self.signing_request.status, SigningRequest.StatusEnum.OTP_VERIFIED)
+        self.assertEqual(self.signing_request.ip_address, "203.0.113.10")
 
     def test_submit_requires_all_required_fields(self) -> None:
         with self.settings(SIGNACORE_TEST_OTP_CODE="123456"):
@@ -246,6 +248,7 @@ class SignerFlowTests(TestCase):
                     f"field_{checkbox_field.id}_checked": "true",
                 },
                 format="multipart",
+                HTTP_X_FORWARDED_FOR="198.51.100.5, 10.0.0.2",
             )
 
         self.assertEqual(response.status_code, 200, response.json())
@@ -254,6 +257,7 @@ class SignerFlowTests(TestCase):
         self.signing_request.refresh_from_db()
         self.document.refresh_from_db()
         self.assertEqual(self.signing_request.status, SigningRequest.StatusEnum.SIGNED)
+        self.assertEqual(self.signing_request.ip_address, "198.51.100.5")
         self.assertEqual(self.document.status, Document.StatusEnum.COMPLETED)
         self.assertTrue(self.document.signed_pdf.name.endswith(".pdf"))
         self.assertEqual(FieldSubmission.objects.count(), 3)

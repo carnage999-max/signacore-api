@@ -34,6 +34,18 @@ def mask_email(email: str) -> str:
     return f"{local_part[0]}***@{domain}"
 
 
+def get_client_ip(request) -> str:
+    forwarded_for = str(request.META.get("HTTP_X_FORWARDED_FOR", "")).strip()
+    if forwarded_for:
+        return forwarded_for.split(",")[0].strip()
+
+    real_ip = str(request.META.get("HTTP_X_REAL_IP", "")).strip()
+    if real_ip:
+        return real_ip
+
+    return str(request.META.get("REMOTE_ADDR", "")).strip()
+
+
 def get_signing_request_or_404(token):
     return get_object_or_404(
         SigningRequest.objects.select_related("document").prefetch_related("document__fields"),
@@ -167,7 +179,7 @@ class SignerOtpVerifyView(APIView):
             return Response({"otp": ["Invalid OTP."]}, status=status.HTTP_400_BAD_REQUEST)
 
         signing_request.status = SigningRequest.StatusEnum.OTP_VERIFIED
-        signing_request.ip_address = request.META.get("REMOTE_ADDR", "")
+        signing_request.ip_address = get_client_ip(request)
         signing_request.user_agent = request.META.get("HTTP_USER_AGENT", "")
         signing_request.save(update_fields=["status", "ip_address", "user_agent", "updated_at"])
         return Response(
@@ -257,7 +269,7 @@ class SignerSubmitView(APIView):
                 submission.save()
             signing_request.status = SigningRequest.StatusEnum.SIGNED
             signing_request.signed_at = timezone.now()
-            signing_request.ip_address = request.META.get("REMOTE_ADDR", "")
+            signing_request.ip_address = get_client_ip(request)
             signing_request.user_agent = request.META.get("HTTP_USER_AGENT", "")
             signing_request.save(update_fields=["status", "signed_at", "ip_address", "user_agent", "updated_at"])
 
