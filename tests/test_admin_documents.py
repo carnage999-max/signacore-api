@@ -94,7 +94,7 @@ def build_heuristic_signature_checkbox_pdf() -> bytes:
 @override_settings(
     SIGNACORE_SHARED_SECRET="test-signacore-secret",
     SIGNACORE_SERVICE_USERNAME="signacore-service",
-    SIGNING_LINK_BASE_URL="https://signacore.se7eninc.com",
+    SIGNING_LINK_BASE_URL="https://mysignacore.com",
     EMAIL_BACKEND="django.core.mail.backends.locmem.EmailBackend",
     CELERY_TASK_ALWAYS_EAGER=True,
     CELERY_TASK_EAGER_PROPAGATES=True,
@@ -427,7 +427,7 @@ class AdminDocumentUploadTests(TestCase):
         self.assertEqual(document.status, Document.StatusEnum.SENT)
         self.assertEqual(document.signing_requests.count(), 2)
         self.assertEqual(len(mail.outbox), 2)
-        self.assertIn("https://signacore.se7eninc.com/sign/", mail.outbox[0].body)
+        self.assertIn("https://mysignacore.com/sign/", mail.outbox[0].body)
 
     def test_send_document_requires_at_least_one_field(self) -> None:
         document = Document.objects.create(
