@@ -105,3 +105,39 @@ def send_progress_email(document: Document, signing_request: SigningRequest) -> 
         f"Status: {document.status}\n"
     )
     send_email(subject, body, [admin_email])
+
+
+def send_admin_account_created_email(
+    email: str,
+    username: str,
+    temporary_password: str,
+    login_url: str,
+) -> None:
+    subject = "Your SignaCore admin account is ready"
+    body = (
+        "Hello,\n\n"
+        "An admin account has been created for you in SignaCore.\n\n"
+        f"Username: {username}\n"
+        f"Temporary password: {temporary_password}\n"
+        f"Admin login: {login_url}\n\n"
+        "Sign in and request a password change if this password was not shared through an approved channel.\n"
+    )
+    send_email(subject, body, [email])
+
+
+def send_admin_password_changed_email(
+    email: str,
+    username: str,
+    temporary_password: str,
+    login_url: str,
+) -> None:
+    subject = "Your SignaCore admin password was changed"
+    body = (
+        "Hello,\n\n"
+        "Your SignaCore admin password has been changed.\n\n"
+        f"Username: {username}\n"
+        f"Temporary password: {temporary_password}\n"
+        f"Admin login: {login_url}\n\n"
+        "If you did not request this change, contact the SignaCore owner immediately.\n"
+    )
+    send_email(subject, body, [email])

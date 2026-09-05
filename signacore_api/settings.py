@@ -65,6 +65,8 @@ INSTALLED_APPS = [
     "django.contrib.staticfiles",
     "rest_framework",
     "rest_framework.authtoken",
+    "drf_spectacular",
+    "drf_spectacular_sidecar",
     "corsheaders",
     "apps.documents",
     "apps.signing",
@@ -87,7 +89,7 @@ ROOT_URLCONF = "signacore_api.urls"
 TEMPLATES = [
     {
         "BACKEND": "django.template.backends.django.DjangoTemplates",
-        "DIRS": [],
+        "DIRS": [BASE_DIR / "templates"],
         "APP_DIRS": True,
         "OPTIONS": {
             "context_processors": [
@@ -161,6 +163,25 @@ REST_FRAMEWORK = {
     "DEFAULT_PERMISSION_CLASSES": (
         "rest_framework.permissions.IsAuthenticated",
     ),
+    "DEFAULT_SCHEMA_CLASS": "drf_spectacular.openapi.AutoSchema",
+}
+
+SPECTACULAR_SETTINGS = {
+    "TITLE": "SignaCore API",
+    "DESCRIPTION": (
+        "Self-hosted document signing API for SignaCore. "
+        "The admin surface uses Django-backed admin users and the public signer flow uses unique signing tokens."
+    ),
+    "VERSION": "1.0.0",
+    "SERVE_INCLUDE_SCHEMA": False,
+    "SWAGGER_UI_DIST": "SIDECAR",
+    "SWAGGER_UI_FAVICON_HREF": "SIDECAR",
+    "REDOC_DIST": "SIDECAR",
+    "TAGS": [
+        {"name": "health", "description": "Service health checks."},
+        {"name": "admin", "description": "Admin console operations proxied by the SignaCore web app."},
+        {"name": "signer", "description": "Public signer workflow endpoints."},
+    ],
 }
 
 CORS_ALLOWED_ORIGINS = env_csv("CORS_ALLOWED_ORIGINS")

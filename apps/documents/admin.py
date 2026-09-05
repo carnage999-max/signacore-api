@@ -1,6 +1,6 @@
 from django.contrib import admin
 
-from .models import Document, DocumentField
+from .models import AdminAuditLog, Document, DocumentField
 
 
 @admin.register(Document)
@@ -16,3 +16,22 @@ class DocumentFieldAdmin(admin.ModelAdmin):
     search_fields = ("label",)
     list_filter = ("field_type", "detection_source", "is_required")
 
+
+@admin.register(AdminAuditLog)
+class AdminAuditLogAdmin(admin.ModelAdmin):
+    list_display = ("action", "actor", "target_type", "target_id", "created_at")
+    search_fields = ("summary", "target_id", "actor__username", "actor__email")
+    list_filter = ("action", "target_type", "created_at")
+    readonly_fields = (
+        "id",
+        "actor",
+        "actor_email",
+        "action",
+        "target_type",
+        "target_id",
+        "summary",
+        "metadata",
+        "ip_address",
+        "user_agent",
+        "created_at",
+    )

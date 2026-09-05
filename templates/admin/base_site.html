@@ -1,0 +1,28 @@
+{% extends "admin/base.html" %}
+{% load static %}
+
+{% block title %}{{ title }} | SignaCore Admin{% endblock %}
+
+{% block extrastyle %}
+{{ block.super }}
+<link rel="stylesheet" href="{% static 'signacore_admin/admin.css' %}">
+{% endblock %}
+
+{% block branding %}
+<div class="signacore-admin-brand">
+  <span class="signacore-admin-mark" aria-hidden="true">SC</span>
+  <div>
+    <h1 id="site-name">
+      <a href="{% url 'admin:index' %}">SignaCore Admin</a>
+    </h1>
+    <p>Document signing operations for Se7en.</p>
+  </div>
+</div>
+{% endblock %}
+
+{% block nav-global %}
+<nav class="signacore-admin-links" aria-label="SignaCore admin links">
+  <a href="{% url 'api-docs' %}">API Docs</a>
+  <a href="{% url 'schema' %}">OpenAPI Schema</a>
+</nav>
+{% endblock %}

@@ -25,6 +25,14 @@ class SignerInputSerializer(serializers.Serializer):
     signer_name = serializers.CharField(max_length=255, required=False, allow_blank=True, allow_null=True)
 
 
+class SignerOtpSerializer(serializers.Serializer):
+    otp = serializers.CharField(max_length=6)
+
+
+class SignerSessionSerializer(serializers.Serializer):
+    session_token = serializers.CharField()
+
+
 class FieldSubmissionSerializer(serializers.ModelSerializer):
     class Meta:
         model = FieldSubmission

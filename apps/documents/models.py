@@ -3,6 +3,8 @@ import uuid
 from django.conf import settings
 from django.db import models
 
+from utils.encryption import EncryptedEmailField, EncryptedTextField
+
 
 class Document(models.Model):
     class StatusEnum(models.TextChoices):
@@ -64,3 +66,48 @@ class DocumentField(models.Model):
 
     def __str__(self) -> str:
         return f"{self.document.title}: {self.label}"
+
+
+class AdminAuditLog(models.Model):
+    class ActionEnum(models.TextChoices):
+        LOGIN = "LOGIN", "Login"
+        LOGOUT = "LOGOUT", "Logout"
+        DOCUMENT_LIST = "DOCUMENT_LIST", "Document List"
+        DOCUMENT_VIEW = "DOCUMENT_VIEW", "Document View"
+        DOCUMENT_UPLOAD = "DOCUMENT_UPLOAD", "Document Upload"
+        DOCUMENT_UPDATE = "DOCUMENT_UPDATE", "Document Update"
+        DOCUMENT_VOID = "DOCUMENT_VOID", "Document Void"
+        DOCUMENT_DOWNLOAD = "DOCUMENT_DOWNLOAD", "Document Download"
+        FIELD_CREATE = "FIELD_CREATE", "Field Create"
+        FIELD_UPDATE = "FIELD_UPDATE", "Field Update"
+        FIELD_DELETE = "FIELD_DELETE", "Field Delete"
+        SIGNING_REQUEST_SEND = "SIGNING_REQUEST_SEND", "Signing Request Send"
+        SIGNING_REQUEST_RESEND = "SIGNING_REQUEST_RESEND", "Signing Request Resend"
+        ADMIN_USER_LIST = "ADMIN_USER_LIST", "Admin User List"
+        ADMIN_USER_CREATE = "ADMIN_USER_CREATE", "Admin User Create"
+        ADMIN_PASSWORD_CHANGE = "ADMIN_PASSWORD_CHANGE", "Admin Password Change"
+        AUDIT_LOG_LIST = "AUDIT_LOG_LIST", "Audit Log List"
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    actor = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="signacore_audit_logs",
+    )
+    actor_email = EncryptedEmailField(null=True, blank=True)
+    action = models.CharField(max_length=64, choices=ActionEnum.choices)
+    target_type = models.CharField(max_length=64, blank=True)
+    target_id = models.CharField(max_length=128, blank=True)
+    summary = models.CharField(max_length=500)
+    metadata = models.JSONField(default=dict, blank=True)
+    ip_address = EncryptedTextField(null=True, blank=True)
+    user_agent = EncryptedTextField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ("-created_at",)
+
+    def __str__(self) -> str:
+        return f"{self.action}: {self.summary}"

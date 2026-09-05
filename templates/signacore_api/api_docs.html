@@ -1,0 +1,60 @@
+{% load static %}
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>SignaCore API Docs</title>
+    <link rel="stylesheet" href="{% static 'drf_spectacular_sidecar/swagger-ui-dist/swagger-ui.css' %}">
+    <link rel="stylesheet" href="{% static 'signacore_admin/admin.css' %}">
+  </head>
+  <body class="signacore-docs-body">
+    <header class="signacore-docs-hero">
+      <nav class="signacore-docs-nav" aria-label="API documentation navigation">
+        <a class="signacore-docs-brand" href="{% url 'api-docs' %}">
+          <span class="signacore-admin-mark" aria-hidden="true">SC</span>
+          <span>SignaCore API</span>
+        </a>
+        <div>
+          <a href="{% url 'admin:index' %}">Django Admin</a>
+          <a href="{% url 'schema' %}">Schema JSON</a>
+          <a href="{% url 'api-redoc' %}">Redoc</a>
+        </div>
+      </nav>
+      <div class="signacore-docs-intro">
+        <p>Self-hosted signing infrastructure</p>
+        <h1>API reference for document, admin, and signer workflows.</h1>
+        <span>
+          Generated from Django REST Framework using DRF Spectacular. Admin endpoints are intended
+          to be called by the SignaCore web app through the trusted proxy layer.
+        </span>
+      </div>
+    </header>
+
+    <main class="signacore-docs-panel">
+      <div id="swagger-ui"></div>
+    </main>
+
+    <script src="{% static 'drf_spectacular_sidecar/swagger-ui-dist/swagger-ui-bundle.js' %}"></script>
+    <script src="{% static 'drf_spectacular_sidecar/swagger-ui-dist/swagger-ui-standalone-preset.js' %}"></script>
+    <script>
+      window.addEventListener("load", function () {
+        window.ui = SwaggerUIBundle({
+          url: "{% url 'schema' %}",
+          dom_id: "#swagger-ui",
+          deepLinking: true,
+          displayOperationId: false,
+          defaultModelsExpandDepth: 1,
+          defaultModelExpandDepth: 2,
+          docExpansion: "none",
+          filter: true,
+          layout: "StandaloneLayout",
+          presets: [
+            SwaggerUIBundle.presets.apis,
+            SwaggerUIStandalonePreset
+          ]
+        });
+      });
+    </script>
+  </body>
+</html>

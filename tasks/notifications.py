@@ -2,6 +2,8 @@ from celery import shared_task
 
 from apps.documents.models import Document
 from apps.notifications.services import (
+    send_admin_account_created_email,
+    send_admin_password_changed_email,
     send_completion_email,
     send_invitation_email,
     send_otp_email_message,
@@ -81,4 +83,16 @@ def notify_admin_progress(document_id: str, signing_request_id: str) -> None:
         return None
 
     send_progress_email(document, signing_request)
+    return None
+
+
+@shared_task(name="tasks.notifications.send_admin_account_created")
+def send_admin_account_created(email: str, username: str, temporary_password: str, login_url: str) -> None:
+    send_admin_account_created_email(email, username, temporary_password, login_url)
+    return None
+
+
+@shared_task(name="tasks.notifications.send_admin_password_changed")
+def send_admin_password_changed(email: str, username: str, temporary_password: str, login_url: str) -> None:
+    send_admin_password_changed_email(email, username, temporary_password, login_url)
     return None

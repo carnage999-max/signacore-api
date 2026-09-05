@@ -9,6 +9,8 @@ This folder is isolated from the existing frontend codebase and is intended to b
 - PDF upload and field detection via PyMuPDF
 - document and signer lifecycle management
 - signer OTP verification
+- Django-backed admin login and superuser-managed admin accounts
+- admin audit logging for document, signer, user, and password actions
 - PDF flattening and signed file storage
 - Celery-backed email and background jobs
 
@@ -32,6 +34,36 @@ python manage.py runserver 127.0.0.1:8010
 - core Signacore models and enums
 - health endpoint at `/api/health/`
 - PyMuPDF service shell for AcroForm and heuristic analysis
+
+## Admin users
+
+Create the first owner account with Django:
+
+```bash
+python manage.py createsuperuser
+```
+
+That superuser can sign in to the standalone SignaCore web app, create additional admin users, and change admin passwords. New admins receive an email notification when their account is created. Password changes also trigger an email notification and an audit log entry.
+
+The backend also keeps Django's default admin available as a superuser fallback:
+
+```text
+https://api.mysignacore.com/admin/
+```
+
+The default admin is branded with SignaCore styling and links to the generated API documentation.
+
+## API documentation
+
+DRF Spectacular exposes the live OpenAPI contract and a branded docs UI for Django staff users:
+
+```text
+https://api.mysignacore.com/api/docs/
+https://api.mysignacore.com/api/schema/
+https://api.mysignacore.com/api/redoc/
+```
+
+Swagger and Redoc assets are served from `drf-spectacular-sidecar`, so the docs do not depend on external CDN assets at runtime.
 
 ## Docker deployment
 

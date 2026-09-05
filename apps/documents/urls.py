@@ -1,6 +1,9 @@
 from django.urls import path
 
 from .views import (
+    AdminAuditLogsView,
+    AdminAuthLoginView,
+    AdminAuthLogoutView,
     AdminDocumentDetailView,
     AdminDocumentFieldDetailView,
     AdminDocumentFieldsView,
@@ -8,12 +11,19 @@ from .views import (
     AdminDocumentPagePreviewView,
     AdminDocumentSendView,
     AdminSigningRequestResendView,
+    AdminUserPasswordView,
+    AdminUsersView,
     AdminDocumentVoidView,
     AdminDocumentsView,
 )
 
 
 urlpatterns = [
+    path("auth/login/", AdminAuthLoginView.as_view(), name="admin-auth-login"),
+    path("auth/logout/", AdminAuthLogoutView.as_view(), name="admin-auth-logout"),
+    path("users/", AdminUsersView.as_view(), name="admin-users"),
+    path("users/<int:user_id>/password/", AdminUserPasswordView.as_view(), name="admin-user-password"),
+    path("audit-logs/", AdminAuditLogsView.as_view(), name="admin-audit-logs"),
     path("documents/", AdminDocumentsView.as_view(), name="admin-documents"),
     path("documents/<uuid:document_id>/", AdminDocumentDetailView.as_view(), name="admin-document-detail"),
     path("documents/<uuid:document_id>/void/", AdminDocumentVoidView.as_view(), name="admin-document-void"),

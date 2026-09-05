@@ -25,6 +25,7 @@ from utils.signer_session import build_signer_session_token, verify_signer_sessi
 from utils.task_dispatch import enqueue_task
 
 from .models import FieldSubmission, SigningRequest
+from .serializers import FieldSubmissionSerializer, SignerOtpSerializer, SigningRequestSerializer
 
 
 def mask_email(email: str) -> str:
@@ -103,6 +104,7 @@ class SignerPortalView(TemplateView):
 class SignerContextView(APIView):
     permission_classes = []
     authentication_classes = []
+    serializer_class = SigningRequestSerializer
 
     def get(self, request, token):
         signing_request = get_signing_request_or_404(token)
@@ -125,6 +127,7 @@ class SignerContextView(APIView):
 class SignerPagePreviewView(APIView):
     permission_classes = []
     authentication_classes = []
+    serializer_class = SigningRequestSerializer
 
     def get(self, request, token, page_number):
         signing_request = get_signing_request_or_404(token)
@@ -139,6 +142,7 @@ class SignerPagePreviewView(APIView):
 class SignerOtpSendView(APIView):
     permission_classes = []
     authentication_classes = []
+    serializer_class = SigningRequestSerializer
 
     def post(self, request, token):
         signing_request = get_signing_request_or_404(token)
@@ -163,6 +167,7 @@ class SignerOtpSendView(APIView):
 class SignerOtpVerifyView(APIView):
     permission_classes = []
     authentication_classes = []
+    serializer_class = SignerOtpSerializer
 
     def post(self, request, token):
         signing_request = get_signing_request_or_404(token)
@@ -192,6 +197,7 @@ class SignerSubmitView(APIView):
     permission_classes = []
     authentication_classes = []
     parser_classes = [MultiPartParser, FormParser]
+    serializer_class = FieldSubmissionSerializer
 
     def post(self, request, token):
         signing_request = get_signing_request_or_404(token)

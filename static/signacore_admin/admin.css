@@ -1,0 +1,299 @@
+:root {
+  --signacore-ink: #112235;
+  --signacore-ink-soft: #425466;
+  --signacore-paper: #fbf8f1;
+  --signacore-paper-strong: #fffdf8;
+  --signacore-blue: #123a5f;
+  --signacore-teal: #4d8f88;
+  --signacore-field: #b45145;
+  --signacore-gold: #d9a94f;
+  --signacore-line: rgba(17, 34, 53, 0.14);
+}
+
+body {
+  background:
+    radial-gradient(circle at 12% 6%, rgba(217, 169, 79, 0.18), transparent 30rem),
+    linear-gradient(180deg, #f6efe3 0%, var(--signacore-paper) 48%, #eef4f1 100%);
+  color: var(--signacore-ink);
+  font-family: "Avenir Next", "Segoe UI", sans-serif;
+}
+
+#header {
+  min-height: 78px;
+  align-items: center;
+  background:
+    radial-gradient(circle at 84% 20%, rgba(217, 169, 79, 0.22), transparent 22rem),
+    linear-gradient(135deg, var(--signacore-blue), #10283d 64%, #271d1a);
+  color: var(--signacore-paper);
+  box-shadow: 0 18px 60px rgba(17, 34, 53, 0.2);
+}
+
+#branding h1,
+#branding h1 a:link,
+#branding h1 a:visited {
+  color: var(--signacore-paper-strong);
+}
+
+.signacore-admin-brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.signacore-admin-brand h1 {
+  margin: 0;
+  font-family: "Iowan Old Style", "Palatino Linotype", Georgia, serif;
+  font-size: 25px;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.signacore-admin-brand p {
+  margin: 5px 0 0;
+  color: rgba(251, 248, 241, 0.64);
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.signacore-admin-mark {
+  display: inline-flex;
+  width: 42px;
+  height: 42px;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid rgba(255, 253, 248, 0.3);
+  border-radius: 16px;
+  background: rgba(255, 253, 248, 0.12);
+  color: var(--signacore-paper-strong);
+  font-size: 13px;
+  font-weight: 900;
+  letter-spacing: 0.08em;
+  box-shadow: 0 16px 42px rgba(18, 58, 95, 0.22);
+}
+
+.signacore-admin-links {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.signacore-admin-links a,
+.signacore-docs-nav a {
+  border: 1px solid rgba(255, 253, 248, 0.28);
+  border-radius: 999px;
+  padding: 9px 13px;
+  color: var(--signacore-paper-strong);
+  font-size: 12px;
+  font-weight: 900;
+  text-decoration: none;
+}
+
+.signacore-admin-links a:hover,
+.signacore-docs-nav a:hover {
+  background: rgba(255, 253, 248, 0.12);
+}
+
+div.breadcrumbs {
+  border: 0;
+  background: rgba(255, 253, 248, 0.5);
+  color: var(--signacore-ink-soft);
+}
+
+div.breadcrumbs a {
+  color: var(--signacore-blue);
+}
+
+#content h1,
+.module caption,
+.inline-group h2 {
+  font-family: "Iowan Old Style", "Palatino Linotype", Georgia, serif;
+}
+
+#content h1 {
+  color: var(--signacore-ink);
+  font-size: 34px;
+}
+
+.module {
+  overflow: hidden;
+  border: 1px solid var(--signacore-line);
+  border-radius: 22px;
+  background: rgba(255, 253, 248, 0.74);
+  box-shadow: 0 18px 50px rgba(17, 34, 53, 0.08);
+}
+
+.module h2,
+.module caption,
+.inline-group h2 {
+  background: var(--signacore-blue);
+  color: var(--signacore-paper-strong);
+  font-weight: 800;
+}
+
+a:link,
+a:visited {
+  color: var(--signacore-blue);
+}
+
+.button,
+input[type="submit"],
+input[type="button"],
+.submit-row input,
+a.button {
+  border-radius: 999px;
+  background: var(--signacore-blue);
+  color: var(--signacore-paper-strong);
+  font-weight: 800;
+}
+
+.button:hover,
+input[type="submit"]:hover,
+input[type="button"]:hover,
+.submit-row input:hover,
+a.button:hover {
+  background: #0b2e4e;
+}
+
+.button.default,
+input[type="submit"].default,
+.submit-row input.default {
+  background: var(--signacore-field);
+}
+
+input,
+textarea,
+select,
+.vTextField {
+  border-color: var(--signacore-line);
+  border-radius: 10px;
+}
+
+.signacore-docs-body {
+  min-height: 100vh;
+  margin: 0;
+}
+
+.signacore-docs-hero {
+  padding: 28px clamp(18px, 5vw, 64px) 54px;
+  background:
+    radial-gradient(circle at 80% 18%, rgba(217, 169, 79, 0.24), transparent 24rem),
+    linear-gradient(135deg, var(--signacore-blue), #10283d 60%, #271d1a);
+  color: var(--signacore-paper);
+}
+
+.signacore-docs-nav {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+}
+
+.signacore-docs-nav div {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.signacore-docs-brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 12px;
+  border: 0;
+  padding: 0;
+  font-family: "Iowan Old Style", "Palatino Linotype", Georgia, serif;
+  font-size: 26px;
+}
+
+.signacore-docs-brand:hover {
+  background: transparent;
+}
+
+.signacore-docs-intro {
+  max-width: 760px;
+  margin-top: 80px;
+}
+
+.signacore-docs-intro p {
+  margin: 0 0 18px;
+  color: var(--signacore-gold);
+  font-size: 12px;
+  font-weight: 900;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+}
+
+.signacore-docs-intro h1 {
+  max-width: 720px;
+  margin: 0;
+  color: var(--signacore-paper-strong);
+  font-family: "Iowan Old Style", "Palatino Linotype", Georgia, serif;
+  font-size: clamp(44px, 7vw, 78px);
+  font-weight: 700;
+  line-height: 0.96;
+}
+
+.signacore-docs-intro span {
+  display: block;
+  max-width: 620px;
+  margin-top: 26px;
+  color: rgba(251, 248, 241, 0.7);
+  font-size: 17px;
+  line-height: 1.65;
+}
+
+.signacore-docs-panel {
+  width: min(1220px, calc(100% - 36px));
+  margin: -28px auto 56px;
+  border: 1px solid var(--signacore-line);
+  border-radius: 28px;
+  background: var(--signacore-paper-strong);
+  box-shadow: 0 28px 90px rgba(17, 34, 53, 0.18);
+}
+
+.signacore-docs-panel .swagger-ui {
+  padding: 24px;
+  color: var(--signacore-ink);
+  font-family: "Avenir Next", "Segoe UI", sans-serif;
+}
+
+.signacore-docs-panel .swagger-ui .topbar {
+  display: none;
+}
+
+.signacore-docs-panel .swagger-ui .info {
+  margin: 20px 0 34px;
+}
+
+.signacore-docs-panel .swagger-ui .info .title,
+.signacore-docs-panel .swagger-ui .opblock-tag {
+  color: var(--signacore-ink);
+  font-family: "Iowan Old Style", "Palatino Linotype", Georgia, serif;
+}
+
+.signacore-docs-panel .swagger-ui .opblock {
+  border-radius: 18px;
+  box-shadow: none;
+}
+
+@media (max-width: 720px) {
+  #header {
+    min-height: 96px;
+  }
+
+  .signacore-admin-brand p {
+    display: none;
+  }
+
+  .signacore-admin-links,
+  .signacore-docs-nav,
+  .signacore-docs-nav div {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .signacore-docs-intro {
+    margin-top: 54px;
+  }
+}

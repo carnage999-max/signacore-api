@@ -14,7 +14,7 @@ from django.test import TestCase, override_settings
 from django.utils import timezone
 from rest_framework.test import APIClient
 
-from apps.documents.models import Document, DocumentField
+from apps.documents.models import AdminAuditLog, Document, DocumentField
 from apps.signing.models import SigningRequest
 
 
@@ -104,7 +104,9 @@ class AdminDocumentUploadTests(TestCase):
         self.client = APIClient()
         self.user = get_user_model().objects.create_user(
             username="admin",
+            email="admin@mysignacore.com",
             password="password123",
+            is_staff=True,
         )
         self.client.credentials(HTTP_X_SIGNACORE_SECRET=settings.SIGNACORE_SHARED_SECRET)
 
@@ -636,3 +638,138 @@ class AdminDocumentUploadTests(TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response["Content-Type"], "application/pdf")
+
+    def test_staff_admin_can_login_with_django_credentials(self) -> None:
+        response = self.client.post(
+            "/api/admin/auth/login/",
+            {"identifier": "admin", "password": "password123"},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 200, response.json())
+        payload = response.json()
+        self.assertEqual(payload["admin"]["username"], "admin")
+        self.assertFalse(payload["admin"]["is_superuser"])
+        self.assertTrue(
+            AdminAuditLog.objects.filter(
+                action=AdminAuditLog.ActionEnum.LOGIN,
+                actor=self.user,
+            ).exists()
+        )
+
+    def test_superuser_can_create_admin_user_and_email_is_sent(self) -> None:
+        superuser = get_user_model().objects.create_superuser(
+            username="owner",
+            email="owner@mysignacore.com",
+            password="password123",
+        )
+        self.client.credentials(
+            HTTP_X_SIGNACORE_SECRET=settings.SIGNACORE_SHARED_SECRET,
+            HTTP_X_SIGNACORE_ADMIN_ID=str(superuser.id),
+        )
+
+        response = self.client.post(
+            "/api/admin/users/",
+            {
+                "username": "ops-admin",
+                "email": "ops@mysignacore.com",
+                "first_name": "Ops",
+                "last_name": "Admin",
+                "password": "TempPass123!",
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 201, response.json())
+        created_user = get_user_model().objects.get(username="ops-admin")
+        self.assertTrue(created_user.is_staff)
+        self.assertFalse(created_user.is_superuser)
+        self.assertEqual(len(mail.outbox), 1)
+        self.assertIn("Your SignaCore admin account is ready", mail.outbox[0].subject)
+        self.assertIn("https://mysignacore.com/admin/login", mail.outbox[0].body)
+        self.assertTrue(
+            AdminAuditLog.objects.filter(
+                action=AdminAuditLog.ActionEnum.ADMIN_USER_CREATE,
+                actor=superuser,
+                target_id=str(created_user.id),
+            ).exists()
+        )
+
+    def test_non_superuser_cannot_create_admin_user(self) -> None:
+        self.client.credentials(
+            HTTP_X_SIGNACORE_SECRET=settings.SIGNACORE_SHARED_SECRET,
+            HTTP_X_SIGNACORE_ADMIN_ID=str(self.user.id),
+        )
+
+        response = self.client.post(
+            "/api/admin/users/",
+            {
+                "username": "blocked-admin",
+                "email": "blocked@mysignacore.com",
+                "password": "TempPass123!",
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 403, response.json())
+        self.assertFalse(get_user_model().objects.filter(username="blocked-admin").exists())
+
+    def test_superuser_can_change_admin_password(self) -> None:
+        superuser = get_user_model().objects.create_superuser(
+            username="owner",
+            email="owner@mysignacore.com",
+            password="password123",
+        )
+        target = get_user_model().objects.create_user(
+            username="reset-me",
+            email="reset@mysignacore.com",
+            password="OldPass123!",
+            is_staff=True,
+        )
+        self.client.credentials(
+            HTTP_X_SIGNACORE_SECRET=settings.SIGNACORE_SHARED_SECRET,
+            HTTP_X_SIGNACORE_ADMIN_ID=str(superuser.id),
+        )
+
+        response = self.client.post(
+            f"/api/admin/users/{target.id}/password/",
+            {"password": "NewTempPass123!"},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 200, response.json())
+        target.refresh_from_db()
+        self.assertTrue(target.check_password("NewTempPass123!"))
+        self.assertEqual(len(mail.outbox), 1)
+        self.assertIn("Your SignaCore admin password was changed", mail.outbox[0].subject)
+        self.assertTrue(
+            AdminAuditLog.objects.filter(
+                action=AdminAuditLog.ActionEnum.ADMIN_PASSWORD_CHANGE,
+                actor=superuser,
+                target_id=str(target.id),
+            ).exists()
+        )
+
+    def test_superuser_can_view_audit_logs(self) -> None:
+        superuser = get_user_model().objects.create_superuser(
+            username="owner",
+            email="owner@mysignacore.com",
+            password="password123",
+        )
+        AdminAuditLog.objects.create(
+            actor=superuser,
+            actor_email=superuser.email,
+            action=AdminAuditLog.ActionEnum.LOGIN,
+            target_type="admin_user",
+            target_id=str(superuser.id),
+            summary="Signed in as owner.",
+        )
+        self.client.credentials(
+            HTTP_X_SIGNACORE_SECRET=settings.SIGNACORE_SHARED_SECRET,
+            HTTP_X_SIGNACORE_ADMIN_ID=str(superuser.id),
+        )
+
+        response = self.client.get("/api/admin/audit-logs/")
+
+        self.assertEqual(response.status_code, 200, response.json())
+        self.assertGreaterEqual(len(response.json()["items"]), 1)
