@@ -12,19 +12,26 @@ from django.http import FileResponse, HttpResponse
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from rest_framework import status
-from rest_framework.exceptions import ValidationError
+from rest_framework.exceptions import PermissionDenied, ValidationError
 from rest_framework.parsers import FormParser, MultiPartParser
 from rest_framework.response import Response
 from rest_framework.views import APIView
 from drf_spectacular.utils import extend_schema
 
 from apps.signing.models import SigningRequest
+from apps.accounts.models import AccountProfile, OrganizationMembership
 from services.pdf_engine import PDFEngine
 from tasks.notifications import send_invitation_email_for_request
 from tasks.notifications import send_admin_account_created, send_admin_password_changed
 from utils.task_dispatch import enqueue_task
+from utils.identity import email_digest
 
-from .auth import HasValidSignacoreSecret, get_admin_actor, require_superuser_actor
+from .auth import (
+    HasValidSignacoreSecret,
+    get_actor_organization,
+    get_admin_actor,
+    require_superuser_actor,
+)
 from .models import AdminAuditLog, Document, DocumentField
 from .serializers import (
     AdminAuditLogSerializer,
@@ -55,6 +62,22 @@ def get_signacore_service_user():
     return user
 
 
+def get_request_actor_and_organization(request):
+    actor = get_admin_actor(request) or get_signacore_service_user()
+    organization = get_actor_organization(request, actor)
+    if organization is None:
+        raise PermissionDenied("No active company workspace is available.")
+    return actor, organization
+
+
+def get_scoped_document(request, document_id, *, prefetch: tuple[str, ...] = ()) -> Document:
+    _, organization = get_request_actor_and_organization(request)
+    queryset = Document.objects.filter(organization=organization)
+    if prefetch:
+        queryset = queryset.prefetch_related(*prefetch)
+    return get_object_or_404(queryset, pk=document_id)
+
+
 def get_request_ip(request) -> str:
     forwarded_for = request.META.get("HTTP_X_FORWARDED_FOR", "")
     if forwarded_for:
@@ -76,9 +99,11 @@ def log_admin_event(
     target_id: str = "",
     metadata: dict | None = None,
 ) -> AdminAuditLog:
-    resolved_actor = actor if actor is not None else get_admin_actor(request)
+    resolved_actor = actor if actor is not None else (get_admin_actor(request) or get_signacore_service_user())
+    organization = get_actor_organization(request, resolved_actor) if resolved_actor else None
     return AdminAuditLog.objects.create(
         actor=resolved_actor,
+        organization=organization,
         actor_email=getattr(resolved_actor, "email", "") or "",
         action=action,
         target_type=target_type,
@@ -175,7 +200,19 @@ class AdminUsersView(APIView):
         if not actor:
             return Response({"detail": "Superuser access is required."}, status=status.HTTP_403_FORBIDDEN)
 
-        users = get_user_model().objects.filter(is_staff=True).order_by("username")
+        organization = get_actor_organization(request, actor)
+        if organization is None:
+            raise PermissionDenied("No active company workspace is available.")
+        users = (
+            get_user_model()
+            .objects.filter(
+                is_staff=True,
+                signacore_memberships__organization=organization,
+                signacore_memberships__status=OrganizationMembership.StatusEnum.ACTIVE,
+            )
+            .distinct()
+            .order_by("username")
+        )
         log_admin_event(
             request,
             AdminAuditLog.ActionEnum.ADMIN_USER_LIST,
@@ -191,8 +228,30 @@ class AdminUsersView(APIView):
 
         serializer = AdminUserCreateSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
+        organization = get_actor_organization(request, actor)
+        if organization is None:
+            raise PermissionDenied("No active company workspace is available.")
         with transaction.atomic():
             user = serializer.save()
+            OrganizationMembership.objects.create(
+                organization=organization,
+                user=user,
+                role=(
+                    OrganizationMembership.RoleEnum.OWNER
+                    if user.is_superuser
+                    else OrganizationMembership.RoleEnum.ADMIN
+                ),
+            )
+            AccountProfile.objects.create(
+                user=user,
+                account_type=(
+                    AccountProfile.AccountTypeEnum.PLATFORM
+                    if user.is_superuser
+                    else AccountProfile.AccountTypeEnum.COMPANY
+                ),
+                email=user.email,
+                display_name=user.get_full_name() or user.username,
+            )
             log_admin_event(
                 request,
                 AdminAuditLog.ActionEnum.ADMIN_USER_CREATE,
@@ -225,7 +284,16 @@ class AdminUserPasswordView(APIView):
         if not actor:
             return Response({"detail": "Superuser access is required."}, status=status.HTTP_403_FORBIDDEN)
 
-        user = get_object_or_404(get_user_model(), pk=user_id, is_staff=True)
+        organization = get_actor_organization(request, actor)
+        if organization is None:
+            raise PermissionDenied("No active company workspace is available.")
+        user = get_object_or_404(
+            get_user_model(),
+            pk=user_id,
+            is_staff=True,
+            signacore_memberships__organization=organization,
+            signacore_memberships__status=OrganizationMembership.StatusEnum.ACTIVE,
+        )
         serializer = AdminPasswordChangeSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         temporary_password = serializer.validated_data["temporary_password"]
@@ -262,7 +330,10 @@ class AdminAuditLogsView(APIView):
         if not actor:
             return Response({"detail": "Superuser access is required."}, status=status.HTTP_403_FORBIDDEN)
 
-        logs = AdminAuditLog.objects.select_related("actor").all()[:100]
+        organization = get_actor_organization(request, actor)
+        if organization is None:
+            raise PermissionDenied("No active company workspace is available.")
+        logs = AdminAuditLog.objects.select_related("actor").filter(organization=organization)[:100]
         log_admin_event(
             request,
             AdminAuditLog.ActionEnum.AUDIT_LOG_LIST,
@@ -280,8 +351,9 @@ class AdminDocumentsView(APIView):
 
     @extend_schema(operation_id="admin_documents_list")
     def get(self, request):
+        _, organization = get_request_actor_and_organization(request)
         documents = (
-            Document.objects.all()
+            Document.objects.filter(organization=organization)
             .annotate(
                 signer_count=Count("signing_requests", distinct=True),
                 signed_count=Count(
@@ -316,12 +388,13 @@ class AdminDocumentsView(APIView):
         finally:
             pdf_file.seek(0)
 
+        actor, organization = get_request_actor_and_organization(request)
         with transaction.atomic():
-            actor = get_admin_actor(request) or get_signacore_service_user()
             document = Document.objects.create(
                 title=title,
                 original_pdf=pdf_file,
                 created_by=actor,
+                organization=organization,
             )
             detected_fields = engine.analyse(document.original_pdf.path)
             DocumentField.objects.bulk_create(
@@ -369,7 +442,7 @@ class AdminDocumentDetailView(APIView):
 
     @extend_schema(operation_id="admin_documents_get")
     def get(self, request, document_id):
-        document = get_object_or_404(Document.objects.prefetch_related("fields", "signing_requests"), pk=document_id)
+        document = get_scoped_document(request, document_id, prefetch=("fields", "signing_requests"))
         log_admin_event(
             request,
             AdminAuditLog.ActionEnum.DOCUMENT_VIEW,
@@ -380,7 +453,7 @@ class AdminDocumentDetailView(APIView):
         return Response(serialize_document_detail(document), status=status.HTTP_200_OK)
 
     def patch(self, request, document_id):
-        document = get_object_or_404(Document, pk=document_id)
+        document = get_scoped_document(request, document_id)
         serializer = DocumentUpdateSerializer(document, data=request.data, partial=True)
         serializer.is_valid(raise_exception=True)
         serializer.save()
@@ -401,7 +474,7 @@ class AdminDocumentFieldsView(APIView):
     serializer_class = ManualDocumentFieldCreateSerializer
 
     def post(self, request, document_id):
-        document = get_object_or_404(Document, pk=document_id)
+        document = get_scoped_document(request, document_id)
         serializer = ManualDocumentFieldCreateSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         field = serializer.save(
@@ -425,7 +498,13 @@ class AdminDocumentFieldDetailView(APIView):
     serializer_class = DocumentFieldUpdateSerializer
 
     def patch(self, request, document_id, field_id):
-        field = get_object_or_404(DocumentField, pk=field_id, document_id=document_id)
+        _, organization = get_request_actor_and_organization(request)
+        field = get_object_or_404(
+            DocumentField,
+            pk=field_id,
+            document_id=document_id,
+            document__organization=organization,
+        )
         serializer = DocumentFieldUpdateSerializer(field, data=request.data, partial=True)
         serializer.is_valid(raise_exception=True)
         serializer.save()
@@ -440,7 +519,13 @@ class AdminDocumentFieldDetailView(APIView):
         return Response(DocumentFieldSerializer(field).data, status=status.HTTP_200_OK)
 
     def delete(self, request, document_id, field_id):
-        field = get_object_or_404(DocumentField, pk=field_id, document_id=document_id)
+        _, organization = get_request_actor_and_organization(request)
+        field = get_object_or_404(
+            DocumentField,
+            pk=field_id,
+            document_id=document_id,
+            document__organization=organization,
+        )
         field_label = field.label
         field.delete()
         log_admin_event(
@@ -460,7 +545,7 @@ class AdminDocumentSendView(APIView):
     serializer_class = DocumentSendSerializer
 
     def post(self, request, document_id):
-        document = get_object_or_404(Document.objects.prefetch_related("fields", "signing_requests"), pk=document_id)
+        document = get_scoped_document(request, document_id, prefetch=("fields", "signing_requests"))
         serializer = DocumentSendSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
 
@@ -508,6 +593,13 @@ class AdminDocumentSendView(APIView):
                     document=document,
                     signer_email=item["signer_email"],
                     signer_name=item.get("signer_name") or "",
+                    signer_user_id=(
+                        AccountProfile.objects.filter(
+                            email_hash=email_digest(item["signer_email"]),
+                            account_type=AccountProfile.AccountTypeEnum.SIGNER,
+                            user__is_active=True,
+                        ).values_list("user", flat=True).first()
+                    ),
                     expires_at=expiry,
                 )
                 for item in serializer.validated_data["signers"]
@@ -545,7 +637,7 @@ class AdminDocumentPagePreviewView(APIView):
     serializer_class = AdminDocumentDetailSerializer
 
     def get(self, request, document_id, page_number):
-        document = get_object_or_404(Document, pk=document_id)
+        document = get_scoped_document(request, document_id)
         with fitz.open(document.original_pdf.path) as pdf_document:
             if page_number < 1 or page_number > pdf_document.page_count:
                 return Response({"detail": "Page not found."}, status=status.HTTP_404_NOT_FOUND)
@@ -568,11 +660,12 @@ class AdminSigningRequestResendView(APIView):
     serializer_class = AdminDocumentDetailSerializer
 
     def post(self, request, document_id, signing_request_id):
-        document = get_object_or_404(Document.objects.prefetch_related("signing_requests", "fields"), pk=document_id)
+        document = get_scoped_document(request, document_id, prefetch=("signing_requests", "fields"))
         signing_request = get_object_or_404(
             SigningRequest.objects.prefetch_related("submissions"),
             pk=signing_request_id,
             document_id=document_id,
+            document__organization=document.organization,
         )
 
         if document.status == Document.StatusEnum.VOIDED:
@@ -641,7 +734,7 @@ class AdminDocumentVoidView(APIView):
     serializer_class = DocumentUpdateSerializer
 
     def post(self, request, document_id):
-        document = get_object_or_404(Document.objects.prefetch_related("signing_requests"), pk=document_id)
+        document = get_scoped_document(request, document_id, prefetch=("signing_requests",))
         if document.status not in {Document.StatusEnum.SENT, Document.StatusEnum.PARTIALLY_SIGNED}:
             return Response(
                 {"status": ["Only sent or partially signed documents can be voided."]},
@@ -677,7 +770,7 @@ class AdminDocumentDownloadView(APIView):
     serializer_class = AdminDocumentDetailSerializer
 
     def get(self, request, document_id):
-        document = get_object_or_404(Document, pk=document_id)
+        document = get_scoped_document(request, document_id)
         if document.status != Document.StatusEnum.COMPLETED or not document.signed_pdf:
             return Response(
                 {"status": ["Signed PDF is only available for completed documents."]},

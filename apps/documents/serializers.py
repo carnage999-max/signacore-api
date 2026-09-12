@@ -5,6 +5,7 @@ from django.contrib.auth.password_validation import validate_password
 from rest_framework import serializers
 
 from apps.signing.serializers import SigningRequestSerializer, SignerInputSerializer
+from apps.accounts.models import OrganizationMembership
 
 from .models import AdminAuditLog, Document, DocumentField
 
@@ -95,6 +96,7 @@ class DocumentSerializer(serializers.ModelSerializer):
             "original_pdf",
             "signed_pdf",
             "created_by",
+            "organization",
             "created_at",
             "updated_at",
             "voided_at",
@@ -157,6 +159,7 @@ class DocumentUpdateSerializer(serializers.ModelSerializer):
 
 class AdminUserSerializer(serializers.ModelSerializer):
     full_name = serializers.SerializerMethodField()
+    organizations = serializers.SerializerMethodField()
 
     class Meta:
         model = get_user_model()
@@ -172,11 +175,26 @@ class AdminUserSerializer(serializers.ModelSerializer):
             "is_active",
             "last_login",
             "date_joined",
+            "organizations",
         )
         read_only_fields = fields
 
     def get_full_name(self, obj) -> str:
         return obj.get_full_name()
+
+    def get_organizations(self, obj) -> list[dict[str, str]]:
+        memberships = obj.signacore_memberships.select_related("organization").filter(
+            status=OrganizationMembership.StatusEnum.ACTIVE,
+            organization__status="ACTIVE",
+        )
+        return [
+            {
+                "id": str(membership.organization_id),
+                "name": membership.organization.name,
+                "role": membership.role,
+            }
+            for membership in memberships
+        ]
 
 
 class AdminLoginSerializer(serializers.Serializer):

@@ -18,10 +18,12 @@ admin.site.index_title = "Operations console"
 urlpatterns = [
     path("admin/", admin.site.urls),
     path("api/health/", HealthCheckView.as_view(), name="health-check"),
+    path("api/auth/", include("apps.accounts.urls")),
     path("api/schema/", SpectacularAPIView.as_view(permission_classes=[IsAdminUser]), name="schema"),
     path("api/docs/", staff_member_required(SignacoreApiDocsView.as_view()), name="api-docs"),
     path("api/redoc/", staff_member_required(SpectacularRedocView.as_view(url_name="schema")), name="api-redoc"),
     path("api/admin/", include("apps.documents.urls")),
+    path("api/", include("apps.billing.urls")),
     path("api/sign/", include("apps.signing.urls")),
     path("sign/<uuid:token>/", SignerPortalView.as_view(), name="signer-portal"),
 ]

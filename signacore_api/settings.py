@@ -68,6 +68,8 @@ INSTALLED_APPS = [
     "drf_spectacular",
     "drf_spectacular_sidecar",
     "corsheaders",
+    "apps.accounts",
+    "apps.billing",
     "apps.documents",
     "apps.signing",
     "apps.notifications",
@@ -211,3 +213,16 @@ SIGNACORE_SERVICE_USERNAME = env("SIGNACORE_SERVICE_USERNAME", "signacore-servic
 SIGNING_LINK_BASE_URL = env("SIGNING_LINK_BASE_URL", "https://mysignacore.com")
 SIGNING_LINK_EXPIRY_DAYS = env_int("SIGNING_LINK_EXPIRY_DAYS", 7)
 OTP_EXPIRY_MINUTES = env_int("OTP_EXPIRY_MINUTES", 10)
+
+STRIPE_SECRET_KEY = env("STRIPE_SECRET_KEY", "") or ""
+STRIPE_WEBHOOK_SECRET = env("STRIPE_WEBHOOK_SECRET", "") or ""
+STRIPE_API_VERSION = env("STRIPE_API_VERSION", "2026-02-25.clover") or "2026-02-25.clover"
+STRIPE_PRICE_PROFESSIONAL = env("STRIPE_PRICE_PROFESSIONAL", "") or ""
+STRIPE_PRICE_BUSINESS = env("STRIPE_PRICE_BUSINESS", "") or ""
+
+GOOGLE_OAUTH_CLIENT_ID = env("GOOGLE_OAUTH_CLIENT_ID", "") or ""
+GOOGLE_OAUTH_CLIENT_SECRET = env("GOOGLE_OAUTH_CLIENT_SECRET", "") or ""
+APPLE_OAUTH_CLIENT_ID = env("APPLE_OAUTH_CLIENT_ID", "") or ""
+APPLE_OAUTH_TEAM_ID = env("APPLE_OAUTH_TEAM_ID", "") or ""
+APPLE_OAUTH_KEY_ID = env("APPLE_OAUTH_KEY_ID", "") or ""
+APPLE_OAUTH_PRIVATE_KEY = (env("APPLE_OAUTH_PRIVATE_KEY", "") or "").replace("\\n", "\n")

@@ -14,6 +14,7 @@ from django.test import TestCase, override_settings
 from django.utils import timezone
 from rest_framework.test import APIClient
 
+from apps.accounts.models import Organization, OrganizationMembership
 from apps.documents.models import AdminAuditLog, Document, DocumentField
 from apps.signing.models import SigningRequest
 
@@ -108,7 +109,17 @@ class AdminDocumentUploadTests(TestCase):
             password="password123",
             is_staff=True,
         )
-        self.client.credentials(HTTP_X_SIGNACORE_SECRET=settings.SIGNACORE_SHARED_SECRET)
+        self.organization = Organization.objects.create(name="Test Company", created_by=self.user)
+        OrganizationMembership.objects.create(
+            organization=self.organization,
+            user=self.user,
+            role=OrganizationMembership.RoleEnum.ADMIN,
+        )
+        self.client.credentials(
+            HTTP_X_SIGNACORE_SECRET=settings.SIGNACORE_SHARED_SECRET,
+            HTTP_X_SIGNACORE_ADMIN_ID=str(self.user.id),
+            HTTP_X_SIGNACORE_ORGANIZATION_ID=str(self.organization.id),
+        )
 
     def test_admin_routes_require_signacore_secret_header(self) -> None:
         self.client.credentials()
@@ -118,7 +129,11 @@ class AdminDocumentUploadTests(TestCase):
         self.assertEqual(response.status_code, 403, response.json())
         self.assertEqual(response.json()["detail"], "Invalid Signacore secret.")
 
-        self.client.credentials(HTTP_X_SIGNACORE_SECRET=settings.SIGNACORE_SHARED_SECRET)
+        self.client.credentials(
+            HTTP_X_SIGNACORE_SECRET=settings.SIGNACORE_SHARED_SECRET,
+            HTTP_X_SIGNACORE_ADMIN_ID=str(self.user.id),
+            HTTP_X_SIGNACORE_ORGANIZATION_ID=str(self.organization.id),
+        )
 
     def test_upload_pdf_creates_document_and_extracts_acroform_fields(self) -> None:
         upload = SimpleUploadedFile(
@@ -146,7 +161,8 @@ class AdminDocumentUploadTests(TestCase):
         )
 
         document = Document.objects.get(pk=payload["id"])
-        self.assertEqual(document.created_by.username, settings.SIGNACORE_SERVICE_USERNAME)
+        self.assertEqual(document.created_by, self.user)
+        self.assertEqual(document.organization, self.organization)
         self.assertEqual(document.fields.count(), 2)
 
     def test_upload_pdf_falls_back_to_heuristic_detection_when_no_widgets_exist(self) -> None:
@@ -227,11 +243,13 @@ class AdminDocumentUploadTests(TestCase):
             title="One",
             original_pdf=SimpleUploadedFile("one.pdf", build_flat_pdf(), content_type="application/pdf"),
             created_by=self.user,
+            organization=self.organization,
         )
         second = Document.objects.create(
             title="Two",
             original_pdf=SimpleUploadedFile("two.pdf", build_flat_pdf(), content_type="application/pdf"),
             created_by=self.user,
+            organization=self.organization,
             status=Document.StatusEnum.SENT,
         )
         DocumentField.objects.create(
@@ -261,6 +279,7 @@ class AdminDocumentUploadTests(TestCase):
             title="Offer Letter",
             original_pdf=SimpleUploadedFile("offer.pdf", build_flat_pdf(), content_type="application/pdf"),
             created_by=self.user,
+            organization=self.organization,
         )
         field = DocumentField.objects.create(
             document=document,
@@ -292,6 +311,7 @@ class AdminDocumentUploadTests(TestCase):
             title="Previewable",
             original_pdf=SimpleUploadedFile("preview.pdf", build_flat_pdf(), content_type="application/pdf"),
             created_by=self.user,
+            organization=self.organization,
         )
 
         response = self.client.get(f"/api/admin/documents/{document.id}/pages/1/preview/")
@@ -304,6 +324,7 @@ class AdminDocumentUploadTests(TestCase):
             title="NDA",
             original_pdf=SimpleUploadedFile("nda.pdf", build_flat_pdf(), content_type="application/pdf"),
             created_by=self.user,
+            organization=self.organization,
         )
 
         response = self.client.post(
@@ -333,6 +354,7 @@ class AdminDocumentUploadTests(TestCase):
             title="Agreement",
             original_pdf=SimpleUploadedFile("agreement.pdf", build_flat_pdf(), content_type="application/pdf"),
             created_by=self.user,
+            organization=self.organization,
         )
         field = DocumentField.objects.create(
             document=document,
@@ -366,6 +388,7 @@ class AdminDocumentUploadTests(TestCase):
             title="Policy",
             original_pdf=SimpleUploadedFile("policy.pdf", build_flat_pdf(), content_type="application/pdf"),
             created_by=self.user,
+            organization=self.organization,
         )
         field = DocumentField.objects.create(
             document=document,
@@ -394,6 +417,7 @@ class AdminDocumentUploadTests(TestCase):
             title="Offer Package",
             original_pdf=SimpleUploadedFile("offer.pdf", build_flat_pdf(), content_type="application/pdf"),
             created_by=self.user,
+            organization=self.organization,
         )
         DocumentField.objects.create(
             document=document,
@@ -430,12 +454,16 @@ class AdminDocumentUploadTests(TestCase):
         self.assertEqual(document.signing_requests.count(), 2)
         self.assertEqual(len(mail.outbox), 2)
         self.assertIn("https://mysignacore.com/sign/", mail.outbox[0].body)
+        self.assertEqual(mail.outbox[0].alternatives[0][1], "text/html")
+        self.assertIn("Review and sign", mail.outbox[0].alternatives[0][0])
+        self.assertIn("Offer Package", mail.outbox[0].alternatives[0][0])
 
     def test_send_document_requires_at_least_one_field(self) -> None:
         document = Document.objects.create(
             title="Blank Contract",
             original_pdf=SimpleUploadedFile("blank.pdf", build_flat_pdf(), content_type="application/pdf"),
             created_by=self.user,
+            organization=self.organization,
         )
 
         response = self.client.post(
@@ -452,6 +480,7 @@ class AdminDocumentUploadTests(TestCase):
             title="Existing Sent Doc",
             original_pdf=SimpleUploadedFile("sent.pdf", build_flat_pdf(), content_type="application/pdf"),
             created_by=self.user,
+            organization=self.organization,
             status=Document.StatusEnum.SENT,
         )
         DocumentField.objects.create(
@@ -490,6 +519,7 @@ class AdminDocumentUploadTests(TestCase):
             title="Duplicate Check",
             original_pdf=SimpleUploadedFile("duplicate.pdf", build_flat_pdf(), content_type="application/pdf"),
             created_by=self.user,
+            organization=self.organization,
             status=Document.StatusEnum.SENT,
         )
         DocumentField.objects.create(
@@ -526,6 +556,7 @@ class AdminDocumentUploadTests(TestCase):
             title="Old Title",
             original_pdf=SimpleUploadedFile("doc.pdf", build_flat_pdf(), content_type="application/pdf"),
             created_by=self.user,
+            organization=self.organization,
         )
 
         response = self.client.patch(
@@ -543,6 +574,7 @@ class AdminDocumentUploadTests(TestCase):
             title="To Void",
             original_pdf=SimpleUploadedFile("void.pdf", build_flat_pdf(), content_type="application/pdf"),
             created_by=self.user,
+            organization=self.organization,
             status=Document.StatusEnum.SENT,
         )
         request = SigningRequest.objects.create(
@@ -571,6 +603,7 @@ class AdminDocumentUploadTests(TestCase):
             title="Reopen Me",
             original_pdf=SimpleUploadedFile("reopen.pdf", build_flat_pdf(), content_type="application/pdf"),
             created_by=self.user,
+            organization=self.organization,
             status=Document.StatusEnum.COMPLETED,
         )
         document.signed_pdf.save(
@@ -626,6 +659,7 @@ class AdminDocumentUploadTests(TestCase):
             title="Completed",
             original_pdf=SimpleUploadedFile("original.pdf", build_flat_pdf(), content_type="application/pdf"),
             created_by=self.user,
+            organization=self.organization,
             status=Document.StatusEnum.COMPLETED,
         )
         document.signed_pdf.save(
@@ -650,6 +684,8 @@ class AdminDocumentUploadTests(TestCase):
         payload = response.json()
         self.assertEqual(payload["admin"]["username"], "admin")
         self.assertFalse(payload["admin"]["is_superuser"])
+        self.assertEqual(payload["admin"]["organizations"][0]["id"], str(self.organization.id))
+        self.assertEqual(payload["admin"]["organizations"][0]["role"], "ADMIN")
         self.assertTrue(
             AdminAuditLog.objects.filter(
                 action=AdminAuditLog.ActionEnum.LOGIN,
@@ -684,6 +720,13 @@ class AdminDocumentUploadTests(TestCase):
         created_user = get_user_model().objects.get(username="ops-admin")
         self.assertTrue(created_user.is_staff)
         self.assertFalse(created_user.is_superuser)
+        self.assertTrue(
+            OrganizationMembership.objects.filter(
+                organization=self.organization,
+                user=created_user,
+                role=OrganizationMembership.RoleEnum.ADMIN,
+            ).exists()
+        )
         self.assertEqual(len(mail.outbox), 1)
         self.assertIn("Your SignaCore admin account is ready", mail.outbox[0].subject)
         self.assertIn("https://mysignacore.com/admin/login", mail.outbox[0].body)
@@ -725,6 +768,11 @@ class AdminDocumentUploadTests(TestCase):
             email="reset@mysignacore.com",
             password="OldPass123!",
             is_staff=True,
+        )
+        OrganizationMembership.objects.create(
+            organization=self.organization,
+            user=target,
+            role=OrganizationMembership.RoleEnum.ADMIN,
         )
         self.client.credentials(
             HTTP_X_SIGNACORE_SECRET=settings.SIGNACORE_SHARED_SECRET,
@@ -773,3 +821,39 @@ class AdminDocumentUploadTests(TestCase):
 
         self.assertEqual(response.status_code, 200, response.json())
         self.assertGreaterEqual(len(response.json()["items"]), 1)
+
+    def test_company_members_cannot_see_or_open_another_company_document(self) -> None:
+        other_owner = get_user_model().objects.create_user(
+            username="other-owner",
+            password="password123",
+            is_staff=True,
+        )
+        other_organization = Organization.objects.create(
+            name="Other Company",
+            created_by=other_owner,
+        )
+        OrganizationMembership.objects.create(
+            organization=other_organization,
+            user=other_owner,
+            role=OrganizationMembership.RoleEnum.OWNER,
+        )
+        other_document = Document.objects.create(
+            title="Private Other Company Agreement",
+            original_pdf=SimpleUploadedFile(
+                "other.pdf",
+                build_flat_pdf(),
+                content_type="application/pdf",
+            ),
+            created_by=other_owner,
+            organization=other_organization,
+        )
+
+        list_response = self.client.get("/api/admin/documents/")
+        detail_response = self.client.get(f"/api/admin/documents/{other_document.id}/")
+
+        self.assertEqual(list_response.status_code, 200, list_response.json())
+        self.assertNotIn(
+            str(other_document.id),
+            {item["id"] for item in list_response.json()["items"]},
+        )
+        self.assertEqual(detail_response.status_code, 404, detail_response.json())

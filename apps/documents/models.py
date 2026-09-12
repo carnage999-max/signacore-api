@@ -5,6 +5,8 @@ from django.db import models
 
 from utils.encryption import EncryptedEmailField, EncryptedTextField
 
+from apps.accounts.models import Organization
+
 
 class Document(models.Model):
     class StatusEnum(models.TextChoices):
@@ -23,6 +25,11 @@ class Document(models.Model):
         settings.AUTH_USER_MODEL,
         on_delete=models.PROTECT,
         related_name="signacore_documents",
+    )
+    organization = models.ForeignKey(
+        Organization,
+        on_delete=models.PROTECT,
+        related_name="documents",
     )
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
@@ -87,6 +94,10 @@ class AdminAuditLog(models.Model):
         ADMIN_USER_CREATE = "ADMIN_USER_CREATE", "Admin User Create"
         ADMIN_PASSWORD_CHANGE = "ADMIN_PASSWORD_CHANGE", "Admin Password Change"
         AUDIT_LOG_LIST = "AUDIT_LOG_LIST", "Audit Log List"
+        BILLING_VIEW = "BILLING_VIEW", "Billing View"
+        BILLING_CHECKOUT = "BILLING_CHECKOUT", "Billing Checkout"
+        BILLING_PORTAL = "BILLING_PORTAL", "Billing Portal"
+        OAUTH_LOGIN = "OAUTH_LOGIN", "OAuth Login"
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     actor = models.ForeignKey(
@@ -95,6 +106,13 @@ class AdminAuditLog(models.Model):
         null=True,
         blank=True,
         related_name="signacore_audit_logs",
+    )
+    organization = models.ForeignKey(
+        Organization,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="audit_logs",
     )
     actor_email = EncryptedEmailField(null=True, blank=True)
     action = models.CharField(max_length=64, choices=ActionEnum.choices)

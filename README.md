@@ -13,6 +13,9 @@ This folder is isolated from the existing frontend codebase and is intended to b
 - admin audit logging for document, signer, user, and password actions
 - PDF flattening and signed file storage
 - Celery-backed email and background jobs
+- organization-isolated company accounts and signer identities
+- Stripe subscription checkout, portal access, and signed webhook processing
+- Google and Apple account sign-in through raw `httpx` clients
 
 ## Local bootstrap
 
@@ -120,3 +123,15 @@ cp .env.example .env
 mkdir -p /mnt/data/media/signa-core /srv/apps/signacore-api/staticfiles
 docker compose up --build -d
 ```
+
+## Commercial account configuration
+
+Stripe secrets and price IDs are configured only on the Django service. Register this production webhook in Stripe:
+
+```text
+https://api.mysignacore.com/api/billing/webhooks/stripe/
+```
+
+Subscribe it to `checkout.session.completed`, `customer.subscription.created`, `customer.subscription.updated`, and `customer.subscription.deleted`.
+
+Google and Apple client credentials are split between the web app and API: the web app receives public client IDs and exact callback URLs, while Django receives provider secrets and the Apple `.p8` private key. The full variable list is in `.env.example`.

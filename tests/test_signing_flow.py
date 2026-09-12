@@ -13,6 +13,7 @@ from django.test import TestCase, override_settings
 from django.utils import timezone
 from rest_framework.test import APIClient
 
+from apps.accounts.models import Organization
 from apps.documents.models import Document, DocumentField
 from apps.signing.models import FieldSubmission, SigningRequest
 from utils.otp import generate_otp
@@ -42,6 +43,10 @@ class SignerFlowTests(TestCase):
             username="admin",
             password="password123",
         )
+        self.organization = Organization.objects.create(
+            name="Signer Flow Company",
+            created_by=self.user,
+        )
         self.document = Document.objects.create(
             title="Employment Offer",
             original_pdf=SimpleUploadedFile(
@@ -50,6 +55,7 @@ class SignerFlowTests(TestCase):
                 content_type="application/pdf",
             ),
             created_by=self.user,
+            organization=self.organization,
             status=Document.StatusEnum.SENT,
         )
         self.text_field = DocumentField.objects.create(
