@@ -1,12 +1,23 @@
 from rest_framework import serializers
 
-from .models import OrganizationSubscription
+from .models import BillingPlanConfiguration, OrganizationSubscription
+
+
+class BillingPlanConfigurationSerializer(serializers.ModelSerializer):
+    name = serializers.CharField(source="get_plan_display", read_only=True)
+    interval_label = serializers.CharField(source="get_billing_interval_display", read_only=True)
+
+    class Meta:
+        model = BillingPlanConfiguration
+        fields = ("plan", "name", "amount", "currency", "billing_interval", "interval_label")
+        read_only_fields = fields
 
 
 class OrganizationSubscriptionSerializer(serializers.ModelSerializer):
     organization_name = serializers.CharField(source="organization.name", read_only=True)
     can_create_checkout = serializers.SerializerMethodField()
     can_manage_billing = serializers.SerializerMethodField()
+    available_plans = serializers.SerializerMethodField()
 
     class Meta:
         model = OrganizationSubscription
@@ -19,6 +30,7 @@ class OrganizationSubscriptionSerializer(serializers.ModelSerializer):
             "cancel_at_period_end",
             "can_create_checkout",
             "can_manage_billing",
+            "available_plans",
         )
         read_only_fields = fields
 
@@ -30,6 +42,10 @@ class OrganizationSubscriptionSerializer(serializers.ModelSerializer):
 
     def get_can_manage_billing(self, obj: OrganizationSubscription) -> bool:
         return bool(obj.stripe_customer_id)
+
+    def get_available_plans(self, obj: OrganizationSubscription) -> list[dict]:
+        plans = BillingPlanConfiguration.objects.filter(is_active=True)
+        return BillingPlanConfigurationSerializer(plans, many=True).data
 
 
 class CheckoutSessionSerializer(serializers.Serializer):

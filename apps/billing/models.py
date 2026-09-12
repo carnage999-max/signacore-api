@@ -1,8 +1,50 @@
 import uuid
+from decimal import Decimal
 
+from django.core.validators import MinValueValidator
 from django.db import models
 
 from apps.accounts.models import Organization
+
+
+class BillingPlanConfiguration(models.Model):
+    class PlanEnum(models.TextChoices):
+        PROFESSIONAL = "PROFESSIONAL", "Professional"
+        BUSINESS = "BUSINESS", "Business"
+
+    class CurrencyEnum(models.TextChoices):
+        USD = "USD", "USD"
+        CAD = "CAD", "CAD"
+        EUR = "EUR", "EUR"
+        GBP = "GBP", "GBP"
+
+    class BillingIntervalEnum(models.TextChoices):
+        MONTH = "month", "Monthly"
+        YEAR = "year", "Yearly"
+
+    plan = models.CharField(max_length=32, choices=PlanEnum.choices, unique=True)
+    amount = models.DecimalField(
+        max_digits=10,
+        decimal_places=2,
+        validators=[MinValueValidator(Decimal("0.50"))],
+    )
+    currency = models.CharField(max_length=3, choices=CurrencyEnum.choices, default=CurrencyEnum.USD)
+    billing_interval = models.CharField(
+        max_length=16,
+        choices=BillingIntervalEnum.choices,
+        default=BillingIntervalEnum.MONTH,
+    )
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ("plan",)
+        verbose_name = "billing plan price"
+        verbose_name_plural = "billing plan prices"
+
+    def __str__(self) -> str:
+        return f"{self.get_plan_display()}: {self.currency} {self.amount}/{self.billing_interval}"
 
 
 class OrganizationSubscription(models.Model):
@@ -66,4 +108,3 @@ class StripeWebhookEvent(models.Model):
 
     def __str__(self) -> str:
         return f"{self.event_type}: {self.stripe_event_id}"
-

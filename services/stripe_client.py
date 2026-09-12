@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 import time
+from decimal import Decimal
 from typing import Any
 
 from django.conf import settings
@@ -37,7 +38,10 @@ class StripeAPIClient(BaseAPIClient):
         customer_id: str,
         organization_id: str,
         plan: str,
-        price_id: str,
+        plan_name: str,
+        amount: Decimal,
+        currency: str,
+        billing_interval: str,
     ) -> dict[str, Any]:
         app_url = settings.SIGNING_LINK_BASE_URL.rstrip("/")
         response = self.post(
@@ -45,7 +49,10 @@ class StripeAPIClient(BaseAPIClient):
             data={
                 "mode": "subscription",
                 "customer": customer_id,
-                "line_items[0][price]": price_id,
+                "line_items[0][price_data][currency]": currency.lower(),
+                "line_items[0][price_data][unit_amount]": str(int(amount * Decimal("100"))),
+                "line_items[0][price_data][recurring][interval]": billing_interval,
+                "line_items[0][price_data][product_data][name]": f"SignaCore {plan_name}",
                 "line_items[0][quantity]": "1",
                 "success_url": f"{app_url}/admin/billing?checkout=success",
                 "cancel_url": f"{app_url}/admin/billing?checkout=cancelled",
@@ -69,14 +76,6 @@ class StripeAPIClient(BaseAPIClient):
 
     def retrieve_subscription(self, subscription_id: str) -> dict[str, Any]:
         return self.get(f"/subscriptions/{subscription_id}").json()
-
-
-def get_stripe_price_id(plan: str) -> str:
-    prices = {
-        "PROFESSIONAL": settings.STRIPE_PRICE_PROFESSIONAL,
-        "BUSINESS": settings.STRIPE_PRICE_BUSINESS,
-    }
-    return prices.get(plan, "")
 
 
 def verify_stripe_signature(

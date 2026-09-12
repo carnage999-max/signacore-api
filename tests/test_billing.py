@@ -4,6 +4,7 @@ import hashlib
 import hmac
 import json
 import time
+from decimal import Decimal
 from unittest.mock import patch
 
 from django.conf import settings
@@ -12,7 +13,7 @@ from django.test import TestCase, override_settings
 from rest_framework.test import APIClient
 
 from apps.accounts.models import Organization, OrganizationMembership
-from apps.billing.models import OrganizationSubscription, StripeWebhookEvent
+from apps.billing.models import BillingPlanConfiguration, OrganizationSubscription, StripeWebhookEvent
 from apps.documents.models import AdminAuditLog
 
 
@@ -20,8 +21,6 @@ from apps.documents.models import AdminAuditLog
     SIGNACORE_SHARED_SECRET="test-signacore-secret",
     STRIPE_SECRET_KEY="sk_test_secret",
     STRIPE_WEBHOOK_SECRET="whsec_test_secret",
-    STRIPE_PRICE_PROFESSIONAL="price_professional",
-    STRIPE_PRICE_BUSINESS="price_business",
 )
 class BillingApiTests(TestCase):
     def setUp(self) -> None:
@@ -38,6 +37,12 @@ class BillingApiTests(TestCase):
             user=self.owner,
             role=OrganizationMembership.RoleEnum.OWNER,
         )
+        self.professional_plan = BillingPlanConfiguration.objects.create(
+            plan=BillingPlanConfiguration.PlanEnum.PROFESSIONAL,
+            amount=Decimal("29.00"),
+            currency=BillingPlanConfiguration.CurrencyEnum.USD,
+            billing_interval=BillingPlanConfiguration.BillingIntervalEnum.MONTH,
+        )
         self.authenticate(self.owner)
 
     def authenticate(self, user) -> None:
@@ -53,6 +58,7 @@ class BillingApiTests(TestCase):
         self.assertEqual(response.status_code, 200, response.json())
         self.assertEqual(response.json()["organization"], str(self.organization.id))
         self.assertEqual(response.json()["plan"], OrganizationSubscription.PlanEnum.FREE)
+        self.assertEqual(response.json()["available_plans"][0]["amount"], "29.00")
         self.assertTrue(
             AdminAuditLog.objects.filter(
                 organization=self.organization,
@@ -81,8 +87,23 @@ class BillingApiTests(TestCase):
             customer_id="cus_123",
             organization_id=str(self.organization.id),
             plan=OrganizationSubscription.PlanEnum.PROFESSIONAL,
-            price_id="price_professional",
+            plan_name="Professional",
+            amount=Decimal("29.00"),
+            currency="USD",
+            billing_interval="month",
         )
+
+    def test_inactive_plan_cannot_start_checkout(self) -> None:
+        self.professional_plan.is_active = False
+        self.professional_plan.save(update_fields=["is_active", "updated_at"])
+
+        response = self.client.post(
+            "/api/admin/billing/checkout/",
+            {"plan": OrganizationSubscription.PlanEnum.PROFESSIONAL},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 503, response.json())
 
     def test_non_owner_cannot_manage_billing(self) -> None:
         admin_user = get_user_model().objects.create_user(

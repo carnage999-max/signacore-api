@@ -1,12 +1,22 @@
 from django.test import SimpleTestCase
 
 from apps.accounts.models import AccountProfile, Organization, OrganizationMembership, SocialIdentity
-from apps.billing.models import OrganizationSubscription, StripeWebhookEvent
+from apps.billing.models import BillingPlanConfiguration, OrganizationSubscription, StripeWebhookEvent
 from apps.documents.models import Document, DocumentField
 from apps.signing.models import FieldSubmission, SigningRequest
 
 
 class SignacoreEnumTests(SimpleTestCase):
+    def test_billing_plan_configuration_enums_are_explicit(self) -> None:
+        self.assertEqual(
+            [value for value, _ in BillingPlanConfiguration.PlanEnum.choices],
+            ["PROFESSIONAL", "BUSINESS"],
+        )
+        self.assertEqual(
+            [value for value, _ in BillingPlanConfiguration.BillingIntervalEnum.choices],
+            ["month", "year"],
+        )
+
     def test_social_identity_provider_enum_is_explicit(self) -> None:
         self.assertEqual(
             [value for value, _ in SocialIdentity.ProviderEnum.choices],

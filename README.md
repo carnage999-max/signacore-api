@@ -126,7 +126,7 @@ docker compose up --build -d
 
 ## Commercial account configuration
 
-Stripe secrets and price IDs are configured only on the Django service. Register this production webhook in Stripe:
+Stripe credentials are configured only on the Django service. Subscription amounts, currencies, billing intervals, and availability are managed by the superuser under **Billing plan prices** in Django admin. Register this production webhook in Stripe:
 
 ```text
 https://api.mysignacore.com/api/billing/webhooks/stripe/

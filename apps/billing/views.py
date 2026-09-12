@@ -17,9 +17,9 @@ from apps.accounts.models import Organization, OrganizationMembership
 from apps.documents.auth import HasValidSignacoreSecret
 from apps.documents.models import AdminAuditLog
 from apps.documents.views import get_request_actor_and_organization, log_admin_event
-from services.stripe_client import StripeAPIClient, get_stripe_price_id, verify_stripe_signature
+from services.stripe_client import StripeAPIClient, verify_stripe_signature
 
-from .models import OrganizationSubscription, StripeWebhookEvent
+from .models import BillingPlanConfiguration, OrganizationSubscription, StripeWebhookEvent
 from .serializers import (
     BillingPortalResponseSerializer,
     CheckoutSessionResponseSerializer,
@@ -46,14 +46,6 @@ def require_billing_manager(actor, organization: Organization) -> None:
 def get_organization_subscription(organization: Organization) -> OrganizationSubscription:
     subscription, _ = OrganizationSubscription.objects.get_or_create(organization=organization)
     return subscription
-
-
-def plan_from_price_id(price_id: str) -> str:
-    if price_id and price_id == settings.STRIPE_PRICE_BUSINESS:
-        return OrganizationSubscription.PlanEnum.BUSINESS
-    if price_id and price_id == settings.STRIPE_PRICE_PROFESSIONAL:
-        return OrganizationSubscription.PlanEnum.PROFESSIONAL
-    return OrganizationSubscription.PlanEnum.FREE
 
 
 def timestamp_to_datetime(value) -> datetime | None:
@@ -92,7 +84,10 @@ def sync_subscription_object(payload: dict) -> bool:
     subscription.stripe_customer_id = customer_id or subscription.stripe_customer_id
     subscription.stripe_subscription_id = subscription_id or subscription.stripe_subscription_id
     subscription.stripe_price_id = price_id or subscription.stripe_price_id
-    subscription.plan = str(metadata.get("plan") or "") or plan_from_price_id(price_id)
+    metadata_plan = str(metadata.get("plan") or "").upper()
+    valid_plans = {value for value, _ in OrganizationSubscription.PlanEnum.choices}
+    if metadata_plan in valid_plans:
+        subscription.plan = metadata_plan
     subscription.status = stripe_status if stripe_status in valid_statuses else OrganizationSubscription.StatusEnum.NONE
     subscription.current_period_end = timestamp_to_datetime(period_end)
     subscription.cancel_at_period_end = bool(payload.get("cancel_at_period_end", False))
@@ -130,10 +125,10 @@ class BillingCheckoutView(APIView):
         serializer = CheckoutSessionSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         plan = serializer.validated_data["plan"]
-        price_id = get_stripe_price_id(plan)
-        if not settings.STRIPE_SECRET_KEY or not price_id:
+        plan_configuration = BillingPlanConfiguration.objects.filter(plan=plan, is_active=True).first()
+        if not settings.STRIPE_SECRET_KEY or plan_configuration is None:
             return Response(
-                {"detail": "Stripe billing is not configured for this plan."},
+                {"detail": "This subscription plan is not available."},
                 status=status.HTTP_503_SERVICE_UNAVAILABLE,
             )
 
@@ -158,7 +153,10 @@ class BillingCheckoutView(APIView):
                 customer_id=subscription.stripe_customer_id,
                 organization_id=str(organization.id),
                 plan=plan,
-                price_id=price_id,
+                plan_name=plan_configuration.get_plan_display(),
+                amount=plan_configuration.amount,
+                currency=plan_configuration.currency,
+                billing_interval=plan_configuration.billing_interval,
             )
             checkout_url = str(checkout["url"])
         except (httpx.HTTPError, KeyError, ValueError):
@@ -168,7 +166,6 @@ class BillingCheckoutView(APIView):
             )
 
         subscription.plan = plan
-        subscription.stripe_price_id = price_id
         subscription.save()
         log_admin_event(
             request,
