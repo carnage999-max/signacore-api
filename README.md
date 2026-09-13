@@ -54,6 +54,8 @@ The backend also keeps Django's default admin available as a superuser fallback:
 https://api.mysignacore.com/admin/
 ```
 
+Signing invitations point to `https://sign.mysignacore.com`, which must proxy to the Django service. Admin and billing redirects return to `https://mysignacore.com`; these hosts are configured independently with `SIGNACORE_SIGNER_PORTAL_URL` and `SIGNACORE_APP_URL`.
+
 The default admin is branded with SignaCore styling and links to the generated API documentation.
 
 ## API documentation

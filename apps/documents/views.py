@@ -86,7 +86,7 @@ def get_request_ip(request) -> str:
 
 
 def get_admin_login_url() -> str:
-    return f"{settings.SIGNING_LINK_BASE_URL.rstrip('/')}/admin/login"
+    return f"{settings.SIGNACORE_APP_URL.rstrip('/')}/admin/login"
 
 
 def log_admin_event(

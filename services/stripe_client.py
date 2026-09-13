@@ -43,7 +43,7 @@ class StripeAPIClient(BaseAPIClient):
         currency: str,
         billing_interval: str,
     ) -> dict[str, Any]:
-        app_url = settings.SIGNING_LINK_BASE_URL.rstrip("/")
+        app_url = settings.SIGNACORE_APP_URL.rstrip("/")
         response = self.post(
             "/checkout/sessions",
             data={
@@ -69,7 +69,7 @@ class StripeAPIClient(BaseAPIClient):
             "/billing_portal/sessions",
             data={
                 "customer": customer_id,
-                "return_url": f"{settings.SIGNING_LINK_BASE_URL.rstrip('/')}/admin/billing",
+                "return_url": f"{settings.SIGNACORE_APP_URL.rstrip('/')}/admin/billing",
             },
         )
         return response.json()

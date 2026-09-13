@@ -30,7 +30,7 @@ def send_email(
 
 
 def build_signing_link(signing_request: SigningRequest) -> str:
-    base_url = settings.SIGNING_LINK_BASE_URL.rstrip("/")
+    base_url = settings.SIGNACORE_SIGNER_PORTAL_URL.rstrip("/")
     return f"{base_url}/sign/{signing_request.id}/"
 
 
