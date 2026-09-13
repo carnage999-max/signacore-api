@@ -1,6 +1,7 @@
 from unittest.mock import patch
 
 from django.contrib.auth import get_user_model
+from django.core.cache import cache
 from django.core import mail
 from django.core.files.base import ContentFile
 from django.test import TestCase, override_settings
@@ -21,6 +22,7 @@ from services.oauth_client import VerifiedOAuthIdentity
 )
 class OAuthAccountTests(TestCase):
     def setUp(self) -> None:
+        cache.clear()
         self.client = APIClient()
         self.client.credentials(HTTP_X_SIGNACORE_SECRET="test-signacore-secret")
 
@@ -233,6 +235,7 @@ class EmailAccountTests(TestCase):
     password = "Correct-horse-battery-staple-93!"
 
     def setUp(self) -> None:
+        cache.clear()
         self.client = APIClient()
         self.client.credentials(HTTP_X_SIGNACORE_SECRET="test-signacore-secret")
 
@@ -288,6 +291,29 @@ class EmailAccountTests(TestCase):
         self.assertEqual(verification_response.json()["account_type"], "COMPANY")
         self.assertTrue(verification_response.json()["is_staff"])
         self.assertEqual(mail.outbox[-1].subject, "Welcome to SignaCore")
+
+    def test_email_verification_link_survives_repeat_requests(self) -> None:
+        self.register()
+        values = self.verification_values()
+
+        first_response = self.client.post(
+            "/api/auth/email/verify/",
+            values,
+            format="json",
+        )
+        second_response = self.client.post(
+            "/api/auth/email/verify/",
+            values,
+            format="json",
+        )
+
+        self.assertEqual(first_response.status_code, 200, first_response.json())
+        self.assertEqual(second_response.status_code, 200, second_response.json())
+        self.assertEqual(second_response.json()["account_type"], "COMPANY")
+        self.assertEqual(
+            [message.subject for message in mail.outbox].count("Welcome to SignaCore"),
+            1,
+        )
 
     def test_verified_account_can_log_in_with_email_and_password(self) -> None:
         self.register(account_type="SIGNER")

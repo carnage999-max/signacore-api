@@ -221,17 +221,19 @@ class EmailVerificationView(APIView):
                     status=status.HTTP_400_BAD_REQUEST,
                 )
 
-            user.is_active = True
-            user.last_login = timezone.now()
-            user.save(update_fields=["is_active", "last_login"])
-            log_account_event(
-                request,
-                user,
-                AdminAuditLog.ActionEnum.EMAIL_LOGIN,
-                "Verified email and signed in.",
-            )
+            was_inactive = not user.is_active
+            if was_inactive:
+                user.is_active = True
+                user.save(update_fields=["is_active"])
+                log_account_event(
+                    request,
+                    user,
+                    AdminAuditLog.ActionEnum.EMAIL_LOGIN,
+                    "Verified email and signed in.",
+                )
         payload = build_account_payload(user, is_new=True)
-        enqueue_task(send_account_welcome, user.id)
+        if was_inactive:
+            enqueue_task(send_account_welcome, user.id)
         return Response(AccountSessionSerializer(payload).data, status=status.HTTP_200_OK)
 
 
