@@ -37,48 +37,81 @@ def build_signing_link(signing_request: SigningRequest) -> str:
     return f"{base_url}/sign/{signing_request.id}/"
 
 
-def build_invitation_html(signing_request: SigningRequest, signing_link: str) -> str:
-    signer_name = escape(signing_request.signer_name or "there")
-    document_title = escape(signing_request.document.title)
-    expires_at = escape(f"{signing_request.expires_at:%B %d, %Y at %I:%M %p %Z}")
-    safe_link = escape(signing_link)
-
+def build_branded_email_html(
+    *,
+    name: str = "there",
+    title: str,
+    message: str,
+    action_label: str | None = None,
+    action_url: str | None = None,
+    details: list[tuple[str, str]] | None = None,
+    code: str | None = None,
+    footer: str = "If this message was unexpected, contact SignaCore support or ignore it if no action is required.",
+) -> str:
+    safe_name = escape(name or "there")
+    safe_title = escape(title)
+    safe_message = escape(message)
+    safe_action_label = escape(action_label or "")
+    safe_action_url = escape(action_url or "")
+    safe_code = escape(code or "")
+    safe_footer = escape(footer)
+    logo_url = escape(f"{settings.SIGNACORE_APP_URL.rstrip('/')}/signa-core.png")
+    detail_rows = ""
+    for label, value in details or []:
+        detail_rows += f"""\
+                      <tr>
+                        <td style="padding:10px 0;border-bottom:1px solid rgba(148,163,184,0.18);font-size:12px;font-weight:900;letter-spacing:0.12em;text-transform:uppercase;color:#6ee7f9;">{escape(label)}</td>
+                        <td style="padding:10px 0;border-bottom:1px solid rgba(148,163,184,0.18);font-size:14px;font-weight:700;color:#e5edf5;text-align:right;">{escape(value)}</td>
+                      </tr>
+"""
+    details_html = f"""\
+                <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="margin:0 0 26px;border:1px solid rgba(148,163,184,0.22);border-radius:18px;background:#0c1722;padding:8px 18px;">
+                  {detail_rows}
+                </table>
+""" if detail_rows else ""
+    code_html = f"""\
+                <div style="margin:0 0 26px;border:1px solid rgba(110,231,249,0.35);border-radius:18px;background:#08121c;padding:22px;text-align:center;">
+                  <div style="font-size:12px;font-weight:900;letter-spacing:0.14em;text-transform:uppercase;color:#6ee7f9;">Verification code</div>
+                  <div style="margin-top:10px;font-family: ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:34px;font-weight:900;letter-spacing:0.22em;color:#f8fafc;">{safe_code}</div>
+                </div>
+""" if safe_code else ""
+    action_html = f"""\
+                <a href="{safe_action_url}" style="display:inline-block;border-radius:14px;background:#f8fafc;color:#07111d;font-size:15px;font-weight:900;text-decoration:none;padding:15px 22px;">{safe_action_label}</a>
+                <p style="margin:24px 0 0;font-size:12px;line-height:1.6;color:#8191a3;">If the button does not work, copy this link into your browser:</p>
+                <p style="margin:8px 0 0;font-size:12px;line-height:1.6;word-break:break-all;color:#6ee7f9;">{safe_action_url}</p>
+""" if safe_action_label and safe_action_url else ""
     return f"""\
 <!doctype html>
 <html lang="en">
-  <body style="margin:0;background:#f4f0e8;color:#112235;font-family:Avenir Next,Segoe UI,Arial,sans-serif;">
-    <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background:#f4f0e8;padding:32px 16px;">
+  <body style="margin:0;background:#03070c;color:#f4f8fb;font-family:Avenir Next,Segoe UI,Arial,sans-serif;">
+    <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background:#03070c;padding:36px 16px;">
       <tr>
         <td align="center">
-          <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="max-width:640px;overflow:hidden;border:1px solid #d8d0c2;border-radius:28px;background:#fffdf8;box-shadow:0 24px 70px rgba(17,34,53,0.14);">
+          <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="max-width:640px;overflow:hidden;border:1px solid #24384b;border-radius:28px;background:#09131d;box-shadow:0 24px 80px rgba(0,0,0,0.38);">
             <tr>
-              <td style="padding:34px 34px 26px;background:linear-gradient(135deg,#123a5f,#10283d 62%,#271d1a);color:#fffdf8;">
-                <div style="font-size:12px;font-weight:900;letter-spacing:0.16em;text-transform:uppercase;color:#d9a94f;">SignaCore</div>
-                <h1 style="margin:16px 0 0;font-family:Georgia,serif;font-size:34px;line-height:1.02;color:#fffdf8;">Signature requested</h1>
-                <p style="margin:14px 0 0;color:rgba(255,253,248,0.74);font-size:15px;line-height:1.6;">Se7en Inc. sent you a document to review and sign securely.</p>
-              </td>
-            </tr>
-            <tr>
-              <td style="padding:34px;">
-                <p style="margin:0 0 18px;font-size:16px;line-height:1.6;">Hello {signer_name},</p>
-                <p style="margin:0 0 24px;font-size:16px;line-height:1.6;">Please review and complete the document below. You will verify your email before signing.</p>
-                <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="margin:0 0 28px;border:1px solid #e5ddcf;border-radius:18px;background:#fbf8f1;">
+              <td style="padding:34px 36px;background:linear-gradient(135deg,#061520,#08283f 52%,#321a10);">
+                <table role="presentation" width="100%" cellspacing="0" cellpadding="0">
                   <tr>
-                    <td style="padding:18px 20px;">
-                      <div style="font-size:12px;font-weight:900;letter-spacing:0.12em;text-transform:uppercase;color:#6b7280;">Document</div>
-                      <div style="margin-top:6px;font-size:20px;font-weight:800;color:#112235;">{document_title}</div>
-                      <div style="margin-top:12px;font-size:13px;font-weight:700;color:#5d6d80;">Expires {expires_at}</div>
+                    <td style="vertical-align:middle;">
+                      <img src="{logo_url}" width="48" height="48" alt="SignaCore" style="display:block;border-radius:12px;">
                     </td>
+                    <td align="right" style="vertical-align:middle;font-size:12px;font-weight:900;letter-spacing:0.16em;text-transform:uppercase;color:#6ee7f9;">SignaCore</td>
                   </tr>
                 </table>
-                <a href="{safe_link}" style="display:inline-block;border-radius:999px;background:#123a5f;color:#fffdf8;font-size:15px;font-weight:900;text-decoration:none;padding:15px 22px;">Review and sign</a>
-                <p style="margin:28px 0 0;font-size:13px;line-height:1.6;color:#5d6d80;">If the button does not work, copy this link into your browser:</p>
-                <p style="margin:8px 0 0;font-size:13px;line-height:1.6;word-break:break-all;color:#123a5f;">{safe_link}</p>
+                <h1 style="margin:24px 0 0;font-family:Georgia,serif;font-size:36px;line-height:1.05;color:#f8fafc;">{safe_title}</h1>
               </td>
             </tr>
             <tr>
-              <td style="padding:18px 34px 28px;color:#7a8493;font-size:12px;line-height:1.6;">
-                If you were not expecting this request, ignore this email.
+              <td style="padding:36px;">
+                <p style="margin:0 0 16px;font-size:16px;line-height:1.65;color:#d5e0e9;">Hello {safe_name},</p>
+                <p style="margin:0 0 26px;font-size:16px;line-height:1.65;color:#9cadbd;">{safe_message}</p>
+{details_html}{code_html}{action_html}
+              </td>
+            </tr>
+            <tr>
+              <td style="padding:20px 36px 30px;border-top:1px solid rgba(148,163,184,0.14);color:#718394;font-size:12px;line-height:1.6;">
+                <strong style="color:#d5e0e9;">SignaCore - by Se7en</strong><br>
+                {safe_footer}
               </td>
             </tr>
           </table>
@@ -88,6 +121,21 @@ def build_invitation_html(signing_request: SigningRequest, signing_link: str) ->
   </body>
 </html>
 """
+
+
+def build_invitation_html(signing_request: SigningRequest, signing_link: str) -> str:
+    return build_branded_email_html(
+        name=signing_request.signer_name or "there",
+        title="Signature requested",
+        message="Please review and complete this document. You will verify your email before signing.",
+        action_label="Review and sign",
+        action_url=signing_link,
+        details=[
+            ("Document", signing_request.document.title),
+            ("Expires", f"{signing_request.expires_at:%B %d, %Y at %I:%M %p %Z}"),
+        ],
+        footer="If you were not expecting this request, ignore this email.",
+    )
 
 
 def send_invitation_email(signing_request: SigningRequest) -> None:
@@ -120,7 +168,22 @@ def send_otp_email_message(signing_request: SigningRequest, otp_code: str) -> No
         f"Expires in: {settings.OTP_EXPIRY_MINUTES} minutes\n\n"
         "If you did not request this code, ignore this email.\n"
     )
-    send_email(subject, body, [signing_request.signer_email])
+    send_email(
+        subject,
+        body,
+        [signing_request.signer_email],
+        html_body=build_branded_email_html(
+            name=signer_name,
+            title="Your verification code",
+            message=f"Use this code to continue signing {signing_request.document.title}.",
+            code=otp_code,
+            details=[
+                ("Document", signing_request.document.title),
+                ("Expires in", f"{settings.OTP_EXPIRY_MINUTES} minutes"),
+            ],
+            footer="If you did not request this code, ignore this email.",
+        ),
+    )
 
 
 def send_completion_email(document: Document) -> None:
@@ -159,6 +222,12 @@ def send_completion_email(document: Document) -> None:
                 "application/pdf",
             )
         ],
+        html_body=build_branded_email_html(
+            title="Document completed",
+            message="The document below has been fully signed in SignaCore. The completed PDF is attached.",
+            details=[("Document", document.title)],
+            footer="This completed PDF is being delivered to the document owner and assigned signers.",
+        ),
     )
 
 
@@ -175,7 +244,21 @@ def send_progress_email(document: Document, signing_request: SigningRequest) -> 
         f"Signer: {signer_name}\n"
         f"Status: {document.status}\n"
     )
-    send_email(subject, body, [admin_email])
+    send_email(
+        subject,
+        body,
+        [admin_email],
+        html_body=build_branded_email_html(
+            title="Signing progress update",
+            message="A signer completed their portion of a SignaCore document.",
+            details=[
+                ("Document", document.title),
+                ("Signer", signer_name),
+                ("Status", document.status),
+            ],
+            footer="You are receiving this because you own or manage this signing request.",
+        ),
+    )
 
 
 def send_admin_account_created_email(
@@ -193,7 +276,22 @@ def send_admin_account_created_email(
         f"Admin login: {login_url}\n\n"
         "Sign in and request a password change if this password was not shared through an approved channel.\n"
     )
-    send_email(subject, body, [email])
+    send_email(
+        subject,
+        body,
+        [email],
+        html_body=build_branded_email_html(
+            title="Admin account created",
+            message="An admin account has been created for you in SignaCore.",
+            action_label="Open admin console",
+            action_url=login_url,
+            details=[
+                ("Username", username),
+                ("Temporary password", temporary_password),
+            ],
+            footer="Sign in and request a password change if this password was not shared through an approved channel.",
+        ),
+    )
 
 
 def send_admin_password_changed_email(
@@ -211,7 +309,22 @@ def send_admin_password_changed_email(
         f"Admin login: {login_url}\n\n"
         "If you did not request this change, contact the SignaCore owner immediately.\n"
     )
-    send_email(subject, body, [email])
+    send_email(
+        subject,
+        body,
+        [email],
+        html_body=build_branded_email_html(
+            title="Admin password changed",
+            message="Your SignaCore admin password has been changed.",
+            action_label="Open admin console",
+            action_url=login_url,
+            details=[
+                ("Username", username),
+                ("Temporary password", temporary_password),
+            ],
+            footer="If you did not request this change, contact the SignaCore owner immediately.",
+        ),
+    )
 
 
 def send_account_verification_email(user) -> None:
@@ -222,8 +335,6 @@ def send_account_verification_email(user) -> None:
         f"{settings.SIGNACORE_APP_URL.rstrip('/')}/api/auth/email/verify"
         f"?uid={uid}&token={token}"
     )
-    safe_name = escape(profile.display_name or "there")
-    safe_url = escape(verification_url)
     subject = "Verify your SignaCore account"
     body = (
         f"Hello {profile.display_name or 'there'},\n\n"
@@ -231,35 +342,14 @@ def send_account_verification_email(user) -> None:
         f"Verification link: {verification_url}\n\n"
         "If you did not create this account, ignore this email.\n"
     )
-    html_body = f"""\
-<!doctype html>
-<html lang="en">
-  <body style="margin:0;background:#03070c;color:#f4f8fb;font-family:Avenir Next,Segoe UI,Arial,sans-serif;">
-    <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background:#03070c;padding:36px 16px;">
-      <tr>
-        <td align="center">
-          <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="max-width:620px;overflow:hidden;border:1px solid #24384b;border-radius:28px;background:#09131d;">
-            <tr>
-              <td style="padding:36px;background:linear-gradient(135deg,#0b3048,#09131d 66%,#321b12);">
-                <div style="font-size:12px;font-weight:900;letter-spacing:0.16em;text-transform:uppercase;color:#52c9ff;">SignaCore</div>
-                <h1 style="margin:18px 0 0;font-family:Georgia,serif;font-size:38px;line-height:1.05;color:#f4f8fb;">Verify your email</h1>
-              </td>
-            </tr>
-            <tr>
-              <td style="padding:36px;">
-                <p style="margin:0 0 16px;font-size:16px;line-height:1.65;color:#d5e0e9;">Hello {safe_name},</p>
-                <p style="margin:0 0 26px;font-size:16px;line-height:1.65;color:#9cadbd;">Confirm this email address to activate your SignaCore account.</p>
-                <a href="{safe_url}" style="display:inline-block;border-radius:12px;background:#f1f7fb;color:#07111d;font-size:15px;font-weight:900;text-decoration:none;padding:15px 22px;">Verify email</a>
-                <p style="margin:28px 0 0;font-size:12px;line-height:1.6;color:#718394;">If you did not create this account, you can ignore this email.</p>
-              </td>
-            </tr>
-          </table>
-        </td>
-      </tr>
-    </table>
-  </body>
-</html>
-"""
+    html_body = build_branded_email_html(
+        name=profile.display_name or "there",
+        title="Verify your email",
+        message="Confirm this email address to activate your SignaCore account.",
+        action_label="Verify email",
+        action_url=verification_url,
+        footer="If you did not create this account, you can ignore this email.",
+    )
     send_email(subject, body, [profile.email], html_body=html_body)
 
 
@@ -271,40 +361,14 @@ def build_account_notice_html(
     action_label: str,
     action_url: str,
 ) -> str:
-    safe_name = escape(name or "there")
-    safe_title = escape(title)
-    safe_message = escape(message)
-    safe_action_label = escape(action_label)
-    safe_action_url = escape(action_url)
-    return f"""\
-<!doctype html>
-<html lang="en">
-  <body style="margin:0;background:#03070c;color:#f4f8fb;font-family:Avenir Next,Segoe UI,Arial,sans-serif;">
-    <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background:#03070c;padding:36px 16px;">
-      <tr>
-        <td align="center">
-          <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="max-width:620px;overflow:hidden;border:1px solid #24384b;border-radius:28px;background:#09131d;">
-            <tr>
-              <td style="padding:36px;background:linear-gradient(135deg,#0b3048,#09131d 66%,#321b12);">
-                <div style="font-size:12px;font-weight:900;letter-spacing:0.16em;text-transform:uppercase;color:#52c9ff;">SignaCore</div>
-                <h1 style="margin:18px 0 0;font-family:Georgia,serif;font-size:38px;line-height:1.05;color:#f4f8fb;">{safe_title}</h1>
-              </td>
-            </tr>
-            <tr>
-              <td style="padding:36px;">
-                <p style="margin:0 0 16px;font-size:16px;line-height:1.65;color:#d5e0e9;">Hello {safe_name},</p>
-                <p style="margin:0 0 26px;font-size:16px;line-height:1.65;color:#9cadbd;">{safe_message}</p>
-                <a href="{safe_action_url}" style="display:inline-block;border-radius:12px;background:#f1f7fb;color:#07111d;font-size:15px;font-weight:900;text-decoration:none;padding:15px 22px;">{safe_action_label}</a>
-                <p style="margin:28px 0 0;font-size:12px;line-height:1.6;color:#718394;">If you did not perform this action, contact SignaCore support immediately.</p>
-              </td>
-            </tr>
-          </table>
-        </td>
-      </tr>
-    </table>
-  </body>
-</html>
-"""
+    return build_branded_email_html(
+        name=name,
+        title=title,
+        message=message,
+        action_label=action_label,
+        action_url=action_url,
+        footer="If you did not perform this action, contact SignaCore support immediately.",
+    )
 
 
 def send_account_welcome_email(user) -> None:

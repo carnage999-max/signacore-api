@@ -731,6 +731,9 @@ class AdminDocumentUploadTests(TestCase):
         self.assertEqual(len(mail.outbox), 1)
         self.assertIn("Your SignaCore admin account is ready", mail.outbox[0].subject)
         self.assertIn("https://mysignacore.com/admin/login", mail.outbox[0].body)
+        self.assertEqual(mail.outbox[0].alternatives[0][1], "text/html")
+        self.assertIn("Admin account created", mail.outbox[0].alternatives[0][0])
+        self.assertIn("signa-core.png", mail.outbox[0].alternatives[0][0])
         self.assertTrue(
             AdminAuditLog.objects.filter(
                 action=AdminAuditLog.ActionEnum.ADMIN_USER_CREATE,
@@ -791,6 +794,8 @@ class AdminDocumentUploadTests(TestCase):
         self.assertTrue(target.check_password("NewTempPass123!"))
         self.assertEqual(len(mail.outbox), 1)
         self.assertIn("Your SignaCore admin password was changed", mail.outbox[0].subject)
+        self.assertEqual(mail.outbox[0].alternatives[0][1], "text/html")
+        self.assertIn("Admin password changed", mail.outbox[0].alternatives[0][0])
         self.assertTrue(
             AdminAuditLog.objects.filter(
                 action=AdminAuditLog.ActionEnum.ADMIN_PASSWORD_CHANGE,

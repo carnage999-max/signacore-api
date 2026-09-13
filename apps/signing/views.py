@@ -195,15 +195,31 @@ class SignerOtpSendView(APIView):
         if access_message:
             return Response({"detail": access_message}, status=status.HTTP_400_BAD_REQUEST)
 
+        now = timezone.now()
+        cooldown_seconds = int(getattr(settings, "OTP_RESEND_COOLDOWN_SECONDS", 60))
+        if signing_request.otp_last_sent_at and cooldown_seconds > 0:
+            elapsed = (now - signing_request.otp_last_sent_at).total_seconds()
+            if elapsed < cooldown_seconds:
+                retry_after = max(1, int(cooldown_seconds - elapsed))
+                return Response(
+                    {
+                        "detail": "Please wait before requesting another verification code.",
+                        "retry_after": retry_after,
+                    },
+                    status=status.HTTP_429_TOO_MANY_REQUESTS,
+                )
+
         otp = getattr(settings, "SIGNACORE_TEST_OTP_CODE", None) or generate_otp()
         signing_request.otp_hash = hash_otp(otp)
-        signing_request.otp_expires_at = timezone.now() + timedelta(minutes=settings.OTP_EXPIRY_MINUTES)
-        signing_request.save(update_fields=["otp_hash", "otp_expires_at", "updated_at"])
+        signing_request.otp_expires_at = now + timedelta(minutes=settings.OTP_EXPIRY_MINUTES)
+        signing_request.otp_last_sent_at = now
+        signing_request.save(update_fields=["otp_hash", "otp_expires_at", "otp_last_sent_at", "updated_at"])
         enqueue_task(send_otp_email, str(signing_request.id), otp)
         return Response(
             {
                 "masked_email": mask_email(signing_request.signer_email),
                 "message": "Verification code sent successfully.",
+                "retry_after": cooldown_seconds,
             },
             status=status.HTTP_200_OK,
         )

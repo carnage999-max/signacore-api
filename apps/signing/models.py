@@ -31,6 +31,7 @@ class SigningRequest(models.Model):
     status = models.CharField(max_length=32, choices=StatusEnum.choices, default=StatusEnum.PENDING)
     otp_hash = models.CharField(max_length=128, null=True, blank=True)
     otp_expires_at = models.DateTimeField(null=True, blank=True)
+    otp_last_sent_at = models.DateTimeField(null=True, blank=True)
     signed_at = models.DateTimeField(null=True, blank=True)
     ip_address = EncryptedTextField(null=True, blank=True)
     user_agent = EncryptedTextField(null=True, blank=True)

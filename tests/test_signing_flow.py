@@ -153,7 +153,8 @@ class SignerFlowTests(TestCase):
 
     def test_send_otp_masks_email_and_persists_hash(self) -> None:
         mail.outbox = []
-        response = self.client.post(f"/api/sign/{self.signing_request.id}/otp/send/")
+        with self.settings(SIGNACORE_TEST_OTP_CODE="123456"):
+            response = self.client.post(f"/api/sign/{self.signing_request.id}/otp/send/")
 
         self.assertEqual(response.status_code, 200, response.json())
         payload = response.json()
@@ -161,8 +162,22 @@ class SignerFlowTests(TestCase):
         self.signing_request.refresh_from_db()
         self.assertIsNotNone(self.signing_request.otp_hash)
         self.assertIsNotNone(self.signing_request.otp_expires_at)
+        self.assertIsNotNone(self.signing_request.otp_last_sent_at)
         self.assertEqual(len(mail.outbox), 1)
         self.assertIn("Verification code", mail.outbox[0].body)
+        self.assertEqual(mail.outbox[0].alternatives[0][1], "text/html")
+        self.assertIn("signa-core.png", mail.outbox[0].alternatives[0][0])
+        self.assertIn("123456", mail.outbox[0].alternatives[0][0])
+
+    def test_send_otp_is_rate_limited_for_one_minute(self) -> None:
+        with self.settings(SIGNACORE_TEST_OTP_CODE="123456", OTP_RESEND_COOLDOWN_SECONDS=60):
+            first_response = self.client.post(f"/api/sign/{self.signing_request.id}/otp/send/")
+            second_response = self.client.post(f"/api/sign/{self.signing_request.id}/otp/send/")
+
+        self.assertEqual(first_response.status_code, 200, first_response.json())
+        self.assertEqual(second_response.status_code, 429, second_response.json())
+        self.assertIn("retry_after", second_response.json())
+        self.assertEqual(len(mail.outbox), 1)
 
     def test_verify_otp_returns_submit_session(self) -> None:
         with self.settings(SIGNACORE_TEST_OTP_CODE="123456"):
@@ -315,3 +330,6 @@ class SignerFlowTests(TestCase):
         self.assertTrue(signature_payload.startswith(ENCRYPTED_FILE_HEADER))
         self.assertNotIn(build_png_pixel(), signature_payload)
         self.assertGreaterEqual(len(mail.outbox), 2)
+        for message in mail.outbox:
+            self.assertEqual(message.alternatives[0][1], "text/html")
+            self.assertIn("SignaCore - by Se7en", message.alternatives[0][0])

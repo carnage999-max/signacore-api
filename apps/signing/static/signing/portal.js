@@ -10,6 +10,7 @@
     activeFieldId: "",
     signatureMode: "draw",
     typedSignature: "",
+    resendTimerId: 0,
   };
 
   const nodes = {
@@ -70,6 +71,28 @@
     nodes.notice.textContent = message;
   }
 
+  function startVerificationCooldown(seconds) {
+    window.clearInterval(state.resendTimerId);
+    let remaining = Math.max(0, Number(seconds) || 60);
+
+    function renderCooldown() {
+      if (remaining <= 0) {
+        window.clearInterval(state.resendTimerId);
+        state.resendTimerId = 0;
+        nodes.sendOtpButton.disabled = false;
+        nodes.sendOtpButton.textContent = "Send verification code";
+        return;
+      }
+
+      nodes.sendOtpButton.disabled = true;
+      nodes.sendOtpButton.textContent = `Send again in ${remaining}s`;
+      remaining -= 1;
+    }
+
+    renderCooldown();
+    state.resendTimerId = window.setInterval(renderCooldown, 1000);
+  }
+
   async function request(url, init) {
     const response = await fetch(url, init);
     const contentType = response.headers.get("content-type") || "";
@@ -79,6 +102,9 @@
         typeof payload === "string"
           ? payload
           : payload.detail || payload.otp?.[0] || payload.session_token?.[0] || "Request failed.";
+      if (response.status === 429 && typeof payload !== "string" && payload.retry_after) {
+        startVerificationCooldown(payload.retry_after);
+      }
       throw new Error(message);
     }
     return payload;
@@ -550,11 +576,14 @@
       nodes.sendOtpButton.disabled = true;
       const payload = await request(app.dataset.otpSendUrl, { method: "POST" });
       setNotice(payload.message || `Verification code sent to ${payload.masked_email}.`, "success");
+      startVerificationCooldown(payload.retry_after || 60);
       nodes.otpInput.focus();
     } catch (error) {
       setNotice(error.message, "error");
     } finally {
-      nodes.sendOtpButton.disabled = false;
+      if (!state.resendTimerId) {
+        nodes.sendOtpButton.disabled = false;
+      }
     }
   });
 
