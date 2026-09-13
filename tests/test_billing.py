@@ -37,11 +37,14 @@ class BillingApiTests(TestCase):
             user=self.owner,
             role=OrganizationMembership.RoleEnum.OWNER,
         )
-        self.professional_plan = BillingPlanConfiguration.objects.create(
+        self.professional_plan, _ = BillingPlanConfiguration.objects.update_or_create(
             plan=BillingPlanConfiguration.PlanEnum.PROFESSIONAL,
-            amount=Decimal("29.00"),
-            currency=BillingPlanConfiguration.CurrencyEnum.USD,
-            billing_interval=BillingPlanConfiguration.BillingIntervalEnum.MONTH,
+            defaults={
+                "amount": Decimal("29.00"),
+                "currency": BillingPlanConfiguration.CurrencyEnum.USD,
+                "billing_interval": BillingPlanConfiguration.BillingIntervalEnum.MONTH,
+                "is_active": True,
+            },
         )
         self.authenticate(self.owner)
 
@@ -58,7 +61,12 @@ class BillingApiTests(TestCase):
         self.assertEqual(response.status_code, 200, response.json())
         self.assertEqual(response.json()["organization"], str(self.organization.id))
         self.assertEqual(response.json()["plan"], OrganizationSubscription.PlanEnum.FREE)
-        self.assertEqual(response.json()["available_plans"][0]["amount"], "29.00")
+        professional = next(
+            plan
+            for plan in response.json()["available_plans"]
+            if plan["plan"] == BillingPlanConfiguration.PlanEnum.PROFESSIONAL
+        )
+        self.assertEqual(professional["amount"], "29.00")
         self.assertTrue(
             AdminAuditLog.objects.filter(
                 organization=self.organization,
@@ -67,12 +75,14 @@ class BillingApiTests(TestCase):
         )
 
     def test_active_plan_prices_are_public_without_service_credentials(self) -> None:
-        BillingPlanConfiguration.objects.create(
+        BillingPlanConfiguration.objects.update_or_create(
             plan=BillingPlanConfiguration.PlanEnum.BUSINESS,
-            amount=Decimal("79.00"),
-            currency=BillingPlanConfiguration.CurrencyEnum.USD,
-            billing_interval=BillingPlanConfiguration.BillingIntervalEnum.MONTH,
-            is_active=False,
+            defaults={
+                "amount": Decimal("79.00"),
+                "currency": BillingPlanConfiguration.CurrencyEnum.USD,
+                "billing_interval": BillingPlanConfiguration.BillingIntervalEnum.MONTH,
+                "is_active": False,
+            },
         )
         self.client.credentials()
 
