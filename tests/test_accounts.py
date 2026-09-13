@@ -223,6 +223,98 @@ class OAuthAccountTests(TestCase):
         self.assertEqual(get_user_model().objects.count(), 1)
         self.assertEqual(SocialIdentity.objects.get().user, user)
 
+    @patch("apps.accounts.views.exchange_oauth_code")
+    def test_login_links_provider_to_existing_verified_email_account(self, exchange_code) -> None:
+        user = get_user_model().objects.create_user(
+            username="email_account",
+            password="Correct-horse-battery-staple-93!",
+            is_active=True,
+            is_staff=True,
+        )
+        AccountProfile.objects.create(
+            user=user,
+            account_type=AccountProfile.AccountTypeEnum.COMPANY,
+            email="owner@example.com",
+            display_name="Avery Owner",
+        )
+        organization = Organization.objects.create(name="Example Legal", created_by=user)
+        OrganizationMembership.objects.create(
+            organization=organization,
+            user=user,
+            role=OrganizationMembership.RoleEnum.OWNER,
+        )
+        exchange_code.return_value = VerifiedOAuthIdentity(
+            provider="GOOGLE",
+            subject="google-user-for-email-login",
+            email="owner@example.com",
+            display_name="Avery Owner",
+        )
+
+        response = self.client.post(
+            "/api/auth/oauth/exchange/",
+            {
+                "intent": "LOGIN",
+                "provider": "GOOGLE",
+                "code": "authorization-code",
+                "redirect_uri": "https://mysignacore.com/api/auth/oauth/callback/google",
+                "nonce": "a-secure-login-nonce",
+                "account_type": "COMPANY",
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 200, response.json())
+        self.assertFalse(response.json()["is_new"])
+        self.assertEqual(response.json()["id"], user.id)
+        self.assertEqual(get_user_model().objects.count(), 1)
+        self.assertEqual(SocialIdentity.objects.get().user, user)
+
+    @patch("apps.accounts.views.exchange_oauth_code")
+    def test_oauth_activates_matching_unverified_email_account(self, exchange_code) -> None:
+        user = get_user_model().objects.create_user(
+            username="email_account",
+            password="Correct-horse-battery-staple-93!",
+            is_active=False,
+            is_staff=True,
+        )
+        AccountProfile.objects.create(
+            user=user,
+            account_type=AccountProfile.AccountTypeEnum.COMPANY,
+            email="owner@example.com",
+            display_name="Avery Owner",
+        )
+        organization = Organization.objects.create(name="Example Legal", created_by=user)
+        OrganizationMembership.objects.create(
+            organization=organization,
+            user=user,
+            role=OrganizationMembership.RoleEnum.OWNER,
+        )
+        exchange_code.return_value = VerifiedOAuthIdentity(
+            provider="GOOGLE",
+            subject="google-user-for-unverified-email",
+            email="owner@example.com",
+            display_name="Avery Owner",
+        )
+
+        response = self.client.post(
+            "/api/auth/oauth/exchange/",
+            {
+                "intent": "LOGIN",
+                "provider": "GOOGLE",
+                "code": "authorization-code",
+                "redirect_uri": "https://mysignacore.com/api/auth/oauth/callback/google",
+                "nonce": "a-secure-login-nonce",
+                "account_type": "COMPANY",
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 200, response.json())
+        user.refresh_from_db()
+        self.assertTrue(user.is_active)
+        self.assertFalse(response.json()["is_new"])
+        self.assertEqual(SocialIdentity.objects.get().user, user)
+
 
 @override_settings(
     SIGNACORE_SHARED_SECRET="test-signacore-secret",

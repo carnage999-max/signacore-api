@@ -318,28 +318,25 @@ class OAuthExchangeView(APIView):
         is_new = identity is None
         linked_profile = None
 
-        if is_new and values["intent"] == OAuthIntentEnum.LOGIN:
-            return Response(
-                {"detail": "No SignaCore account is connected to this provider."},
-                status=status.HTTP_404_NOT_FOUND,
-            )
-
         if is_new:
             linked_profile = (
                 AccountProfile.objects.select_related("user")
                 .filter(email_hash=email_digest(verified_identity.email))
                 .first()
             )
-            if linked_profile is not None and (
-                linked_profile.account_type != values["account_type"]
-                or not linked_profile.user.is_active
-            ):
+            if linked_profile is not None and linked_profile.account_type != values["account_type"]:
                 return Response(
                     {"detail": "This email is already connected to another SignaCore account."},
                     status=status.HTTP_409_CONFLICT,
                 )
             if linked_profile is not None:
                 is_new = False
+
+        if identity is None and linked_profile is None and values["intent"] == OAuthIntentEnum.LOGIN:
+            return Response(
+                {"detail": "No SignaCore account is connected to this provider."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
 
         if (
             is_new
@@ -354,6 +351,9 @@ class OAuthExchangeView(APIView):
         with transaction.atomic():
             if identity is None and linked_profile is not None:
                 user = linked_profile.user
+                if not user.is_active:
+                    user.is_active = True
+                    user.save(update_fields=["is_active"])
                 identity = SocialIdentity.objects.create(
                     user=user,
                     provider=verified_identity.provider,
