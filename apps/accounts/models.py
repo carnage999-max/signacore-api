@@ -7,6 +7,11 @@ from utils.encryption import EncryptedEmailField, EncryptedTextField
 from utils.identity import email_digest
 
 
+class OAuthIntentEnum(models.TextChoices):
+    LOGIN = "LOGIN", "Log in"
+    REGISTER = "REGISTER", "Register"
+
+
 class AccountProfile(models.Model):
     class AccountTypeEnum(models.TextChoices):
         PLATFORM = "PLATFORM", "Platform"

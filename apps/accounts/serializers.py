@@ -1,9 +1,10 @@
 from rest_framework import serializers
 
-from .models import AccountProfile, SocialIdentity
+from .models import AccountProfile, OAuthIntentEnum, SocialIdentity
 
 
 class OAuthExchangeSerializer(serializers.Serializer):
+    intent = serializers.ChoiceField(choices=OAuthIntentEnum.choices)
     provider = serializers.ChoiceField(choices=SocialIdentity.ProviderEnum.choices)
     code = serializers.CharField(max_length=4096, trim_whitespace=False)
     redirect_uri = serializers.URLField(max_length=2048)

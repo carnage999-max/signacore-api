@@ -29,6 +29,7 @@ class OAuthAccountTests(TestCase):
         response = self.client.post(
             "/api/auth/oauth/exchange/",
             {
+                "intent": "REGISTER",
                 "provider": "GOOGLE",
                 "code": "authorization-code",
                 "redirect_uri": "https://mysignacore.com/api/auth/oauth/callback/google",
@@ -76,6 +77,7 @@ class OAuthAccountTests(TestCase):
         first_response = self.client.post(
             "/api/auth/oauth/exchange/",
             {
+                "intent": "REGISTER",
                 "provider": "GOOGLE",
                 "code": "first-code",
                 "redirect_uri": "https://mysignacore.com/api/auth/oauth/callback/google",
@@ -87,6 +89,7 @@ class OAuthAccountTests(TestCase):
         second_response = self.client.post(
             "/api/auth/oauth/exchange/",
             {
+                "intent": "LOGIN",
                 "provider": "GOOGLE",
                 "code": "second-code",
                 "redirect_uri": "https://mysignacore.com/api/auth/oauth/callback/google",
@@ -123,6 +126,7 @@ class OAuthAccountTests(TestCase):
         response = self.client.post(
             "/api/auth/oauth/exchange/",
             {
+                "intent": "REGISTER",
                 "provider": "APPLE",
                 "code": "authorization-code",
                 "redirect_uri": "https://mysignacore.com/api/auth/oauth/callback/apple",
@@ -134,3 +138,29 @@ class OAuthAccountTests(TestCase):
 
         self.assertEqual(response.status_code, 400, response.json())
         self.assertIn("company_name", response.json())
+
+    @patch("apps.accounts.views.exchange_oauth_code")
+    def test_login_does_not_create_an_unknown_account(self, exchange_code) -> None:
+        exchange_code.return_value = VerifiedOAuthIdentity(
+            provider="GOOGLE",
+            subject="unknown-google-user",
+            email="unknown@example.com",
+            display_name="Unknown User",
+        )
+
+        response = self.client.post(
+            "/api/auth/oauth/exchange/",
+            {
+                "intent": "LOGIN",
+                "provider": "GOOGLE",
+                "code": "authorization-code",
+                "redirect_uri": "https://mysignacore.com/api/auth/oauth/callback/google",
+                "nonce": "a-secure-login-nonce",
+                "account_type": "COMPANY",
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 404, response.json())
+        self.assertEqual(get_user_model().objects.count(), 0)
+        self.assertEqual(SocialIdentity.objects.count(), 0)

@@ -18,7 +18,7 @@ from apps.signing.models import SigningRequest
 from services.oauth_client import OAuthExchangeError, exchange_oauth_code
 from utils.identity import email_digest
 
-from .models import AccountProfile, Organization, OrganizationMembership, SocialIdentity
+from .models import AccountProfile, OAuthIntentEnum, Organization, OrganizationMembership, SocialIdentity
 from .serializers import AccountSessionSerializer, AccountSigningRequestSerializer, OAuthExchangeSerializer
 
 
@@ -89,6 +89,12 @@ class OAuthExchangeView(APIView):
             subject_hash=digest,
         ).first()
         is_new = identity is None
+
+        if is_new and values["intent"] == OAuthIntentEnum.LOGIN:
+            return Response(
+                {"detail": "No SignaCore account is connected to this provider."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
 
         if (
             is_new
