@@ -31,6 +31,15 @@ class AccountProfile(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=("email_hash",),
+                condition=~models.Q(email_hash=""),
+                name="unique_signacore_account_email_hash",
+            )
+        ]
+
     def __str__(self) -> str:
         return f"{self.user.username} ({self.get_account_type_display()})"
 

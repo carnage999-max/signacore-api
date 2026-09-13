@@ -1,6 +1,7 @@
 from unittest.mock import patch
 
 from django.contrib.auth import get_user_model
+from django.core import mail
 from django.core.files.base import ContentFile
 from django.test import TestCase, override_settings
 from rest_framework.test import APIClient
@@ -164,3 +165,158 @@ class OAuthAccountTests(TestCase):
         self.assertEqual(response.status_code, 404, response.json())
         self.assertEqual(get_user_model().objects.count(), 0)
         self.assertEqual(SocialIdentity.objects.count(), 0)
+
+    @patch("apps.accounts.views.exchange_oauth_code")
+    def test_registration_links_provider_to_existing_verified_email_account(self, exchange_code) -> None:
+        user = get_user_model().objects.create_user(
+            username="email_account",
+            password="Correct-horse-battery-staple-93!",
+            is_active=True,
+            is_staff=True,
+        )
+        AccountProfile.objects.create(
+            user=user,
+            account_type=AccountProfile.AccountTypeEnum.COMPANY,
+            email="owner@example.com",
+            display_name="Avery Owner",
+        )
+        organization = Organization.objects.create(name="Example Legal", created_by=user)
+        OrganizationMembership.objects.create(
+            organization=organization,
+            user=user,
+            role=OrganizationMembership.RoleEnum.OWNER,
+        )
+        exchange_code.return_value = VerifiedOAuthIdentity(
+            provider="GOOGLE",
+            subject="google-user-for-email-account",
+            email="owner@example.com",
+            display_name="Avery Owner",
+        )
+
+        response = self.client.post(
+            "/api/auth/oauth/exchange/",
+            {
+                "intent": "REGISTER",
+                "provider": "GOOGLE",
+                "code": "authorization-code",
+                "redirect_uri": "https://mysignacore.com/api/auth/oauth/callback/google",
+                "nonce": "a-secure-login-nonce",
+                "account_type": "COMPANY",
+                "company_name": "Example Legal",
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 200, response.json())
+        self.assertFalse(response.json()["is_new"])
+        self.assertEqual(response.json()["id"], user.id)
+        self.assertEqual(get_user_model().objects.count(), 1)
+        self.assertEqual(SocialIdentity.objects.get().user, user)
+
+
+@override_settings(
+    SIGNACORE_SHARED_SECRET="test-signacore-secret",
+    SIGNACORE_APP_URL="https://mysignacore.com",
+    EMAIL_BACKEND="django.core.mail.backends.locmem.EmailBackend",
+    CELERY_TASK_ALWAYS_EAGER=True,
+    CELERY_TASK_EAGER_PROPAGATES=True,
+)
+class EmailAccountTests(TestCase):
+    password = "Correct-horse-battery-staple-93!"
+
+    def setUp(self) -> None:
+        self.client = APIClient()
+        self.client.credentials(HTTP_X_SIGNACORE_SECRET="test-signacore-secret")
+
+    def register(self, *, account_type: str = "COMPANY"):
+        return self.client.post(
+            "/api/auth/email/register/",
+            {
+                "email": "owner@example.com",
+                "password": self.password,
+                "display_name": "Avery Owner",
+                "account_type": account_type,
+                "company_name": "Example Legal" if account_type == "COMPANY" else "",
+            },
+            format="json",
+        )
+
+    def verification_values(self) -> dict[str, str]:
+        verification_url = next(
+            line.removeprefix("Verification link: ")
+            for line in mail.outbox[-1].body.splitlines()
+            if line.startswith("Verification link: ")
+        )
+        from urllib.parse import parse_qs, urlparse
+
+        return {
+            key: values[0]
+            for key, values in parse_qs(urlparse(verification_url).query).items()
+        }
+
+    def test_company_registration_requires_email_verification(self) -> None:
+        response = self.register()
+
+        self.assertEqual(response.status_code, 201, response.json())
+        user = get_user_model().objects.get()
+        self.assertFalse(user.is_active)
+        self.assertEqual(user.email, "")
+        self.assertTrue(user.check_password(self.password))
+        self.assertEqual(user.signacore_profile.email, "owner@example.com")
+        self.assertEqual(user.signacore_profile.display_name, "Avery Owner")
+        self.assertEqual(Organization.objects.get().name, "Example Legal")
+        self.assertEqual(mail.outbox[0].subject, "Verify your SignaCore account")
+        self.assertIn("https://mysignacore.com/api/auth/email/verify", mail.outbox[0].body)
+
+        verification_response = self.client.post(
+            "/api/auth/email/verify/",
+            self.verification_values(),
+            format="json",
+        )
+
+        self.assertEqual(verification_response.status_code, 200, verification_response.json())
+        user.refresh_from_db()
+        self.assertTrue(user.is_active)
+        self.assertEqual(verification_response.json()["account_type"], "COMPANY")
+        self.assertTrue(verification_response.json()["is_staff"])
+
+    def test_verified_account_can_log_in_with_email_and_password(self) -> None:
+        self.register(account_type="SIGNER")
+        self.client.post("/api/auth/email/verify/", self.verification_values(), format="json")
+
+        response = self.client.post(
+            "/api/auth/email/login/",
+            {
+                "email": "OWNER@EXAMPLE.COM",
+                "password": self.password,
+                "account_type": "SIGNER",
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 200, response.json())
+        self.assertEqual(response.json()["email"], "owner@example.com")
+        self.assertEqual(response.json()["account_type"], "SIGNER")
+
+    def test_login_uses_a_generic_error_for_invalid_credentials(self) -> None:
+        response = self.client.post(
+            "/api/auth/email/login/",
+            {
+                "email": "missing@example.com",
+                "password": self.password,
+                "account_type": "COMPANY",
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 401, response.json())
+        self.assertEqual(response.json()["detail"], "The email or password is incorrect.")
+
+    def test_unverified_registration_can_resend_its_verification_email(self) -> None:
+        first_response = self.register()
+        second_response = self.register()
+
+        self.assertEqual(first_response.status_code, 201, first_response.json())
+        self.assertEqual(second_response.status_code, 200, second_response.json())
+        self.assertEqual(get_user_model().objects.count(), 1)
+        self.assertEqual(len(mail.outbox), 2)

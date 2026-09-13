@@ -98,6 +98,8 @@ class AdminAuditLog(models.Model):
         BILLING_CHECKOUT = "BILLING_CHECKOUT", "Billing Checkout"
         BILLING_PORTAL = "BILLING_PORTAL", "Billing Portal"
         OAUTH_LOGIN = "OAUTH_LOGIN", "OAuth Login"
+        EMAIL_REGISTER = "EMAIL_REGISTER", "Email Registration"
+        EMAIL_LOGIN = "EMAIL_LOGIN", "Email Login"
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     actor = models.ForeignKey(

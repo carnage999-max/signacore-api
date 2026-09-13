@@ -6,9 +6,14 @@ import hmac
 import httpx
 from django.conf import settings
 from django.contrib.auth import get_user_model
-from django.db import transaction
+from django.contrib.auth.hashers import check_password, make_password
+from django.contrib.auth.tokens import default_token_generator
+from django.db import IntegrityError, transaction
+from django.utils import timezone
+from django.utils.http import urlsafe_base64_decode
 from rest_framework import status
 from rest_framework.response import Response
+from rest_framework.throttling import ScopedRateThrottle
 from rest_framework.views import APIView
 
 from apps.documents.auth import HasValidSignacoreSecret
@@ -16,10 +21,22 @@ from apps.documents.models import AdminAuditLog
 from apps.documents.views import get_request_ip
 from apps.signing.models import SigningRequest
 from services.oauth_client import OAuthExchangeError, exchange_oauth_code
+from tasks.notifications import send_account_verification
 from utils.identity import email_digest
+from utils.task_dispatch import enqueue_task
 
 from .models import AccountProfile, OAuthIntentEnum, Organization, OrganizationMembership, SocialIdentity
-from .serializers import AccountSessionSerializer, AccountSigningRequestSerializer, OAuthExchangeSerializer
+from .serializers import (
+    AccountSessionSerializer,
+    AccountSigningRequestSerializer,
+    EmailLoginSerializer,
+    EmailRegistrationSerializer,
+    EmailVerificationSerializer,
+    OAuthExchangeSerializer,
+)
+
+
+DUMMY_PASSWORD_HASH = make_password(None)
 
 
 def subject_digest(provider: str, subject: str) -> str:
@@ -61,6 +78,200 @@ def build_account_payload(user, *, is_new: bool) -> dict:
     }
 
 
+def link_signing_requests(user, email: str) -> None:
+    SigningRequest.objects.filter(
+        signer_email_hash=email_digest(email),
+        signer_user__isnull=True,
+    ).update(signer_user=user)
+
+
+def log_account_event(request, user, action: str, summary: str) -> None:
+    organization = (
+        user.signacore_memberships.select_related("organization")
+        .filter(status=OrganizationMembership.StatusEnum.ACTIVE)
+        .values_list("organization", flat=True)
+        .first()
+    )
+    AdminAuditLog.objects.create(
+        actor=user,
+        organization_id=organization,
+        actor_email=user.signacore_profile.email,
+        action=action,
+        target_type="account",
+        target_id=str(user.id),
+        summary=summary,
+        ip_address=get_request_ip(request),
+        user_agent=request.META.get("HTTP_USER_AGENT", ""),
+    )
+
+
+class EmailRegistrationView(APIView):
+    authentication_classes = []
+    permission_classes = [HasValidSignacoreSecret]
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = "email_auth"
+    serializer_class = EmailRegistrationSerializer
+
+    def post(self, request):
+        serializer = EmailRegistrationSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        values = serializer.validated_data
+        email = values["email"]
+        digest = email_digest(email)
+        existing_profile = (
+            AccountProfile.objects.select_related("user")
+            .filter(email_hash=digest)
+            .first()
+        )
+        if existing_profile is not None:
+            existing_user = existing_profile.user
+            if (
+                not existing_user.is_active
+                and existing_profile.account_type == values["account_type"]
+                and existing_user.check_password(values["password"])
+            ):
+                enqueue_task(send_account_verification, existing_user.id)
+                return Response(
+                    {"detail": "Check your email to verify your account."},
+                    status=status.HTTP_200_OK,
+                )
+            return Response(
+                {"detail": "An account already uses this email address."},
+                status=status.HTTP_409_CONFLICT,
+            )
+
+        try:
+            with transaction.atomic():
+                account_type = values["account_type"]
+                user = get_user_model().objects.create_user(
+                    username=f"email_{digest[:24]}",
+                    email="",
+                    password=values["password"],
+                    is_active=False,
+                    is_staff=account_type == AccountProfile.AccountTypeEnum.COMPANY,
+                )
+                AccountProfile.objects.create(
+                    user=user,
+                    account_type=account_type,
+                    email=email,
+                    display_name=values["display_name"].strip(),
+                )
+                if account_type == AccountProfile.AccountTypeEnum.COMPANY:
+                    organization = Organization.objects.create(
+                        name=values["company_name"].strip(),
+                        created_by=user,
+                    )
+                    OrganizationMembership.objects.create(
+                        organization=organization,
+                        user=user,
+                        role=OrganizationMembership.RoleEnum.OWNER,
+                    )
+                link_signing_requests(user, email)
+                log_account_event(
+                    request,
+                    user,
+                    AdminAuditLog.ActionEnum.EMAIL_REGISTER,
+                    "Created an account with email and password.",
+                )
+        except IntegrityError:
+            return Response(
+                {"detail": "An account already uses this email address."},
+                status=status.HTTP_409_CONFLICT,
+            )
+
+        enqueue_task(send_account_verification, user.id)
+        return Response(
+            {"detail": "Check your email to verify your account."},
+            status=status.HTTP_201_CREATED,
+        )
+
+
+class EmailVerificationView(APIView):
+    authentication_classes = []
+    permission_classes = [HasValidSignacoreSecret]
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = "email_auth"
+    serializer_class = EmailVerificationSerializer
+
+    def post(self, request):
+        serializer = EmailVerificationSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        try:
+            user_id = urlsafe_base64_decode(serializer.validated_data["uid"]).decode()
+        except (ValueError, TypeError, OverflowError, UnicodeDecodeError):
+            user_id = ""
+        with transaction.atomic():
+            user = (
+                get_user_model()
+                .objects.select_for_update()
+                .select_related("signacore_profile")
+                .filter(pk=user_id)
+                .first()
+            )
+            if user is None or not default_token_generator.check_token(
+                user,
+                serializer.validated_data["token"],
+            ):
+                return Response(
+                    {"detail": "This verification link is invalid or expired."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+            user.is_active = True
+            user.last_login = timezone.now()
+            user.save(update_fields=["is_active", "last_login"])
+            log_account_event(
+                request,
+                user,
+                AdminAuditLog.ActionEnum.EMAIL_LOGIN,
+                "Verified email and signed in.",
+            )
+        payload = build_account_payload(user, is_new=True)
+        return Response(AccountSessionSerializer(payload).data, status=status.HTTP_200_OK)
+
+
+class EmailLoginView(APIView):
+    authentication_classes = []
+    permission_classes = [HasValidSignacoreSecret]
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = "email_auth"
+    serializer_class = EmailLoginSerializer
+
+    def post(self, request):
+        serializer = EmailLoginSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        values = serializer.validated_data
+        profile = (
+            AccountProfile.objects.select_related("user")
+            .filter(email_hash=email_digest(values["email"]))
+            .first()
+        )
+        encoded_password = profile.user.password if profile is not None else DUMMY_PASSWORD_HASH
+        password_matches = check_password(values["password"], encoded_password)
+        if (
+            profile is None
+            or not password_matches
+            or not profile.user.is_active
+            or profile.account_type != values["account_type"]
+        ):
+            return Response(
+                {"detail": "The email or password is incorrect."},
+                status=status.HTTP_401_UNAUTHORIZED,
+            )
+
+        user = profile.user
+        user.last_login = timezone.now()
+        user.save(update_fields=["last_login"])
+        log_account_event(
+            request,
+            user,
+            AdminAuditLog.ActionEnum.EMAIL_LOGIN,
+            "Signed in with email and password.",
+        )
+        payload = build_account_payload(user, is_new=False)
+        return Response(AccountSessionSerializer(payload).data, status=status.HTTP_200_OK)
+
+
 class OAuthExchangeView(APIView):
     authentication_classes = []
     permission_classes = [HasValidSignacoreSecret]
@@ -89,12 +300,30 @@ class OAuthExchangeView(APIView):
             subject_hash=digest,
         ).first()
         is_new = identity is None
+        linked_profile = None
 
         if is_new and values["intent"] == OAuthIntentEnum.LOGIN:
             return Response(
                 {"detail": "No SignaCore account is connected to this provider."},
                 status=status.HTTP_404_NOT_FOUND,
             )
+
+        if is_new:
+            linked_profile = (
+                AccountProfile.objects.select_related("user")
+                .filter(email_hash=email_digest(verified_identity.email))
+                .first()
+            )
+            if linked_profile is not None and (
+                linked_profile.account_type != values["account_type"]
+                or not linked_profile.user.is_active
+            ):
+                return Response(
+                    {"detail": "This email is already connected to another SignaCore account."},
+                    status=status.HTTP_409_CONFLICT,
+                )
+            if linked_profile is not None:
+                is_new = False
 
         if (
             is_new
@@ -107,7 +336,20 @@ class OAuthExchangeView(APIView):
             )
 
         with transaction.atomic():
-            if identity is None:
+            if identity is None and linked_profile is not None:
+                user = linked_profile.user
+                identity = SocialIdentity.objects.create(
+                    user=user,
+                    provider=verified_identity.provider,
+                    subject_hash=digest,
+                    subject=verified_identity.subject,
+                    email=verified_identity.email,
+                )
+                linked_profile.email = verified_identity.email
+                if verified_identity.display_name:
+                    linked_profile.display_name = verified_identity.display_name
+                linked_profile.save(update_fields=["email", "display_name", "updated_at"])
+            elif identity is None:
                 account_type = values["account_type"]
                 username = f"oauth_{verified_identity.provider.lower()}_{digest[:24]}"
                 user = get_user_model().objects.create_user(
@@ -172,10 +414,7 @@ class OAuthExchangeView(APIView):
                     profile.display_name = verified_identity.display_name
                 profile.save(update_fields=["email", "display_name", "updated_at"])
 
-            SigningRequest.objects.filter(
-                signer_email_hash=email_digest(verified_identity.email),
-                signer_user__isnull=True,
-            ).update(signer_user=user)
+            link_signing_requests(user, verified_identity.email)
 
         payload = build_account_payload(user, is_new=is_new)
         return Response(AccountSessionSerializer(payload).data, status=status.HTTP_200_OK)

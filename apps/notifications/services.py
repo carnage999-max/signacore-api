@@ -1,6 +1,9 @@
 from django.conf import settings
 from django.core.mail import EmailMultiAlternatives
 from django.utils.html import escape
+from django.contrib.auth.tokens import default_token_generator
+from django.utils.encoding import force_bytes
+from django.utils.http import urlsafe_base64_encode
 
 from apps.documents.models import Document
 from apps.signing.models import SigningRequest
@@ -209,3 +212,52 @@ def send_admin_password_changed_email(
         "If you did not request this change, contact the SignaCore owner immediately.\n"
     )
     send_email(subject, body, [email])
+
+
+def send_account_verification_email(user) -> None:
+    profile = user.signacore_profile
+    uid = urlsafe_base64_encode(force_bytes(user.pk))
+    token = default_token_generator.make_token(user)
+    verification_url = (
+        f"{settings.SIGNACORE_APP_URL.rstrip('/')}/api/auth/email/verify"
+        f"?uid={uid}&token={token}"
+    )
+    safe_name = escape(profile.display_name or "there")
+    safe_url = escape(verification_url)
+    subject = "Verify your SignaCore account"
+    body = (
+        f"Hello {profile.display_name or 'there'},\n\n"
+        "Verify your email address to activate your SignaCore account.\n\n"
+        f"Verification link: {verification_url}\n\n"
+        "If you did not create this account, ignore this email.\n"
+    )
+    html_body = f"""\
+<!doctype html>
+<html lang="en">
+  <body style="margin:0;background:#03070c;color:#f4f8fb;font-family:Avenir Next,Segoe UI,Arial,sans-serif;">
+    <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background:#03070c;padding:36px 16px;">
+      <tr>
+        <td align="center">
+          <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="max-width:620px;overflow:hidden;border:1px solid #24384b;border-radius:28px;background:#09131d;">
+            <tr>
+              <td style="padding:36px;background:linear-gradient(135deg,#0b3048,#09131d 66%,#321b12);">
+                <div style="font-size:12px;font-weight:900;letter-spacing:0.16em;text-transform:uppercase;color:#52c9ff;">SignaCore</div>
+                <h1 style="margin:18px 0 0;font-family:Georgia,serif;font-size:38px;line-height:1.05;color:#f4f8fb;">Verify your email</h1>
+              </td>
+            </tr>
+            <tr>
+              <td style="padding:36px;">
+                <p style="margin:0 0 16px;font-size:16px;line-height:1.65;color:#d5e0e9;">Hello {safe_name},</p>
+                <p style="margin:0 0 26px;font-size:16px;line-height:1.65;color:#9cadbd;">Confirm this email address to activate your SignaCore account.</p>
+                <a href="{safe_url}" style="display:inline-block;border-radius:12px;background:#f1f7fb;color:#07111d;font-size:15px;font-weight:900;text-decoration:none;padding:15px 22px;">Verify email</a>
+                <p style="margin:28px 0 0;font-size:12px;line-height:1.6;color:#718394;">If you did not create this account, you can ignore this email.</p>
+              </td>
+            </tr>
+          </table>
+        </td>
+      </tr>
+    </table>
+  </body>
+</html>
+"""
+    send_email(subject, body, [profile.email], html_body=html_body)

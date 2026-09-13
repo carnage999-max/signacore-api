@@ -132,6 +132,7 @@ AUTH_PASSWORD_VALIDATORS = [
     {"NAME": "django.contrib.auth.password_validation.CommonPasswordValidator"},
     {"NAME": "django.contrib.auth.password_validation.NumericPasswordValidator"},
 ]
+PASSWORD_RESET_TIMEOUT = 24 * 60 * 60
 
 LANGUAGE_CODE = "en-us"
 TIME_ZONE = env("TIME_ZONE", "UTC")
@@ -166,6 +167,9 @@ REST_FRAMEWORK = {
         "rest_framework.permissions.IsAuthenticated",
     ),
     "DEFAULT_SCHEMA_CLASS": "drf_spectacular.openapi.AutoSchema",
+    "DEFAULT_THROTTLE_RATES": {
+        "email_auth": "10/minute",
+    },
 }
 
 SPECTACULAR_SETTINGS = {
