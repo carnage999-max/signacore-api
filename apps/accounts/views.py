@@ -21,7 +21,11 @@ from apps.documents.models import AdminAuditLog
 from apps.documents.views import get_request_ip
 from apps.signing.models import SigningRequest
 from services.oauth_client import OAuthExchangeError, exchange_oauth_code
-from tasks.notifications import send_account_verification
+from tasks.notifications import (
+    send_account_login_alert,
+    send_account_verification,
+    send_account_welcome,
+)
 from utils.identity import email_digest
 from utils.task_dispatch import enqueue_task
 
@@ -227,6 +231,7 @@ class EmailVerificationView(APIView):
                 "Verified email and signed in.",
             )
         payload = build_account_payload(user, is_new=True)
+        enqueue_task(send_account_welcome, user.id)
         return Response(AccountSessionSerializer(payload).data, status=status.HTTP_200_OK)
 
 
@@ -269,6 +274,7 @@ class EmailLoginView(APIView):
             "Signed in with email and password.",
         )
         payload = build_account_payload(user, is_new=False)
+        enqueue_task(send_account_login_alert, user.id, "email and password")
         return Response(AccountSessionSerializer(payload).data, status=status.HTTP_200_OK)
 
 
@@ -417,6 +423,14 @@ class OAuthExchangeView(APIView):
             link_signing_requests(user, verified_identity.email)
 
         payload = build_account_payload(user, is_new=is_new)
+        if is_new:
+            enqueue_task(send_account_welcome, user.id)
+        else:
+            enqueue_task(
+                send_account_login_alert,
+                user.id,
+                identity.get_provider_display(),
+            )
         return Response(AccountSessionSerializer(payload).data, status=status.HTTP_200_OK)
 
 

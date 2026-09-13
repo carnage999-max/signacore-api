@@ -4,7 +4,9 @@ from apps.documents.models import Document
 from apps.notifications.services import (
     send_admin_account_created_email,
     send_admin_password_changed_email,
+    send_account_login_email,
     send_account_verification_email,
+    send_account_welcome_email,
     send_completion_email,
     send_invitation_email,
     send_otp_email_message,
@@ -113,4 +115,38 @@ def send_account_verification(user_id: int) -> None:
         return None
 
     send_account_verification_email(user)
+    return None
+
+
+@shared_task(name="tasks.notifications.send_account_welcome")
+def send_account_welcome(user_id: int) -> None:
+    from django.contrib.auth import get_user_model
+
+    user = (
+        get_user_model()
+        .objects.select_related("signacore_profile")
+        .filter(pk=user_id, is_active=True)
+        .first()
+    )
+    if user is None:
+        return None
+
+    send_account_welcome_email(user)
+    return None
+
+
+@shared_task(name="tasks.notifications.send_account_login_alert")
+def send_account_login_alert(user_id: int, method: str) -> None:
+    from django.contrib.auth import get_user_model
+
+    user = (
+        get_user_model()
+        .objects.select_related("signacore_profile")
+        .filter(pk=user_id, is_active=True)
+        .first()
+    )
+    if user is None:
+        return None
+
+    send_account_login_email(user, method)
     return None

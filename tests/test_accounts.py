@@ -12,7 +12,13 @@ from apps.signing.models import SigningRequest
 from services.oauth_client import VerifiedOAuthIdentity
 
 
-@override_settings(SIGNACORE_SHARED_SECRET="test-signacore-secret")
+@override_settings(
+    SIGNACORE_SHARED_SECRET="test-signacore-secret",
+    SIGNACORE_APP_URL="https://mysignacore.com",
+    EMAIL_BACKEND="django.core.mail.backends.locmem.EmailBackend",
+    CELERY_TASK_ALWAYS_EAGER=True,
+    CELERY_TASK_EAGER_PROPAGATES=True,
+)
 class OAuthAccountTests(TestCase):
     def setUp(self) -> None:
         self.client = APIClient()
@@ -54,6 +60,7 @@ class OAuthAccountTests(TestCase):
         self.assertEqual(identity.subject, "google-user-123")
         self.assertEqual(identity.email, "owner@example.com")
         self.assertEqual(identity.user.email, "")
+        self.assertEqual(mail.outbox[-1].subject, "Welcome to SignaCore")
 
     @patch("apps.accounts.views.exchange_oauth_code")
     def test_existing_identity_cannot_change_account_role(self, exchange_code) -> None:
@@ -106,6 +113,7 @@ class OAuthAccountTests(TestCase):
         self.assertEqual(second_response.json()["account_type"], AccountProfile.AccountTypeEnum.SIGNER)
         self.assertEqual(SocialIdentity.objects.count(), 1)
         self.assertEqual(Organization.objects.count(), 1)
+        self.assertEqual(mail.outbox[-1].subject, "New sign-in to your SignaCore account")
         signing_request.refresh_from_db()
         self.assertEqual(signing_request.signer_user_id, second_response.json()["id"])
 
@@ -279,6 +287,7 @@ class EmailAccountTests(TestCase):
         self.assertTrue(user.is_active)
         self.assertEqual(verification_response.json()["account_type"], "COMPANY")
         self.assertTrue(verification_response.json()["is_staff"])
+        self.assertEqual(mail.outbox[-1].subject, "Welcome to SignaCore")
 
     def test_verified_account_can_log_in_with_email_and_password(self) -> None:
         self.register(account_type="SIGNER")
@@ -297,6 +306,7 @@ class EmailAccountTests(TestCase):
         self.assertEqual(response.status_code, 200, response.json())
         self.assertEqual(response.json()["email"], "owner@example.com")
         self.assertEqual(response.json()["account_type"], "SIGNER")
+        self.assertEqual(mail.outbox[-1].subject, "New sign-in to your SignaCore account")
 
     def test_login_uses_a_generic_error_for_invalid_credentials(self) -> None:
         response = self.client.post(

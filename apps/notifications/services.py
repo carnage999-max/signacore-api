@@ -261,3 +261,97 @@ def send_account_verification_email(user) -> None:
 </html>
 """
     send_email(subject, body, [profile.email], html_body=html_body)
+
+
+def build_account_notice_html(
+    *,
+    name: str,
+    title: str,
+    message: str,
+    action_label: str,
+    action_url: str,
+) -> str:
+    safe_name = escape(name or "there")
+    safe_title = escape(title)
+    safe_message = escape(message)
+    safe_action_label = escape(action_label)
+    safe_action_url = escape(action_url)
+    return f"""\
+<!doctype html>
+<html lang="en">
+  <body style="margin:0;background:#03070c;color:#f4f8fb;font-family:Avenir Next,Segoe UI,Arial,sans-serif;">
+    <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background:#03070c;padding:36px 16px;">
+      <tr>
+        <td align="center">
+          <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="max-width:620px;overflow:hidden;border:1px solid #24384b;border-radius:28px;background:#09131d;">
+            <tr>
+              <td style="padding:36px;background:linear-gradient(135deg,#0b3048,#09131d 66%,#321b12);">
+                <div style="font-size:12px;font-weight:900;letter-spacing:0.16em;text-transform:uppercase;color:#52c9ff;">SignaCore</div>
+                <h1 style="margin:18px 0 0;font-family:Georgia,serif;font-size:38px;line-height:1.05;color:#f4f8fb;">{safe_title}</h1>
+              </td>
+            </tr>
+            <tr>
+              <td style="padding:36px;">
+                <p style="margin:0 0 16px;font-size:16px;line-height:1.65;color:#d5e0e9;">Hello {safe_name},</p>
+                <p style="margin:0 0 26px;font-size:16px;line-height:1.65;color:#9cadbd;">{safe_message}</p>
+                <a href="{safe_action_url}" style="display:inline-block;border-radius:12px;background:#f1f7fb;color:#07111d;font-size:15px;font-weight:900;text-decoration:none;padding:15px 22px;">{safe_action_label}</a>
+                <p style="margin:28px 0 0;font-size:12px;line-height:1.6;color:#718394;">If you did not perform this action, contact SignaCore support immediately.</p>
+              </td>
+            </tr>
+          </table>
+        </td>
+      </tr>
+    </table>
+  </body>
+</html>
+"""
+
+
+def send_account_welcome_email(user) -> None:
+    profile = user.signacore_profile
+    destination = "/account" if profile.account_type == profile.AccountTypeEnum.SIGNER else "/admin"
+    account_url = f"{settings.SIGNACORE_APP_URL.rstrip('/')}{destination}"
+    subject = "Welcome to SignaCore"
+    body = (
+        f"Hello {profile.display_name or 'there'},\n\n"
+        "Your SignaCore account is active and ready to use.\n\n"
+        f"Open SignaCore: {account_url}\n\n"
+        "If you did not create this account, contact SignaCore support immediately.\n"
+    )
+    send_email(
+        subject,
+        body,
+        [profile.email],
+        html_body=build_account_notice_html(
+            name=profile.display_name,
+            title="Your account is ready",
+            message="Your SignaCore account is active. You can now manage agreements or review documents assigned to you.",
+            action_label="Open SignaCore",
+            action_url=account_url,
+        ),
+    )
+
+
+def send_account_login_email(user, method: str) -> None:
+    profile = user.signacore_profile
+    account_url = f"{settings.SIGNACORE_APP_URL.rstrip('/')}/login"
+    safe_method = method.strip() or "your account credentials"
+    subject = "New sign-in to your SignaCore account"
+    body = (
+        f"Hello {profile.display_name or 'there'},\n\n"
+        f"A new sign-in to your SignaCore account was completed using {safe_method}.\n\n"
+        f"SignaCore: {account_url}\n\n"
+        "If this was not you, contact SignaCore support immediately.\n"
+    )
+    send_email(
+        subject,
+        body,
+        [profile.email],
+        html_body=build_account_notice_html(
+            name=profile.display_name,
+            title="New account sign-in",
+            message=f"A new sign-in to your SignaCore account was completed using {safe_method}.",
+            action_label="Open SignaCore",
+            action_url=account_url,
+        ),
+    )
