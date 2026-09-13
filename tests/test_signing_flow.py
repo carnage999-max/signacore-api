@@ -120,6 +120,8 @@ class SignerFlowTests(TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, "Signacore Signer Portal")
+        self.assertContains(response, "Send verification code")
+        self.assertContains(response, "Create a free signer account.")
 
     def test_signer_preview_requires_verified_session(self) -> None:
         response = self.client.get(f"/api/sign/{self.signing_request.id}/pages/1/preview/")
@@ -160,7 +162,7 @@ class SignerFlowTests(TestCase):
         self.assertIsNotNone(self.signing_request.otp_hash)
         self.assertIsNotNone(self.signing_request.otp_expires_at)
         self.assertEqual(len(mail.outbox), 1)
-        self.assertIn("OTP code", mail.outbox[0].body)
+        self.assertIn("Verification code", mail.outbox[0].body)
 
     def test_verify_otp_returns_submit_session(self) -> None:
         with self.settings(SIGNACORE_TEST_OTP_CODE="123456"):

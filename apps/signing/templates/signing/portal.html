@@ -44,18 +44,22 @@
 
       <section class="workflow-grid">
         <aside class="workflow-sidebar">
-          <div id="field-progress-panel" class="panel" hidden>
-            <h2>Verify access</h2>
+          <div id="verify-access-panel" class="panel">
+            <h2>Verify your email</h2>
             <p class="panel-copy">
-              A six-digit code is sent to the signer email before signing continues. This prevents anyone with a forwarded
-              link from signing as someone else.
+              Request a six-digit code to the signer email before reviewing this document. You do not need a SignaCore
+              account to sign.
             </p>
-            <button id="send-otp-button" class="primary-button" type="button">Send OTP</button>
+            <button id="send-otp-button" class="primary-button" type="button">Send verification code</button>
             <p id="otp-target" class="muted-copy"></p>
+            <p class="account-hint">
+              Want one place for your signed documents?
+              <a href="{{ signer_account_url }}">Create a free signer account.</a>
+            </p>
           </div>
 
-          <div class="panel">
-            <h2>Enter OTP</h2>
+          <div id="otp-entry-panel" class="panel">
+            <h2>Enter verification code</h2>
             <label class="field">
               <span>Verification code</span>
               <input id="otp-input" class="text-input" inputmode="numeric" maxlength="6" placeholder="123456">
@@ -63,7 +67,7 @@
             <button id="verify-otp-button" class="secondary-button" type="button">Verify code</button>
           </div>
 
-          <div class="panel">
+          <div id="field-progress-panel" class="panel" hidden>
             <h2>Field progress</h2>
             <div id="field-list" class="field-list"></div>
             <button id="submit-button" class="primary-button" type="button" disabled>Submit signed document</button>

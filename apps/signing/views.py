@@ -116,6 +116,7 @@ class SignerPortalView(TemplateView):
         context["signing_token"] = str(kwargs["token"])
         context["signer_portal_css_url"] = static("signing/portal.css")
         context["signer_portal_js_url"] = static("signing/portal.js")
+        context["signer_account_url"] = f"{settings.SIGNACORE_APP_URL.rstrip('/')}/register?role=signer"
         return context
 
 
@@ -202,7 +203,7 @@ class SignerOtpSendView(APIView):
         return Response(
             {
                 "masked_email": mask_email(signing_request.signer_email),
-                "message": "OTP sent successfully.",
+                "message": "Verification code sent successfully.",
             },
             status=status.HTTP_200_OK,
         )

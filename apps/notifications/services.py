@@ -116,7 +116,7 @@ def send_otp_email_message(signing_request: SigningRequest, otp_code: str) -> No
     body = (
         f"Hello {signer_name},\n\n"
         "Use the code below to continue signing your document in Signacore.\n\n"
-        f"OTP code: {otp_code}\n"
+        f"Verification code: {otp_code}\n"
         f"Expires in: {settings.OTP_EXPIRY_MINUTES} minutes\n\n"
         "If you did not request this code, ignore this email.\n"
     )

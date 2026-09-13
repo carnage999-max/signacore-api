@@ -22,6 +22,8 @@
     otpTarget: document.getElementById("otp-target"),
     otpInput: document.getElementById("otp-input"),
     verifyOtpButton: document.getElementById("verify-otp-button"),
+    verifyAccessPanel: document.getElementById("verify-access-panel"),
+    otpEntryPanel: document.getElementById("otp-entry-panel"),
     fieldProgressPanel: document.getElementById("field-progress-panel"),
     fieldList: document.getElementById("field-list"),
     submitButton: document.getElementById("submit-button"),
@@ -300,6 +302,8 @@
     nodes.otpTarget.textContent = state.context.masked_email
       ? `Verification code will be sent to ${state.context.masked_email}.`
       : "Verification code will be sent to the email address assigned to this request.";
+    nodes.verifyAccessPanel.hidden = state.context.is_verified;
+    nodes.otpEntryPanel.hidden = state.context.is_verified;
     nodes.fieldProgressPanel.hidden = !state.context.is_verified;
     nodes.documentPanel.hidden = !state.context.is_verified;
 
@@ -545,7 +549,8 @@
     try {
       nodes.sendOtpButton.disabled = true;
       const payload = await request(app.dataset.otpSendUrl, { method: "POST" });
-      setNotice(payload.message || `OTP sent to ${payload.masked_email}.`, "success");
+      setNotice(payload.message || `Verification code sent to ${payload.masked_email}.`, "success");
+      nodes.otpInput.focus();
     } catch (error) {
       setNotice(error.message, "error");
     } finally {

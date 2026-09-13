@@ -51,6 +51,20 @@ input {
   line-height: 1.55;
 }
 
+.account-hint {
+  margin: 14px 0 0;
+  color: #52657e;
+  font-size: 0.92rem;
+  line-height: 1.5;
+}
+
+.account-hint a {
+  color: #17324d;
+  font-weight: 800;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
 .hero-panel,
 .panel,
 .modal-card,
