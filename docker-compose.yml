@@ -19,6 +19,8 @@ services:
       - ${STATIC_ROOT:-/srv/apps/signacore-api/staticfiles}:${STATIC_ROOT:-/srv/apps/signacore-api/staticfiles}
     ports:
       - "127.0.0.1:${SIGNACORE_API_PORT:-8010}:8010"
+    tmpfs:
+      - /run/signacore:rw,noexec,nosuid,nodev,size=512m,mode=0700
     restart: unless-stopped
 
   worker:

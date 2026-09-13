@@ -16,6 +16,7 @@ from rest_framework.test import APIClient
 from apps.accounts.models import Organization
 from apps.documents.models import Document, DocumentField
 from apps.signing.models import FieldSubmission, SigningRequest
+from utils.file_storage import ENCRYPTED_FILE_HEADER
 from utils.otp import generate_otp
 
 from .test_admin_documents import build_flat_pdf
@@ -91,17 +92,28 @@ class SignerFlowTests(TestCase):
             expires_at=timezone.now() + timedelta(days=7),
         )
 
-    def test_signer_context_returns_document_fields(self) -> None:
+    def test_original_pdf_is_ciphertext_at_rest(self) -> None:
+        stored_path = Path(TEST_MEDIA_ROOT) / self.document.original_pdf.name
+        stored_payload = stored_path.read_bytes()
+
+        self.assertTrue(stored_payload.startswith(ENCRYPTED_FILE_HEADER))
+        self.assertNotIn(b"%PDF", stored_payload)
+        with self.document.original_pdf.open("rb") as decrypted_file:
+            self.assertTrue(decrypted_file.read().startswith(b"%PDF"))
+
+    def test_signer_context_does_not_disclose_document_before_verification(self) -> None:
         response = self.client.get(f"/api/sign/{self.signing_request.id}/")
 
         self.assertEqual(response.status_code, 200, response.json())
         payload = response.json()
-        self.assertEqual(payload["document_title"], "Employment Offer")
-        self.assertEqual(payload["signer_name"], "Jane Doe")
+        self.assertFalse(payload["is_verified"])
+        self.assertEqual(payload["document_title"], "Document verification required")
+        self.assertEqual(payload["signer_name"], "Signer")
+        self.assertEqual(payload["masked_email"], "")
         self.assertEqual(payload["status"], "PENDING")
-        self.assertEqual(len(payload["fields"]), 2)
-        self.assertEqual(payload["page_count"], 1)
-        self.assertEqual(len(payload["pages"]), 1)
+        self.assertEqual(payload["fields"], [])
+        self.assertEqual(payload["page_count"], 0)
+        self.assertEqual(payload["pages"], [])
 
     def test_signer_portal_page_renders(self) -> None:
         response = self.client.get(f"/sign/{self.signing_request.id}/")
@@ -109,11 +121,33 @@ class SignerFlowTests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, "Signacore Signer Portal")
 
-    def test_signer_preview_endpoint_returns_png(self) -> None:
+    def test_signer_preview_requires_verified_session(self) -> None:
         response = self.client.get(f"/api/sign/{self.signing_request.id}/pages/1/preview/")
 
-        self.assertEqual(response.status_code, 200)
-        self.assertEqual(response["Content-Type"], "image/png")
+        self.assertEqual(response.status_code, 403)
+
+    def test_verified_signer_can_view_context_and_preview(self) -> None:
+        with self.settings(SIGNACORE_TEST_OTP_CODE="123456"):
+            self.client.post(f"/api/sign/{self.signing_request.id}/otp/send/")
+            verify_response = self.client.post(
+                f"/api/sign/{self.signing_request.id}/otp/verify/",
+                {"otp": "123456"},
+                format="json",
+            )
+
+        self.assertIn("signacore_signer_session", verify_response.cookies)
+        context_response = self.client.get(f"/api/sign/{self.signing_request.id}/")
+        self.assertEqual(context_response.status_code, 200, context_response.json())
+        payload = context_response.json()
+        self.assertTrue(payload["is_verified"])
+        self.assertEqual(payload["document_title"], "Employment Offer")
+        self.assertEqual(payload["signer_name"], "Jane Doe")
+        self.assertEqual(len(payload["fields"]), 2)
+        self.assertEqual(payload["page_count"], 1)
+
+        preview_response = self.client.get(f"/api/sign/{self.signing_request.id}/pages/1/preview/")
+        self.assertEqual(preview_response.status_code, 200)
+        self.assertEqual(preview_response["Content-Type"], "image/png")
 
     def test_send_otp_masks_email_and_persists_hash(self) -> None:
         mail.outbox = []
@@ -141,6 +175,8 @@ class SignerFlowTests(TestCase):
         self.assertEqual(response.status_code, 200, response.json())
         payload = response.json()
         self.assertIn("session_token", payload)
+        self.assertTrue(response.cookies["signacore_signer_session"]["httponly"])
+        self.assertEqual(response.cookies["signacore_signer_session"]["samesite"], "Strict")
         self.signing_request.refresh_from_db()
         self.assertEqual(self.signing_request.status, SigningRequest.StatusEnum.OTP_VERIFIED)
         self.assertEqual(self.signing_request.ip_address, "203.0.113.10")
@@ -267,4 +303,13 @@ class SignerFlowTests(TestCase):
         self.assertEqual(self.document.status, Document.StatusEnum.COMPLETED)
         self.assertTrue(self.document.signed_pdf.name.endswith(".pdf"))
         self.assertEqual(FieldSubmission.objects.count(), 3)
+        signed_payload = (Path(TEST_MEDIA_ROOT) / self.document.signed_pdf.name).read_bytes()
+        signature_submission = FieldSubmission.objects.get(
+            value_type=FieldSubmission.ValueTypeEnum.SIGNATURE_PNG
+        )
+        signature_payload = (Path(TEST_MEDIA_ROOT) / signature_submission.image_value.name).read_bytes()
+        self.assertTrue(signed_payload.startswith(ENCRYPTED_FILE_HEADER))
+        self.assertNotIn(b"%PDF", signed_payload)
+        self.assertTrue(signature_payload.startswith(ENCRYPTED_FILE_HEADER))
+        self.assertNotIn(build_png_pixel(), signature_payload)
         self.assertGreaterEqual(len(mail.outbox), 2)

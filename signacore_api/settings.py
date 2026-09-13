@@ -5,6 +5,7 @@ import sys
 from pathlib import Path
 
 from corsheaders.defaults import default_headers
+from django.core.exceptions import ImproperlyConfigured
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
@@ -151,6 +152,9 @@ SIGNACORE_STORAGE_ROOT = Path(
 )
 MEDIA_ROOT = SIGNACORE_STORAGE_ROOT
 
+SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
+USE_X_FORWARDED_HOST = True
+
 if "test" in sys.argv:
     STATIC_ROOT = BASE_DIR / "staticfiles-test"
     SIGNACORE_STORAGE_ROOT = BASE_DIR / "storage-test"
@@ -211,7 +215,13 @@ CELERY_BEAT_SCHEDULE = {
     }
 }
 
-FERNET_KEY = env("FERNET_KEY", "WtF08bpUcDm4uvofwRRmm-JO-17mi6T6qwrmeJEC9Gc=")
+FERNET_KEY = env("FERNET_KEY")
+if not FERNET_KEY and "test" in sys.argv:
+    FERNET_KEY = "WtF08bpUcDm4uvofwRRmm-JO-17mi6T6qwrmeJEC9Gc="
+if not FERNET_KEY:
+    raise ImproperlyConfigured("FERNET_KEY must be configured; SignaCore cannot start without encryption.")
+SIGNACORE_TEMP_ROOT = Path(env("SIGNACORE_TEMP_ROOT", "/run/signacore"))
+FILE_UPLOAD_TEMP_DIR = str(SIGNACORE_TEMP_ROOT)
 SIGNACORE_SHARED_SECRET = env("SIGNACORE_SHARED_SECRET", "")
 SIGNACORE_SERVICE_USERNAME = env("SIGNACORE_SERVICE_USERNAME", "signacore-service")
 SIGNACORE_APP_URL = env("SIGNACORE_APP_URL", "https://mysignacore.com")

@@ -4,7 +4,7 @@
 
   const state = {
     context: null,
-    sessionToken: sessionStorage.getItem(`signacore-session:${app.dataset.signingToken}`) || "",
+    sessionToken: "",
     values: {},
     fieldErrors: {},
     activeFieldId: "",
@@ -22,9 +22,11 @@
     otpTarget: document.getElementById("otp-target"),
     otpInput: document.getElementById("otp-input"),
     verifyOtpButton: document.getElementById("verify-otp-button"),
+    fieldProgressPanel: document.getElementById("field-progress-panel"),
     fieldList: document.getElementById("field-list"),
     submitButton: document.getElementById("submit-button"),
     pagesRoot: document.getElementById("pages-root"),
+    documentPanel: document.getElementById("document-panel"),
     signatureModal: document.getElementById("signature-modal"),
     closeModalButton: document.getElementById("close-modal-button"),
     drawModeButton: document.getElementById("draw-mode-button"),
@@ -96,7 +98,7 @@
   }
 
   function updateSubmitState() {
-    if (!state.context || !state.sessionToken || state.context.access_message) {
+    if (!state.context || !state.context.is_verified || state.context.access_message) {
       nodes.submitButton.disabled = true;
       return;
     }
@@ -115,12 +117,12 @@
       const item = document.createElement("div");
       const complete = fieldIsComplete(field);
       item.className = "field-list-item";
-      item.innerHTML = `
-        <strong>${field.label}</strong>
-        <div class="field-status ${complete ? "field-status-complete" : ""}">
-          ${field.field_type} · page ${field.page} · ${complete ? "Completed" : field.is_required ? "Required" : "Optional"}
-        </div>
-      `;
+      const label = document.createElement("strong");
+      label.textContent = field.label;
+      const fieldStatus = document.createElement("div");
+      fieldStatus.className = `field-status ${complete ? "field-status-complete" : ""}`;
+      fieldStatus.textContent = `${field.field_type} · page ${field.page} · ${complete ? "Completed" : field.is_required ? "Required" : "Optional"}`;
+      item.append(label, fieldStatus);
       nodes.fieldList.appendChild(item);
     });
   }
@@ -295,11 +297,15 @@
     nodes.signerName.textContent = state.context.signer_name || "Signer";
     nodes.expiresAt.textContent = formatDate(state.context.expires_at);
     nodes.documentTitle.textContent = state.context.document_title;
-    nodes.otpTarget.textContent = `Verification code will be sent to ${state.context.masked_email}.`;
+    nodes.otpTarget.textContent = state.context.masked_email
+      ? `Verification code will be sent to ${state.context.masked_email}.`
+      : "Verification code will be sent to the email address assigned to this request.";
+    nodes.fieldProgressPanel.hidden = !state.context.is_verified;
+    nodes.documentPanel.hidden = !state.context.is_verified;
 
     if (state.context.access_message) {
       setNotice(state.context.access_message, "error");
-    } else if (state.sessionToken) {
+    } else if (state.context.is_verified) {
       setNotice("Email verified. Complete the remaining fields and submit the document.", "success");
     } else {
       setNotice("", "success");
@@ -556,7 +562,6 @@
         body: JSON.stringify({ otp: nodes.otpInput.value.trim() }),
       });
       state.sessionToken = payload.session_token;
-      sessionStorage.setItem(`signacore-session:${app.dataset.signingToken}`, state.sessionToken);
       setNotice("Email verified. Complete the remaining fields and submit the document.", "success");
       await loadContext();
     } catch (error) {

@@ -4,6 +4,7 @@ from django.conf import settings
 from django.db import models
 
 from utils.encryption import EncryptedEmailField, EncryptedTextField
+from utils.file_storage import encrypted_file_storage, original_pdf_upload_to, signed_pdf_upload_to
 
 from apps.accounts.models import Organization
 
@@ -17,9 +18,14 @@ class Document(models.Model):
         VOIDED = "VOIDED", "Voided"
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    title = models.CharField(max_length=255)
-    original_pdf = models.FileField(upload_to="signacore/originals/")
-    signed_pdf = models.FileField(upload_to="signacore/signed/", null=True, blank=True)
+    title = EncryptedTextField(max_length=255)
+    original_pdf = models.FileField(storage=encrypted_file_storage, upload_to=original_pdf_upload_to)
+    signed_pdf = models.FileField(
+        storage=encrypted_file_storage,
+        upload_to=signed_pdf_upload_to,
+        null=True,
+        blank=True,
+    )
     status = models.CharField(max_length=32, choices=StatusEnum.choices, default=StatusEnum.DRAFT)
     created_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,
@@ -34,7 +40,7 @@ class Document(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
     voided_at = models.DateTimeField(null=True, blank=True)
-    voided_reason = models.TextField(null=True, blank=True)
+    voided_reason = EncryptedTextField(null=True, blank=True)
 
     class Meta:
         ordering = ("-created_at",)
@@ -58,7 +64,7 @@ class DocumentField(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     document = models.ForeignKey(Document, on_delete=models.CASCADE, related_name="fields")
     field_type = models.CharField(max_length=32, choices=FieldTypeEnum.choices)
-    label = models.CharField(max_length=255)
+    label = EncryptedTextField(max_length=255)
     page = models.PositiveIntegerField()
     x = models.FloatField()
     y = models.FloatField()
@@ -120,7 +126,7 @@ class AdminAuditLog(models.Model):
     action = models.CharField(max_length=64, choices=ActionEnum.choices)
     target_type = models.CharField(max_length=64, blank=True)
     target_id = models.CharField(max_length=128, blank=True)
-    summary = models.CharField(max_length=500)
+    summary = EncryptedTextField(max_length=500)
     metadata = models.JSONField(default=dict, blank=True)
     ip_address = EncryptedTextField(null=True, blank=True)
     user_agent = EncryptedTextField(null=True, blank=True)

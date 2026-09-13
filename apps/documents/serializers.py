@@ -93,8 +93,6 @@ class DocumentSerializer(serializers.ModelSerializer):
             "id",
             "title",
             "status",
-            "original_pdf",
-            "signed_pdf",
             "created_by",
             "organization",
             "created_at",
@@ -103,7 +101,7 @@ class DocumentSerializer(serializers.ModelSerializer):
             "voided_reason",
             "fields",
         )
-        read_only_fields = ("status", "signed_pdf", "created_at", "updated_at", "voided_at")
+        read_only_fields = ("status", "created_at", "updated_at", "voided_at")
 
 
 class AdminDocumentListSerializer(serializers.ModelSerializer):

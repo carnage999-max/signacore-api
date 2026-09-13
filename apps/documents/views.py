@@ -25,6 +25,7 @@ from tasks.notifications import send_invitation_email_for_request
 from tasks.notifications import send_admin_account_created, send_admin_password_changed
 from utils.task_dispatch import enqueue_task
 from utils.identity import email_digest
+from utils.file_storage import temporary_plaintext_file
 
 from .auth import (
     HasValidSignacoreSecret,
@@ -117,16 +118,17 @@ def log_admin_event(
 
 def build_document_page_payload(document: Document) -> list[dict[str, float | int | str]]:
     pages: list[dict[str, float | int | str]] = []
-    with fitz.open(document.original_pdf.path) as pdf_document:
-        for page_number, page in enumerate(pdf_document, start=1):
-            pages.append(
-                {
-                    "number": page_number,
-                    "width": float(page.rect.width),
-                    "height": float(page.rect.height),
-                    "preview_url": f"/api/admin/documents/{document.id}/pages/{page_number}/preview/",
-                }
-            )
+    with temporary_plaintext_file(document.original_pdf, suffix=".pdf") as pdf_path:
+        with fitz.open(pdf_path) as pdf_document:
+            for page_number, page in enumerate(pdf_document, start=1):
+                pages.append(
+                    {
+                        "number": page_number,
+                        "width": float(page.rect.width),
+                        "height": float(page.rect.height),
+                        "preview_url": f"/api/admin/documents/{document.id}/pages/{page_number}/preview/",
+                    }
+                )
     return pages
 
 
@@ -396,7 +398,8 @@ class AdminDocumentsView(APIView):
                 created_by=actor,
                 organization=organization,
             )
-            detected_fields = engine.analyse(document.original_pdf.path)
+            with temporary_plaintext_file(document.original_pdf, suffix=".pdf") as pdf_path:
+                detected_fields = engine.analyse(pdf_path)
             DocumentField.objects.bulk_create(
                 [
                     DocumentField(
@@ -638,11 +641,12 @@ class AdminDocumentPagePreviewView(APIView):
 
     def get(self, request, document_id, page_number):
         document = get_scoped_document(request, document_id)
-        with fitz.open(document.original_pdf.path) as pdf_document:
-            if page_number < 1 or page_number > pdf_document.page_count:
-                return Response({"detail": "Page not found."}, status=status.HTTP_404_NOT_FOUND)
-            page = pdf_document[page_number - 1]
-            pixmap = page.get_pixmap(matrix=fitz.Matrix(2, 2), alpha=False)
+        with temporary_plaintext_file(document.original_pdf, suffix=".pdf") as pdf_path:
+            with fitz.open(pdf_path) as pdf_document:
+                if page_number < 1 or page_number > pdf_document.page_count:
+                    return Response({"detail": "Page not found."}, status=status.HTTP_404_NOT_FOUND)
+                page = pdf_document[page_number - 1]
+                pixmap = page.get_pixmap(matrix=fitz.Matrix(2, 2), alpha=False)
         log_admin_event(
             request,
             AdminAuditLog.ActionEnum.DOCUMENT_VIEW,
@@ -758,7 +762,7 @@ class AdminDocumentVoidView(APIView):
             f"Voided document: {document.title}.",
             target_type="document",
             target_id=document.id,
-            metadata={"reason": reason},
+            metadata={"reason_provided": bool(reason)},
         )
         document = Document.objects.prefetch_related("fields", "signing_requests").get(pk=document.pk)
         return Response(AdminDocumentDetailSerializer(document).data, status=status.HTTP_200_OK)

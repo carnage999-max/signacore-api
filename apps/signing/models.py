@@ -6,6 +6,7 @@ from django.db import models
 from apps.documents.models import Document, DocumentField
 from utils.encryption import EncryptedEmailField, EncryptedTextField
 from utils.identity import email_digest
+from utils.file_storage import encrypted_file_storage, signature_image_upload_to
 
 
 class SigningRequest(models.Model):
@@ -61,5 +62,10 @@ class FieldSubmission(models.Model):
     document_field = models.ForeignKey(DocumentField, on_delete=models.CASCADE, related_name="submissions")
     value_type = models.CharField(max_length=32, choices=ValueTypeEnum.choices)
     text_value = EncryptedTextField(null=True, blank=True)
-    image_value = models.FileField(upload_to="signacore/sigs/", null=True, blank=True)
+    image_value = models.FileField(
+        storage=encrypted_file_storage,
+        upload_to=signature_image_upload_to,
+        null=True,
+        blank=True,
+    )
     submitted_at = models.DateTimeField(auto_now_add=True)

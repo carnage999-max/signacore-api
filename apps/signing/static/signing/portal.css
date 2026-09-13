@@ -359,6 +359,7 @@ input {
   z-index: 20;
 }
 
+[hidden],
 .modal[hidden] {
   display: none;
 }

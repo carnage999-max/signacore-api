@@ -1,7 +1,7 @@
 from __future__ import annotations
 
+from contextlib import ExitStack
 from datetime import timedelta
-from pathlib import Path
 
 import fitz
 from django.conf import settings
@@ -23,9 +23,13 @@ from tasks.notifications import notify_admin_progress, send_completion_emails, s
 from utils.otp import generate_otp, hash_otp, verify_otp
 from utils.signer_session import build_signer_session_token, verify_signer_session_token
 from utils.task_dispatch import enqueue_task
+from utils.file_storage import save_encrypted_field_file, temporary_output_file, temporary_plaintext_file
 
 from .models import FieldSubmission, SigningRequest
 from .serializers import FieldSubmissionSerializer, SignerOtpSerializer, SigningRequestSerializer
+
+SIGNER_SESSION_COOKIE = "signacore_signer_session"
+SIGNER_SESSION_MAX_AGE_SECONDS = 3600
 
 
 def mask_email(email: str) -> str:
@@ -54,6 +58,19 @@ def get_signing_request_or_404(token):
     )
 
 
+def get_request_session_token(request) -> str:
+    return str(request.COOKIES.get(SIGNER_SESSION_COOKIE, "") or "").strip()
+
+
+def has_verified_signer_session(request, signing_request: SigningRequest) -> bool:
+    return verify_signer_session_token(
+        get_request_session_token(request),
+        str(signing_request.id),
+        signing_request.otp_hash,
+        max_age_seconds=SIGNER_SESSION_MAX_AGE_SECONDS,
+    )
+
+
 def sync_signing_request_status(signing_request: SigningRequest) -> None:
     if signing_request.status == SigningRequest.StatusEnum.SIGNED:
         return
@@ -77,16 +94,17 @@ def get_access_message(signing_request: SigningRequest) -> str | None:
 
 def build_page_payload(signing_request: SigningRequest) -> list[dict[str, float | int | str]]:
     pages: list[dict[str, float | int | str]] = []
-    with fitz.open(signing_request.document.original_pdf.path) as pdf_document:
-        for page_number, page in enumerate(pdf_document, start=1):
-            pages.append(
-                {
-                    "number": page_number,
-                    "width": float(page.rect.width),
-                    "height": float(page.rect.height),
-                    "preview_url": f"/api/sign/{signing_request.id}/pages/{page_number}/preview/",
-                }
-            )
+    with temporary_plaintext_file(signing_request.document.original_pdf, suffix=".pdf") as pdf_path:
+        with fitz.open(pdf_path) as pdf_document:
+            for page_number, page in enumerate(pdf_document, start=1):
+                pages.append(
+                    {
+                        "number": page_number,
+                        "width": float(page.rect.width),
+                        "height": float(page.rect.height),
+                        "preview_url": f"/api/sign/{signing_request.id}/pages/{page_number}/preview/",
+                    }
+                )
     return pages
 
 
@@ -108,15 +126,35 @@ class SignerContextView(APIView):
 
     def get(self, request, token):
         signing_request = get_signing_request_or_404(token)
+        access_message = get_access_message(signing_request)
+        if not has_verified_signer_session(request, signing_request):
+            return Response(
+                {
+                    "is_verified": False,
+                    "document_title": "Document verification required",
+                    "signer_name": "Signer",
+                    "status": signing_request.status,
+                    "document_status": signing_request.document.status,
+                    "expires_at": signing_request.expires_at,
+                    "masked_email": "",
+                    "access_message": access_message,
+                    "page_count": 0,
+                    "pages": [],
+                    "fields": [],
+                },
+                status=status.HTTP_200_OK,
+            )
+
         pages = build_page_payload(signing_request)
         payload = {
+            "is_verified": True,
             "document_title": signing_request.document.title,
             "signer_name": signing_request.signer_name,
             "status": signing_request.status,
             "document_status": signing_request.document.status,
             "expires_at": signing_request.expires_at,
             "masked_email": mask_email(signing_request.signer_email),
-            "access_message": get_access_message(signing_request),
+            "access_message": access_message,
             "page_count": len(pages),
             "pages": pages,
             "fields": DocumentFieldSerializer(signing_request.document.fields.all(), many=True).data,
@@ -131,11 +169,17 @@ class SignerPagePreviewView(APIView):
 
     def get(self, request, token, page_number):
         signing_request = get_signing_request_or_404(token)
-        with fitz.open(signing_request.document.original_pdf.path) as pdf_document:
-            if page_number < 1 or page_number > pdf_document.page_count:
-                raise Http404("Page not found.")
-            page = pdf_document[page_number - 1]
-            pixmap = page.get_pixmap(matrix=fitz.Matrix(2, 2), alpha=False)
+        if not has_verified_signer_session(request, signing_request):
+            return Response(
+                {"detail": "Verify your email before viewing this document."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+        with temporary_plaintext_file(signing_request.document.original_pdf, suffix=".pdf") as pdf_path:
+            with fitz.open(pdf_path) as pdf_document:
+                if page_number < 1 or page_number > pdf_document.page_count:
+                    raise Http404("Page not found.")
+                page = pdf_document[page_number - 1]
+                pixmap = page.get_pixmap(matrix=fitz.Matrix(2, 2), alpha=False)
         return HttpResponse(pixmap.tobytes("png"), content_type="image/png")
 
 
@@ -187,10 +231,21 @@ class SignerOtpVerifyView(APIView):
         signing_request.ip_address = get_client_ip(request)
         signing_request.user_agent = request.META.get("HTTP_USER_AGENT", "")
         signing_request.save(update_fields=["status", "ip_address", "user_agent", "updated_at"])
-        return Response(
-            {"session_token": build_signer_session_token(str(signing_request.id))},
+        session_token = build_signer_session_token(str(signing_request.id), signing_request.otp_hash)
+        response = Response(
+            {"session_token": session_token},
             status=status.HTTP_200_OK,
         )
+        response.set_cookie(
+            SIGNER_SESSION_COOKIE,
+            session_token,
+            max_age=SIGNER_SESSION_MAX_AGE_SECONDS,
+            httponly=True,
+            secure=request.is_secure(),
+            samesite="Strict",
+            path=f"/api/sign/{signing_request.id}/",
+        )
+        return response
 
 
 class SignerSubmitView(APIView):
@@ -205,8 +260,8 @@ class SignerSubmitView(APIView):
         if access_message:
             return Response({"detail": access_message}, status=status.HTTP_400_BAD_REQUEST)
 
-        session_token = str(request.data.get("session_token", "")).strip()
-        if not verify_signer_session_token(session_token, str(signing_request.id)):
+        session_token = str(request.data.get("session_token", "")).strip() or get_request_session_token(request)
+        if not verify_signer_session_token(session_token, str(signing_request.id), signing_request.otp_hash):
             return Response({"session_token": ["Invalid or expired session token."]}, status=status.HTTP_400_BAD_REQUEST)
 
         field_errors: dict[str, list[str]] = {}
@@ -296,33 +351,40 @@ class SignerSubmitView(APIView):
                     status=status.HTTP_200_OK,
                 )
 
-            all_submissions = (
+            all_submissions = list(
                 FieldSubmission.objects.select_related("document_field")
                 .filter(signing_request__document=document)
                 .order_by("submitted_at")
             )
-            output_relative_path = f"signacore/signed/{document.id}_signed.pdf"
-            output_path = Path(settings.MEDIA_ROOT) / output_relative_path
-            output_path.parent.mkdir(parents=True, exist_ok=True)
-            PDFEngine().flatten(
-                document.original_pdf.path,
-                output_path,
-                [
-                    {
-                        "page": submission.document_field.page,
-                        "x": submission.document_field.x,
-                        "y": submission.document_field.y,
-                        "width": submission.document_field.width,
-                        "height": submission.document_field.height,
-                        "value_type": submission.value_type,
-                        "text_value": submission.text_value,
-                        "image_path": submission.image_value.path if submission.image_value else "",
-                    }
-                    for submission in all_submissions
-                ],
-            )
+            with ExitStack() as stack:
+                source_path = stack.enter_context(temporary_plaintext_file(document.original_pdf, suffix=".pdf"))
+                output_path = stack.enter_context(temporary_output_file(suffix=".pdf"))
+                flatten_submissions = []
+                for submission in all_submissions:
+                    image_path = ""
+                    if submission.image_value:
+                        image_path = str(
+                            stack.enter_context(temporary_plaintext_file(submission.image_value, suffix=".png"))
+                        )
+                    flatten_submissions.append(
+                        {
+                            "page": submission.document_field.page,
+                            "x": submission.document_field.x,
+                            "y": submission.document_field.y,
+                            "width": submission.document_field.width,
+                            "height": submission.document_field.height,
+                            "value_type": submission.value_type,
+                            "text_value": submission.text_value,
+                            "image_path": image_path,
+                        }
+                    )
+                PDFEngine().flatten(source_path, output_path, flatten_submissions)
+                save_encrypted_field_file(
+                    document.signed_pdf,
+                    output_path,
+                    filename=f"{document.id}-signed.pdf",
+                )
             document.status = Document.StatusEnum.COMPLETED
-            document.signed_pdf.name = output_relative_path
             document.save(update_fields=["status", "signed_pdf", "updated_at"])
             transaction.on_commit(
                 lambda document_id=str(document.id): enqueue_task(

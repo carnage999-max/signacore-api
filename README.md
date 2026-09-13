@@ -81,6 +81,10 @@ This service is set up for container deployment while still using server-hosted 
 - Signacore media uses `/mnt/data/media/signa-core/`
 - Signacore static files use `/srv/apps/signacore-api/staticfiles/`
 
+Original PDFs, completed PDFs, signature images, signer-entered values, and document-sensitive metadata are encrypted at rest with `FERNET_KEY`. PDF processing uses private temporary files under `SIGNACORE_TEMP_ROOT`; Docker mounts `/run/signacore` as memory-backed storage for the API container.
+
+Treat `FERNET_KEY` as a permanent data-encryption key. Back it up outside the server and do not replace it during a normal deployment. Losing it makes encrypted records unrecoverable; changing it requires an explicit key-rotation migration.
+
 ### Deployment artifacts
 
 - `Dockerfile`
