@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import logging
 
 import httpx
 from django.conf import settings
@@ -41,6 +42,7 @@ from .serializers import (
 
 
 DUMMY_PASSWORD_HASH = make_password(None)
+logger = logging.getLogger(__name__)
 
 
 def subject_digest(provider: str, subject: str) -> str:
@@ -296,7 +298,13 @@ class OAuthExchangeView(APIView):
                 redirect_uri=values["redirect_uri"],
                 nonce=values["nonce"],
             )
-        except (OAuthExchangeError, httpx.HTTPError):
+        except (OAuthExchangeError, httpx.HTTPError) as exc:
+            logger.warning(
+                "OAuth exchange failed for %s redirect_uri=%s: %s",
+                values["provider"],
+                values["redirect_uri"],
+                exc,
+            )
             return Response(
                 {"detail": "The identity provider could not verify this sign-in."},
                 status=status.HTTP_400_BAD_REQUEST,
