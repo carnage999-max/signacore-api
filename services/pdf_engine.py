@@ -144,7 +144,8 @@ class PDFEngine:
                     page_height - submission["y"],
                 )
                 if submission["value_type"] == "TEXT":
-                    page.insert_textbox(rect, submission["text_value"], fontsize=12)
+                    font_size = self._field_text_font_size(rect)
+                    page.insert_textbox(rect, submission["text_value"], fontsize=font_size)
                 elif submission["value_type"] == "CHECKBOX":
                     if str(submission["text_value"]).lower() in {"true", "1", "yes", "on"}:
                         page.insert_textbox(
@@ -164,6 +165,10 @@ class PDFEngine:
             document.save(output_pdf)
         finally:
             document.close()
+
+    @staticmethod
+    def _field_text_font_size(rect: fitz.Rect) -> float:
+        return max(7.0, min(12.0, rect.height * 0.72, rect.width * 0.16))
 
     def _map_widget_type(self, widget: fitz.Widget) -> str:
         field_type = str(getattr(widget, "field_type_string", "") or "").lower()

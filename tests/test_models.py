@@ -1,9 +1,11 @@
 from django.test import SimpleTestCase
+import fitz
 
 from apps.accounts.models import AccountProfile, OAuthIntentEnum, Organization, OrganizationMembership, SocialIdentity
 from apps.billing.models import BillingPlanConfiguration, OrganizationSubscription, StripeWebhookEvent
 from apps.documents.models import Document, DocumentField
 from apps.signing.models import FieldSubmission, SigningRequest
+from services.pdf_engine import PDFEngine
 
 
 class SignacoreEnumTests(SimpleTestCase):
@@ -79,3 +81,8 @@ class SignacoreEnumTests(SimpleTestCase):
             [value for value, _ in FieldSubmission.ValueTypeEnum.choices],
             ["TEXT", "SIGNATURE_PNG", "INITIALS_PNG", "CHECKBOX"],
         )
+
+    def test_pdf_text_font_size_tracks_field_rectangle(self) -> None:
+        self.assertEqual(PDFEngine._field_text_font_size(fitz.Rect(0, 0, 120, 12)), 8.64)
+        self.assertEqual(PDFEngine._field_text_font_size(fitz.Rect(0, 0, 180, 24)), 12.0)
+        self.assertEqual(PDFEngine._field_text_font_size(fitz.Rect(0, 0, 20, 8)), 7.0)

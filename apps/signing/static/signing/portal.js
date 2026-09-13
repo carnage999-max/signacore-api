@@ -299,6 +299,8 @@
           fieldNode.style.left = `${left}%`;
           fieldNode.style.width = `${width}%`;
           fieldNode.style.height = `${Math.max(height, minHeightPercent)}%`;
+          fieldNode.style.setProperty("--field-font-size", `${Math.max(7, Math.min(field.height * 0.72, 13))}px`);
+          fieldNode.style.setProperty("--field-button-size", `${Math.max(7, Math.min(field.height * 0.38, 11))}px`);
           fieldNode.title = field.label;
 
           let fieldContent;
