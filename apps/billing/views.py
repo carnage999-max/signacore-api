@@ -21,6 +21,7 @@ from services.stripe_client import StripeAPIClient, verify_stripe_signature
 
 from .models import BillingPlanConfiguration, OrganizationSubscription, StripeWebhookEvent
 from .serializers import (
+    BillingPlanConfigurationSerializer,
     BillingPortalResponseSerializer,
     CheckoutSessionResponseSerializer,
     CheckoutSessionSerializer,
@@ -93,6 +94,17 @@ def sync_subscription_object(payload: dict) -> bool:
     subscription.cancel_at_period_end = bool(payload.get("cancel_at_period_end", False))
     subscription.save()
     return True
+
+
+class PublicBillingPlanListView(APIView):
+    authentication_classes = []
+    permission_classes = []
+    serializer_class = BillingPlanConfigurationSerializer
+
+    @extend_schema(responses=BillingPlanConfigurationSerializer(many=True))
+    def get(self, request):
+        plans = BillingPlanConfiguration.objects.filter(is_active=True)
+        return Response(BillingPlanConfigurationSerializer(plans, many=True).data)
 
 
 class BillingStatusView(APIView):

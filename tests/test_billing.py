@@ -66,6 +66,23 @@ class BillingApiTests(TestCase):
             ).exists()
         )
 
+    def test_active_plan_prices_are_public_without_service_credentials(self) -> None:
+        BillingPlanConfiguration.objects.create(
+            plan=BillingPlanConfiguration.PlanEnum.BUSINESS,
+            amount=Decimal("79.00"),
+            currency=BillingPlanConfiguration.CurrencyEnum.USD,
+            billing_interval=BillingPlanConfiguration.BillingIntervalEnum.MONTH,
+            is_active=False,
+        )
+        self.client.credentials()
+
+        response = self.client.get("/api/billing/plans/")
+
+        self.assertEqual(response.status_code, 200, response.json())
+        self.assertEqual(len(response.json()), 1)
+        self.assertEqual(response.json()[0]["plan"], BillingPlanConfiguration.PlanEnum.PROFESSIONAL)
+        self.assertEqual(response.json()[0]["amount"], "29.00")
+
     @patch("apps.billing.views.StripeAPIClient")
     def test_owner_can_create_checkout_session(self, stripe_client_class) -> None:
         stripe_client = stripe_client_class.return_value
