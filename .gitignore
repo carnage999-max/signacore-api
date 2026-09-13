@@ -14,3 +14,4 @@ storage/
 storage-test/
 staticfiles/
 staticfiles-test/
+todo.json
