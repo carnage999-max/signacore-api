@@ -9,8 +9,10 @@ from apps.accounts.models import Organization
 
 class BillingPlanConfiguration(models.Model):
     class PlanEnum(models.TextChoices):
+        FREE = "FREE", "Free"
         PROFESSIONAL = "PROFESSIONAL", "Professional"
         BUSINESS = "BUSINESS", "Business"
+        ENTERPRISE = "ENTERPRISE", "Enterprise"
 
     class CurrencyEnum(models.TextChoices):
         USD = "USD", "USD"
@@ -22,11 +24,11 @@ class BillingPlanConfiguration(models.Model):
         MONTH = "month", "Monthly"
         YEAR = "year", "Yearly"
 
-    plan = models.CharField(max_length=32, choices=PlanEnum.choices, unique=True)
+    plan = models.CharField(max_length=32, choices=PlanEnum.choices)
     amount = models.DecimalField(
         max_digits=10,
         decimal_places=2,
-        validators=[MinValueValidator(Decimal("0.50"))],
+        validators=[MinValueValidator(Decimal("0.00"))],
     )
     currency = models.CharField(max_length=3, choices=CurrencyEnum.choices, default=CurrencyEnum.USD)
     billing_interval = models.CharField(
@@ -39,9 +41,15 @@ class BillingPlanConfiguration(models.Model):
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
-        ordering = ("plan",)
+        ordering = ("plan", "billing_interval")
         verbose_name = "billing plan price"
         verbose_name_plural = "billing plan prices"
+        constraints = [
+            models.UniqueConstraint(
+                fields=("plan", "billing_interval"),
+                name="unique_billing_plan_interval",
+            )
+        ]
 
     def __str__(self) -> str:
         return f"{self.get_plan_display()}: {self.currency} {self.amount}/{self.billing_interval}"
@@ -52,6 +60,7 @@ class OrganizationSubscription(models.Model):
         FREE = "FREE", "Free"
         PROFESSIONAL = "PROFESSIONAL", "Professional"
         BUSINESS = "BUSINESS", "Business"
+        ENTERPRISE = "ENTERPRISE", "Enterprise"
 
     class StatusEnum(models.TextChoices):
         NONE = "NONE", "None"

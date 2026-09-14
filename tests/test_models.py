@@ -15,7 +15,7 @@ class SignacoreEnumTests(SimpleTestCase):
     def test_billing_plan_configuration_enums_are_explicit(self) -> None:
         self.assertEqual(
             [value for value, _ in BillingPlanConfiguration.PlanEnum.choices],
-            ["PROFESSIONAL", "BUSINESS"],
+            ["FREE", "PROFESSIONAL", "BUSINESS", "ENTERPRISE"],
         )
         self.assertEqual(
             [value for value, _ in BillingPlanConfiguration.BillingIntervalEnum.choices],
@@ -31,7 +31,7 @@ class SignacoreEnumTests(SimpleTestCase):
     def test_subscription_plan_enum_is_explicit(self) -> None:
         self.assertEqual(
             [value for value, _ in OrganizationSubscription.PlanEnum.choices],
-            ["FREE", "PROFESSIONAL", "BUSINESS"],
+            ["FREE", "PROFESSIONAL", "BUSINESS", "ENTERPRISE"],
         )
 
     def test_stripe_event_status_enum_is_explicit(self) -> None:

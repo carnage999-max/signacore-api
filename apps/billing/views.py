@@ -137,7 +137,12 @@ class BillingCheckoutView(APIView):
         serializer = CheckoutSessionSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         plan = serializer.validated_data["plan"]
-        plan_configuration = BillingPlanConfiguration.objects.filter(plan=plan, is_active=True).first()
+        billing_interval = serializer.validated_data["billing_interval"]
+        plan_configuration = BillingPlanConfiguration.objects.filter(
+            plan=plan,
+            billing_interval=billing_interval,
+            is_active=True,
+        ).first()
         if not settings.STRIPE_SECRET_KEY or plan_configuration is None:
             return Response(
                 {"detail": "This subscription plan is not available."},

@@ -44,7 +44,13 @@ class OrganizationSubscriptionSerializer(serializers.ModelSerializer):
         return bool(obj.stripe_customer_id)
 
     def get_available_plans(self, obj: OrganizationSubscription) -> list[dict]:
-        plans = BillingPlanConfiguration.objects.filter(is_active=True)
+        plans = BillingPlanConfiguration.objects.filter(
+            is_active=True,
+            plan__in=(
+                BillingPlanConfiguration.PlanEnum.PROFESSIONAL,
+                BillingPlanConfiguration.PlanEnum.BUSINESS,
+            ),
+        )
         return BillingPlanConfigurationSerializer(plans, many=True).data
 
 
@@ -54,6 +60,10 @@ class CheckoutSessionSerializer(serializers.Serializer):
             OrganizationSubscription.PlanEnum.PROFESSIONAL,
             OrganizationSubscription.PlanEnum.BUSINESS,
         )
+    )
+    billing_interval = serializers.ChoiceField(
+        choices=BillingPlanConfiguration.BillingIntervalEnum.choices,
+        default=BillingPlanConfiguration.BillingIntervalEnum.YEAR,
     )
 
 

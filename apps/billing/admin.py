@@ -7,7 +7,7 @@ from .models import BillingPlanConfiguration, OrganizationSubscription, StripeWe
 class BillingPlanConfigurationAdmin(admin.ModelAdmin):
     list_display = ("plan", "amount", "currency", "billing_interval", "is_active", "updated_at")
     list_editable = ("amount", "currency", "billing_interval", "is_active")
-    list_filter = ("is_active", "currency", "billing_interval")
+    list_filter = ("plan", "is_active", "currency", "billing_interval")
 
     def has_module_permission(self, request):
         return request.user.is_superuser

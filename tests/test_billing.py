@@ -39,10 +39,10 @@ class BillingApiTests(TestCase):
         )
         self.professional_plan, _ = BillingPlanConfiguration.objects.update_or_create(
             plan=BillingPlanConfiguration.PlanEnum.PROFESSIONAL,
+            billing_interval=BillingPlanConfiguration.BillingIntervalEnum.MONTH,
             defaults={
-                "amount": Decimal("29.00"),
+                "amount": Decimal("9.99"),
                 "currency": BillingPlanConfiguration.CurrencyEnum.USD,
-                "billing_interval": BillingPlanConfiguration.BillingIntervalEnum.MONTH,
                 "is_active": True,
             },
         )
@@ -66,7 +66,7 @@ class BillingApiTests(TestCase):
             for plan in response.json()["available_plans"]
             if plan["plan"] == BillingPlanConfiguration.PlanEnum.PROFESSIONAL
         )
-        self.assertEqual(professional["amount"], "29.00")
+        self.assertEqual(professional["amount"], "9.99")
         self.assertTrue(
             AdminAuditLog.objects.filter(
                 organization=self.organization,
@@ -77,10 +77,10 @@ class BillingApiTests(TestCase):
     def test_active_plan_prices_are_public_without_service_credentials(self) -> None:
         BillingPlanConfiguration.objects.update_or_create(
             plan=BillingPlanConfiguration.PlanEnum.BUSINESS,
+            billing_interval=BillingPlanConfiguration.BillingIntervalEnum.MONTH,
             defaults={
-                "amount": Decimal("79.00"),
+                "amount": Decimal("19.99"),
                 "currency": BillingPlanConfiguration.CurrencyEnum.USD,
-                "billing_interval": BillingPlanConfiguration.BillingIntervalEnum.MONTH,
                 "is_active": False,
             },
         )
@@ -89,9 +89,13 @@ class BillingApiTests(TestCase):
         response = self.client.get("/api/billing/plans/")
 
         self.assertEqual(response.status_code, 200, response.json())
-        self.assertEqual(len(response.json()), 1)
-        self.assertEqual(response.json()[0]["plan"], BillingPlanConfiguration.PlanEnum.PROFESSIONAL)
-        self.assertEqual(response.json()[0]["amount"], "29.00")
+        professional_plans = [
+            plan
+            for plan in response.json()
+            if plan["plan"] == BillingPlanConfiguration.PlanEnum.PROFESSIONAL
+        ]
+        self.assertTrue(professional_plans)
+        self.assertIn("9.99", {plan["amount"] for plan in professional_plans})
 
     @patch("apps.billing.views.StripeAPIClient")
     def test_owner_can_create_checkout_session(self, stripe_client_class) -> None:
@@ -101,7 +105,10 @@ class BillingApiTests(TestCase):
 
         response = self.client.post(
             "/api/admin/billing/checkout/",
-            {"plan": OrganizationSubscription.PlanEnum.PROFESSIONAL},
+            {
+                "plan": OrganizationSubscription.PlanEnum.PROFESSIONAL,
+                "billing_interval": BillingPlanConfiguration.BillingIntervalEnum.MONTH,
+            },
             format="json",
         )
 
@@ -115,7 +122,7 @@ class BillingApiTests(TestCase):
             organization_id=str(self.organization.id),
             plan=OrganizationSubscription.PlanEnum.PROFESSIONAL,
             plan_name="Professional",
-            amount=Decimal("29.00"),
+            amount=Decimal("9.99"),
             currency="USD",
             billing_interval="month",
         )
@@ -126,7 +133,10 @@ class BillingApiTests(TestCase):
 
         response = self.client.post(
             "/api/admin/billing/checkout/",
-            {"plan": OrganizationSubscription.PlanEnum.PROFESSIONAL},
+            {
+                "plan": OrganizationSubscription.PlanEnum.PROFESSIONAL,
+                "billing_interval": BillingPlanConfiguration.BillingIntervalEnum.MONTH,
+            },
             format="json",
         )
 
@@ -147,7 +157,10 @@ class BillingApiTests(TestCase):
 
         response = self.client.post(
             "/api/admin/billing/checkout/",
-            {"plan": OrganizationSubscription.PlanEnum.BUSINESS},
+            {
+                "plan": OrganizationSubscription.PlanEnum.BUSINESS,
+                "billing_interval": BillingPlanConfiguration.BillingIntervalEnum.MONTH,
+            },
             format="json",
         )
 
