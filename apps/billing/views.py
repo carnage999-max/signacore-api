@@ -49,6 +49,16 @@ def get_organization_subscription(organization: Organization) -> OrganizationSub
     return subscription
 
 
+def get_organization_seat_count(organization: Organization) -> int:
+    return max(
+        organization.memberships.filter(
+            status=OrganizationMembership.StatusEnum.ACTIVE,
+            user__is_active=True,
+        ).count(),
+        1,
+    )
+
+
 def timestamp_to_datetime(value) -> datetime | None:
     if not isinstance(value, (int, float)):
         return None
@@ -174,6 +184,7 @@ class BillingCheckoutView(APIView):
                 amount=plan_configuration.amount,
                 currency=plan_configuration.currency,
                 billing_interval=plan_configuration.billing_interval,
+                quantity=get_organization_seat_count(organization),
             )
             checkout_url = str(checkout["url"])
         except (httpx.HTTPError, KeyError, ValueError):

@@ -42,6 +42,7 @@ class StripeAPIClient(BaseAPIClient):
         amount: Decimal,
         currency: str,
         billing_interval: str,
+        quantity: int,
     ) -> dict[str, Any]:
         app_url = settings.SIGNACORE_APP_URL.rstrip("/")
         response = self.post(
@@ -53,13 +54,23 @@ class StripeAPIClient(BaseAPIClient):
                 "line_items[0][price_data][unit_amount]": str(int(amount * Decimal("100"))),
                 "line_items[0][price_data][recurring][interval]": billing_interval,
                 "line_items[0][price_data][product_data][name]": f"SignaCore {plan_name}",
-                "line_items[0][quantity]": "1",
+                "line_items[0][quantity]": str(max(quantity, 1)),
                 "success_url": f"{app_url}/admin/billing?checkout=success",
                 "cancel_url": f"{app_url}/admin/billing?checkout=cancelled",
                 "metadata[organization_id]": organization_id,
                 "metadata[plan]": plan,
                 "subscription_data[metadata][organization_id]": organization_id,
                 "subscription_data[metadata][plan]": plan,
+            },
+        )
+        return response.json()
+
+    def update_subscription_quantity(self, subscription_id: str, quantity: int) -> dict[str, Any]:
+        response = self.post(
+            f"/subscriptions/{subscription_id}",
+            data={
+                "items[0][quantity]": str(max(quantity, 1)),
+                "proration_behavior": "create_prorations",
             },
         )
         return response.json()

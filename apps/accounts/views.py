@@ -3,6 +3,8 @@ from __future__ import annotations
 import hashlib
 import hmac
 import logging
+import secrets
+from datetime import timedelta
 
 import httpx
 from django.conf import settings
@@ -17,7 +19,7 @@ from rest_framework.response import Response
 from rest_framework.throttling import ScopedRateThrottle
 from rest_framework.views import APIView
 
-from apps.documents.auth import HasValidSignacoreSecret
+from apps.documents.auth import HasValidSignacoreSecret, get_admin_actor, get_actor_organization
 from apps.documents.models import AdminAuditLog
 from apps.documents.views import get_request_ip
 from apps.signing.models import SigningRequest
@@ -26,11 +28,20 @@ from tasks.notifications import (
     send_account_login_alert,
     send_account_verification,
     send_account_welcome,
+    send_organization_invitation,
+    sync_organization_seat_quantity,
 )
 from utils.identity import email_digest
 from utils.task_dispatch import enqueue_task
 
-from .models import AccountProfile, OAuthIntentEnum, Organization, OrganizationMembership, SocialIdentity
+from .models import (
+    AccountProfile,
+    OAuthIntentEnum,
+    Organization,
+    OrganizationInvitation,
+    OrganizationMembership,
+    SocialIdentity,
+)
 from .serializers import (
     AccountSessionSerializer,
     AccountSigningRequestSerializer,
@@ -38,6 +49,8 @@ from .serializers import (
     EmailRegistrationSerializer,
     EmailVerificationSerializer,
     OAuthExchangeSerializer,
+    OrganizationInvitationSerializer,
+    OrganizationMemberSerializer,
 )
 
 
@@ -111,6 +124,53 @@ def log_account_event(request, user, action: str, summary: str) -> None:
     )
 
 
+def invitation_token_digest(token: str) -> str:
+    return hmac.new(settings.SECRET_KEY.encode(), token.encode(), hashlib.sha256).hexdigest()
+
+
+def get_active_invitation(token: str) -> OrganizationInvitation | None:
+    if not token:
+        return None
+    invitation = (
+        OrganizationInvitation.objects.select_related("organization")
+        .filter(token_hash=invitation_token_digest(token), accepted_at__isnull=True)
+        .first()
+    )
+    if invitation is None or invitation.expires_at <= timezone.now():
+        return None
+    return invitation
+
+
+def serialize_organization_members(organization: Organization) -> list[dict]:
+    members = []
+    for membership in organization.memberships.select_related("user", "user__signacore_profile"):
+        profile = getattr(membership.user, "signacore_profile", None)
+        members.append(
+            {
+                "id": membership.id,
+                "user_id": membership.user_id,
+                "name": (profile.display_name if profile else "") or membership.user.get_username(),
+                "email": profile.email if profile else membership.user.email,
+                "role": membership.role,
+                "status": membership.status,
+                "joined_at": membership.created_at,
+            }
+        )
+    for invitation in organization.invitations.filter(accepted_at__isnull=True, expires_at__gt=timezone.now()):
+        members.append(
+            {
+                "id": invitation.id,
+                "user_id": None,
+                "name": "Pending invitation",
+                "email": invitation.email,
+                "role": invitation.role,
+                "status": OrganizationMembership.StatusEnum.INVITED,
+                "joined_at": invitation.created_at,
+            }
+        )
+    return OrganizationMemberSerializer(members, many=True).data
+
+
 class EmailRegistrationView(APIView):
     authentication_classes = []
     permission_classes = [HasValidSignacoreSecret]
@@ -124,6 +184,18 @@ class EmailRegistrationView(APIView):
         values = serializer.validated_data
         email = values["email"]
         digest = email_digest(email)
+        invitation_token = values.get("invitation_token", "")
+        invitation = get_active_invitation(invitation_token)
+        if invitation_token and invitation is None:
+            return Response(
+                {"detail": "This workspace invitation is invalid or expired."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if invitation is not None and values["account_type"] != AccountProfile.AccountTypeEnum.COMPANY:
+            return Response(
+                {"detail": "This invitation is for a company workspace account."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
         existing_profile = (
             AccountProfile.objects.select_related("user")
             .filter(email_hash=digest)
@@ -162,7 +234,16 @@ class EmailRegistrationView(APIView):
                     email=email,
                     display_name=values["display_name"].strip(),
                 )
-                if account_type == AccountProfile.AccountTypeEnum.COMPANY:
+                if invitation is not None:
+                    OrganizationMembership.objects.create(
+                        organization=invitation.organization,
+                        user=user,
+                        role=invitation.role,
+                    )
+                    invitation.accepted_at = timezone.now()
+                    invitation.save(update_fields=["accepted_at"])
+                    enqueue_task(sync_organization_seat_quantity, str(invitation.organization_id))
+                elif account_type == AccountProfile.AccountTypeEnum.COMPANY:
                     organization = Organization.objects.create(
                         name=values["company_name"].strip(),
                         created_by=user,
@@ -177,7 +258,9 @@ class EmailRegistrationView(APIView):
                     request,
                     user,
                     AdminAuditLog.ActionEnum.EMAIL_REGISTER,
-                    "Created an account with email and password.",
+                    "Joined a company workspace with email and password."
+                    if invitation is not None
+                    else "Created an account with email and password.",
                 )
         except IntegrityError:
             return Response(
@@ -291,6 +374,18 @@ class OAuthExchangeView(APIView):
         serializer = OAuthExchangeSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         values = serializer.validated_data
+        invitation_token = values.get("invitation_token", "")
+        invitation = get_active_invitation(invitation_token)
+        if invitation_token and invitation is None:
+            return Response(
+                {"detail": "This workspace invitation is invalid or expired."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if invitation is not None and values["account_type"] != AccountProfile.AccountTypeEnum.COMPANY:
+            return Response(
+                {"detail": "This invitation is for a company workspace account."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
         try:
             verified_identity = exchange_oauth_code(
                 provider=values["provider"],
@@ -341,6 +436,7 @@ class OAuthExchangeView(APIView):
         if (
             is_new
             and values["account_type"] == AccountProfile.AccountTypeEnum.COMPANY
+            and invitation is None
             and not values.get("company_name", "").strip()
         ):
             return Response(
@@ -365,6 +461,15 @@ class OAuthExchangeView(APIView):
                 if verified_identity.display_name:
                     linked_profile.display_name = verified_identity.display_name
                 linked_profile.save(update_fields=["email", "display_name", "updated_at"])
+                if invitation is not None:
+                    OrganizationMembership.objects.get_or_create(
+                        organization=invitation.organization,
+                        user=user,
+                        defaults={"role": invitation.role},
+                    )
+                    invitation.accepted_at = timezone.now()
+                    invitation.save(update_fields=["accepted_at"])
+                    enqueue_task(sync_organization_seat_quantity, str(invitation.organization_id))
             elif identity is None:
                 account_type = values["account_type"]
                 username = f"oauth_{verified_identity.provider.lower()}_{digest[:24]}"
@@ -394,7 +499,16 @@ class OAuthExchangeView(APIView):
                     subject=verified_identity.subject,
                     email=verified_identity.email,
                 )
-                if account_type == AccountProfile.AccountTypeEnum.COMPANY:
+                if invitation is not None:
+                    OrganizationMembership.objects.create(
+                        organization=invitation.organization,
+                        user=user,
+                        role=invitation.role,
+                    )
+                    invitation.accepted_at = timezone.now()
+                    invitation.save(update_fields=["accepted_at"])
+                    enqueue_task(sync_organization_seat_quantity, str(invitation.organization_id))
+                elif account_type == AccountProfile.AccountTypeEnum.COMPANY:
                     organization = Organization.objects.create(
                         name=values["company_name"].strip(),
                         created_by=user,
@@ -430,6 +544,16 @@ class OAuthExchangeView(APIView):
                     profile.display_name = verified_identity.display_name
                 profile.save(update_fields=["email", "display_name", "updated_at"])
 
+                if invitation is not None:
+                    OrganizationMembership.objects.get_or_create(
+                        organization=invitation.organization,
+                        user=user,
+                        defaults={"role": invitation.role},
+                    )
+                    invitation.accepted_at = timezone.now()
+                    invitation.save(update_fields=["accepted_at"])
+                    enqueue_task(sync_organization_seat_quantity, str(invitation.organization_id))
+
             link_signing_requests(user, verified_identity.email)
 
         payload = build_account_payload(user, is_new=is_new)
@@ -442,6 +566,124 @@ class OAuthExchangeView(APIView):
                 identity.get_provider_display(),
             )
         return Response(AccountSessionSerializer(payload).data, status=status.HTTP_200_OK)
+
+
+class OrganizationMembersView(APIView):
+    authentication_classes = []
+    permission_classes = [HasValidSignacoreSecret]
+    serializer_class = OrganizationInvitationSerializer
+
+    def get(self, request):
+        actor = get_admin_actor(request)
+        organization = get_actor_organization(request, actor)
+        if actor is None or organization is None:
+            return Response({"detail": "Company workspace access is required."}, status=status.HTTP_403_FORBIDDEN)
+        if not actor.is_superuser and not OrganizationMembership.objects.filter(
+            organization=organization,
+            user=actor,
+            status=OrganizationMembership.StatusEnum.ACTIVE,
+        ).exists():
+            return Response({"detail": "Company workspace access is required."}, status=status.HTTP_403_FORBIDDEN)
+        log_account_event(request, actor, AdminAuditLog.ActionEnum.ORGANIZATION_MEMBER_LIST, "Viewed workspace members.")
+        return Response({"items": serialize_organization_members(organization)}, status=status.HTTP_200_OK)
+
+    def post(self, request):
+        actor = get_admin_actor(request)
+        organization = get_actor_organization(request, actor)
+        membership = OrganizationMembership.objects.filter(
+            organization=organization,
+            user=actor,
+            status=OrganizationMembership.StatusEnum.ACTIVE,
+        ).first() if actor and organization else None
+        if actor is None or organization is None or (
+            not actor.is_superuser and (
+                membership is None
+                or membership.role not in {
+                    OrganizationMembership.RoleEnum.OWNER,
+                    OrganizationMembership.RoleEnum.ADMIN,
+                }
+            )
+        ):
+            return Response({"detail": "Workspace owner or admin access is required."}, status=status.HTTP_403_FORBIDDEN)
+
+        serializer = OrganizationInvitationSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        email = serializer.validated_data["email"]
+        role = serializer.validated_data["role"]
+        profile = AccountProfile.objects.select_related("user").filter(email_hash=email_digest(email)).first()
+        if profile and profile.account_type != AccountProfile.AccountTypeEnum.COMPANY:
+            return Response({"detail": "Only company accounts can join a workspace."}, status=status.HTTP_409_CONFLICT)
+        if profile and OrganizationMembership.objects.filter(organization=organization, user=profile.user).exists():
+            return Response({"detail": "This account is already a workspace member."}, status=status.HTTP_409_CONFLICT)
+        if OrganizationInvitation.objects.filter(
+            organization=organization,
+            email_hash=email_digest(email),
+            accepted_at__isnull=True,
+            expires_at__gt=timezone.now(),
+        ).exists():
+            return Response({"detail": "An invitation is already pending for this email."}, status=status.HTTP_409_CONFLICT)
+
+        token = secrets.token_urlsafe(32)
+        invitation = OrganizationInvitation.objects.create(
+            organization=organization,
+            invited_by=actor,
+            email=email,
+            role=role,
+            token_hash=invitation_token_digest(token),
+            expires_at=timezone.now() + timedelta(days=7),
+        )
+        log_account_event(
+            request,
+            actor,
+            AdminAuditLog.ActionEnum.ORGANIZATION_MEMBER_INVITE,
+            f"Invited {email} to {organization.name}.",
+        )
+        enqueue_task(
+            send_organization_invitation,
+            email,
+            organization.name,
+            actor.get_full_name() or actor.username,
+            role,
+            token,
+        )
+        serialized_members = serialize_organization_members(organization)
+        invited_item = next(
+            item for item in serialized_members if str(item["id"]) == str(invitation.id)
+        )
+        return Response(
+            {"detail": "Invitation sent.", "item": invited_item},
+            status=status.HTTP_201_CREATED,
+        )
+
+    def delete(self, request, membership_id):
+        actor = get_admin_actor(request)
+        organization = get_actor_organization(request, actor)
+        membership = OrganizationMembership.objects.filter(
+            id=membership_id,
+            organization=organization,
+            status=OrganizationMembership.StatusEnum.ACTIVE,
+        ).select_related("user").first() if actor and organization else None
+        actor_membership = OrganizationMembership.objects.filter(
+            organization=organization,
+            user=actor,
+            status=OrganizationMembership.StatusEnum.ACTIVE,
+        ).first() if actor and organization else None
+        if actor is None or organization is None or (
+            not actor.is_superuser and (actor_membership is None or actor_membership.role not in {
+                OrganizationMembership.RoleEnum.OWNER,
+                OrganizationMembership.RoleEnum.ADMIN,
+            })
+        ):
+            return Response({"detail": "Workspace owner or admin access is required."}, status=status.HTTP_403_FORBIDDEN)
+        if membership is None:
+            return Response({"detail": "Workspace member not found."}, status=status.HTTP_404_NOT_FOUND)
+        if membership.role == OrganizationMembership.RoleEnum.OWNER:
+            return Response({"detail": "The workspace owner cannot be removed."}, status=status.HTTP_400_BAD_REQUEST)
+        membership.status = OrganizationMembership.StatusEnum.SUSPENDED
+        membership.save(update_fields=["status", "updated_at"])
+        enqueue_task(sync_organization_seat_quantity, str(organization.id))
+        log_account_event(request, actor, AdminAuditLog.ActionEnum.ORGANIZATION_MEMBER_REMOVE, "Removed a workspace member.")
+        return Response(status=status.HTTP_204_NO_CONTENT)
 
 
 class AccountSigningRequestsView(APIView):

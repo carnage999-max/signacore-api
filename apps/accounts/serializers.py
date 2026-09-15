@@ -1,7 +1,13 @@
 from django.contrib.auth.password_validation import validate_password
 from rest_framework import serializers
 
-from .models import AccountProfile, OAuthIntentEnum, SocialIdentity
+from .models import (
+    AccountProfile,
+    OAuthIntentEnum,
+    OrganizationInvitation,
+    OrganizationMembership,
+    SocialIdentity,
+)
 
 
 class OAuthExchangeSerializer(serializers.Serializer):
@@ -18,6 +24,7 @@ class OAuthExchangeSerializer(serializers.Serializer):
     )
     company_name = serializers.CharField(max_length=255, required=False, allow_blank=True)
     display_name = serializers.CharField(max_length=255, required=False, allow_blank=True)
+    invitation_token = serializers.CharField(max_length=255, required=False, allow_blank=True)
 
 
 class EmailRegistrationSerializer(serializers.Serializer):
@@ -31,6 +38,7 @@ class EmailRegistrationSerializer(serializers.Serializer):
         )
     )
     company_name = serializers.CharField(max_length=255, required=False, allow_blank=True)
+    invitation_token = serializers.CharField(max_length=255, required=False, allow_blank=True)
 
     def validate_email(self, value: str) -> str:
         return value.strip().lower()
@@ -48,6 +56,27 @@ class EmailRegistrationSerializer(serializers.Serializer):
                 {"company_name": ["Company name is required for a company account."]}
             )
         return attrs
+
+
+class OrganizationMemberSerializer(serializers.Serializer):
+    id = serializers.UUIDField()
+    user_id = serializers.IntegerField(allow_null=True)
+    name = serializers.CharField()
+    email = serializers.EmailField()
+    role = serializers.ChoiceField(choices=OrganizationMembership.RoleEnum.choices)
+    status = serializers.ChoiceField(choices=OrganizationMembership.StatusEnum.choices)
+    joined_at = serializers.DateTimeField(allow_null=True)
+
+
+class OrganizationInvitationSerializer(serializers.Serializer):
+    email = serializers.EmailField(max_length=254)
+    role = serializers.ChoiceField(
+        choices=OrganizationInvitation.RoleEnum.choices,
+        default=OrganizationInvitation.RoleEnum.MEMBER,
+    )
+
+    def validate_email(self, value: str) -> str:
+        return value.strip().lower()
 
 
 class EmailLoginSerializer(serializers.Serializer):

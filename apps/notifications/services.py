@@ -158,6 +158,36 @@ def send_invitation_email(signing_request: SigningRequest) -> None:
     )
 
 
+def send_organization_invitation(
+    email: str,
+    organization_name: str,
+    inviter_name: str,
+    role: str,
+    token: str,
+) -> None:
+    invitation_url = (
+        f"{settings.SIGNACORE_APP_URL.rstrip('/')}/register"
+        f"?role=company&invite={token}"
+    )
+    subject = f"You have been invited to {organization_name} on SignaCore"
+    body = (
+        f"Hello,\n\n{inviter_name} invited you to join {organization_name} on SignaCore.\n\n"
+        f"Create your company account: {invitation_url}\n\n"
+        "This invitation expires in 7 days. If you were not expecting it, ignore this email.\n"
+    )
+    send_email(
+        subject,
+        body,
+        [email],
+        html_body=build_branded_email_html(
+            title="You are invited to a workspace",
+            message=f"{inviter_name} invited you to join {organization_name} as a {role.lower()}.",
+            action_label="Join workspace",
+            action_url=invitation_url,
+            details=[("Workspace", organization_name), ("Role", role.title())],
+            footer="This invitation expires in 7 days. If you were not expecting it, ignore this email.",
+        ),
+    )
 def send_otp_email_message(signing_request: SigningRequest, otp_code: str) -> None:
     signer_name = signing_request.signer_name or "there"
     subject = f"Your Signacore verification code for {signing_request.document.title}"

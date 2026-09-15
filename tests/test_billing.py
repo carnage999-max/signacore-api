@@ -125,6 +125,7 @@ class BillingApiTests(TestCase):
             amount=Decimal("9.99"),
             currency="USD",
             billing_interval="month",
+            quantity=1,
         )
 
     def test_inactive_plan_cannot_start_checkout(self) -> None:

@@ -9,6 +9,7 @@ from apps.notifications.services import (
     send_account_welcome_email,
     send_completion_email,
     send_invitation_email,
+    send_organization_invitation as send_organization_invitation_email,
     send_otp_email_message,
     send_progress_email,
 )
@@ -42,6 +43,18 @@ def send_invitation_email_for_request(signing_request_id: str) -> None:
         return None
 
     send_invitation_email(signing_request)
+    return None
+
+
+@shared_task(name="tasks.notifications.send_organization_invitation")
+def send_organization_invitation(
+    email: str,
+    organization_name: str,
+    inviter_name: str,
+    role: str,
+    token: str,
+) -> None:
+    send_organization_invitation_email(email, organization_name, inviter_name, role, token)
     return None
 
 
@@ -149,4 +162,23 @@ def send_account_login_alert(user_id: int, method: str) -> None:
         return None
 
     send_account_login_email(user, method)
+    return None
+
+
+@shared_task(name="tasks.notifications.sync_organization_seat_quantity")
+def sync_organization_seat_quantity(organization_id: str) -> None:
+    from apps.accounts.models import Organization
+    from apps.billing.models import OrganizationSubscription
+    from django.conf import settings
+    from services.stripe_client import StripeAPIClient
+
+    organization = Organization.objects.filter(pk=organization_id).first()
+    subscription = OrganizationSubscription.objects.filter(organization=organization).first() if organization else None
+    if not subscription or not subscription.stripe_subscription_id or not settings.STRIPE_SECRET_KEY:
+        return None
+    quantity = max(
+        organization.memberships.filter(status="ACTIVE", user__is_active=True).count(),
+        1,
+    )
+    StripeAPIClient().update_subscription_quantity(subscription.stripe_subscription_id, quantity)
     return None

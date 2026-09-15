@@ -7,7 +7,7 @@ from django.core.files.base import ContentFile
 from django.test import TestCase, override_settings
 from rest_framework.test import APIClient
 
-from apps.accounts.models import AccountProfile, Organization, OrganizationMembership, SocialIdentity
+from apps.accounts.models import AccountProfile, Organization, OrganizationInvitation, OrganizationMembership, SocialIdentity
 from apps.documents.models import Document
 from apps.signing.models import SigningRequest
 from services.oauth_client import VerifiedOAuthIdentity
@@ -25,6 +25,38 @@ class OAuthAccountTests(TestCase):
         cache.clear()
         self.client = APIClient()
         self.client.credentials(HTTP_X_SIGNACORE_SECRET="test-signacore-secret")
+
+    def test_company_owner_can_invite_workspace_member(self) -> None:
+        owner = get_user_model().objects.create_user(username="owner", is_active=True, is_staff=True)
+        AccountProfile.objects.create(
+            user=owner,
+            account_type=AccountProfile.AccountTypeEnum.COMPANY,
+            email="owner@example.com",
+            display_name="Owner",
+        )
+        organization = Organization.objects.create(name="Example Legal", created_by=owner)
+        OrganizationMembership.objects.create(
+            organization=organization,
+            user=owner,
+            role=OrganizationMembership.RoleEnum.OWNER,
+        )
+        self.client.credentials(
+            HTTP_X_SIGNACORE_SECRET="test-signacore-secret",
+            HTTP_X_SIGNACORE_ADMIN_ID=str(owner.id),
+            HTTP_X_SIGNACORE_ORGANIZATION_ID=str(organization.id),
+        )
+
+        response = self.client.post(
+            "/api/auth/organization/members/",
+            {"email": "member@example.com", "role": "MEMBER"},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 201, response.json())
+        invitation = OrganizationInvitation.objects.get(organization=organization)
+        self.assertEqual(invitation.email, "member@example.com")
+        self.assertEqual(response.json()["item"]["status"], "INVITED")
+        self.assertIn("Join workspace", mail.outbox[-1].alternatives[0][0])
 
     @patch("apps.accounts.views.exchange_oauth_code")
     def test_google_company_signup_creates_owner_workspace(self, exchange_code) -> None:

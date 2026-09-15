@@ -116,6 +116,44 @@ class OrganizationMembership(models.Model):
         return f"{self.user.username} - {self.organization.name} ({self.get_role_display()})"
 
 
+class OrganizationInvitation(models.Model):
+    class RoleEnum(models.TextChoices):
+        ADMIN = "ADMIN", "Admin"
+        MEMBER = "MEMBER", "Member"
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    organization = models.ForeignKey(
+        Organization,
+        on_delete=models.CASCADE,
+        related_name="invitations",
+    )
+    invited_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        related_name="signacore_invitations_sent",
+    )
+    email = EncryptedEmailField()
+    email_hash = models.CharField(max_length=64, db_index=True, editable=False)
+    role = models.CharField(max_length=32, choices=RoleEnum.choices, default=RoleEnum.MEMBER)
+    token_hash = models.CharField(max_length=64, unique=True, editable=False)
+    expires_at = models.DateTimeField()
+    accepted_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ("-created_at",)
+
+    def __str__(self) -> str:
+        return f"{self.email} invited to {self.organization.name}"
+
+    def save(self, *args, **kwargs):
+        self.email_hash = email_digest(self.email)
+        update_fields = kwargs.get("update_fields")
+        if update_fields is not None:
+            kwargs["update_fields"] = set(update_fields) | {"email_hash"}
+        return super().save(*args, **kwargs)
+
+
 class SocialIdentity(models.Model):
     class ProviderEnum(models.TextChoices):
         GOOGLE = "GOOGLE", "Google"

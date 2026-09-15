@@ -18,6 +18,7 @@ class OrganizationSubscriptionSerializer(serializers.ModelSerializer):
     can_create_checkout = serializers.SerializerMethodField()
     can_manage_billing = serializers.SerializerMethodField()
     available_plans = serializers.SerializerMethodField()
+    seat_count = serializers.SerializerMethodField()
 
     class Meta:
         model = OrganizationSubscription
@@ -31,6 +32,7 @@ class OrganizationSubscriptionSerializer(serializers.ModelSerializer):
             "can_create_checkout",
             "can_manage_billing",
             "available_plans",
+            "seat_count",
         )
         read_only_fields = fields
 
@@ -52,6 +54,12 @@ class OrganizationSubscriptionSerializer(serializers.ModelSerializer):
             ),
         )
         return BillingPlanConfigurationSerializer(plans, many=True).data
+
+    def get_seat_count(self, obj: OrganizationSubscription) -> int:
+        return obj.organization.memberships.filter(
+            status="ACTIVE",
+            user__is_active=True,
+        ).count()
 
 
 class CheckoutSessionSerializer(serializers.Serializer):
