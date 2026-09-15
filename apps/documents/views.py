@@ -20,6 +20,7 @@ from drf_spectacular.utils import extend_schema
 
 from apps.signing.models import SigningRequest
 from apps.accounts.models import AccountProfile, OrganizationMembership
+from apps.billing.entitlements import PlanFeatureEnum, require_feature, require_monthly_document_capacity
 from services.pdf_engine import PDFEngine
 from tasks.notifications import send_invitation_email_for_request
 from tasks.notifications import send_admin_account_created, send_admin_password_changed
@@ -328,13 +329,20 @@ class AdminAuditLogsView(APIView):
     serializer_class = AdminAuditLogSerializer
 
     def get(self, request):
-        actor = require_superuser_actor(request)
-        if not actor:
-            return Response({"detail": "Superuser access is required."}, status=status.HTTP_403_FORBIDDEN)
-
-        organization = get_actor_organization(request, actor)
+        actor, organization = get_request_actor_and_organization(request)
         if organization is None:
             raise PermissionDenied("No active company workspace is available.")
+        if not actor.is_superuser and not OrganizationMembership.objects.filter(
+            organization=organization,
+            user=actor,
+            status=OrganizationMembership.StatusEnum.ACTIVE,
+            role__in=(
+                OrganizationMembership.RoleEnum.OWNER,
+                OrganizationMembership.RoleEnum.ADMIN,
+            ),
+        ).exists():
+            raise PermissionDenied("Workspace administrator access is required.")
+        require_feature(actor, organization, PlanFeatureEnum.AUDIT_HISTORY)
         logs = AdminAuditLog.objects.select_related("actor").filter(organization=organization)[:100]
         log_admin_event(
             request,
@@ -378,6 +386,9 @@ class AdminDocumentsView(APIView):
         serializer = DocumentUploadSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
 
+        actor, organization = get_request_actor_and_organization(request)
+        require_monthly_document_capacity(actor, organization, operation="create")
+
         title = serializer.validated_data["title"]
         pdf_file = serializer.validated_data["pdf_file"]
         engine = PDFEngine()
@@ -390,7 +401,6 @@ class AdminDocumentsView(APIView):
         finally:
             pdf_file.seek(0)
 
-        actor, organization = get_request_actor_and_organization(request)
         with transaction.atomic():
             document = Document.objects.create(
                 title=title,
@@ -549,6 +559,8 @@ class AdminDocumentSendView(APIView):
 
     def post(self, request, document_id):
         document = get_scoped_document(request, document_id, prefetch=("fields", "signing_requests"))
+        actor, organization = get_request_actor_and_organization(request)
+        require_monthly_document_capacity(actor, organization, operation="send", document=document)
         serializer = DocumentSendSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
 
@@ -775,6 +787,8 @@ class AdminDocumentDownloadView(APIView):
 
     def get(self, request, document_id):
         document = get_scoped_document(request, document_id)
+        actor, organization = get_request_actor_and_organization(request)
+        require_feature(actor, organization, PlanFeatureEnum.COMPLETED_ARCHIVE)
         if document.status != Document.StatusEnum.COMPLETED or not document.signed_pdf:
             return Response(
                 {"status": ["Signed PDF is only available for completed documents."]},

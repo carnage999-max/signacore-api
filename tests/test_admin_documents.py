@@ -15,6 +15,7 @@ from django.utils import timezone
 from rest_framework.test import APIClient
 
 from apps.accounts.models import Organization, OrganizationMembership
+from apps.billing.models import OrganizationSubscription
 from apps.documents.models import AdminAuditLog, Document, DocumentField
 from apps.signing.models import SigningRequest
 
@@ -121,6 +122,49 @@ class AdminDocumentUploadTests(TestCase):
             HTTP_X_SIGNACORE_ADMIN_ID=str(self.user.id),
             HTTP_X_SIGNACORE_ORGANIZATION_ID=str(self.organization.id),
         )
+
+    def test_free_plan_blocks_the_sixth_document_this_month(self) -> None:
+        for index in range(5):
+            Document.objects.create(
+                title=f"Free document {index}",
+                original_pdf=SimpleUploadedFile(
+                    f"free-{index}.pdf",
+                    build_flat_pdf(),
+                    content_type="application/pdf",
+                ),
+                created_by=self.user,
+                organization=self.organization,
+            )
+
+        response = self.client.post(
+            "/api/admin/documents/",
+            {
+                "title": "Sixth document",
+                "pdf_file": SimpleUploadedFile("sixth.pdf", build_flat_pdf(), content_type="application/pdf"),
+            },
+            format="multipart",
+        )
+
+        self.assertEqual(response.status_code, 403, response.json())
+        self.assertEqual(response.json()["code"], "FREE_MONTHLY_LIMIT_REACHED")
+        self.assertEqual(Document.objects.filter(organization=self.organization).count(), 5)
+
+    def test_professional_subscription_allows_audit_history(self) -> None:
+        OrganizationSubscription.objects.create(
+            organization=self.organization,
+            plan=OrganizationSubscription.PlanEnum.PROFESSIONAL,
+            status=OrganizationSubscription.StatusEnum.ACTIVE,
+        )
+
+        response = self.client.get("/api/admin/audit-logs/")
+
+        self.assertEqual(response.status_code, 200, response.json())
+
+    def test_free_plan_cannot_view_audit_history(self) -> None:
+        response = self.client.get("/api/admin/audit-logs/")
+
+        self.assertEqual(response.status_code, 403, response.json())
+        self.assertEqual(response.json()["code"], "PLAN_FEATURE_REQUIRED")
 
     def test_admin_routes_require_signacore_secret_header(self) -> None:
         self.client.credentials()

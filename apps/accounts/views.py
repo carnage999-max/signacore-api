@@ -20,6 +20,7 @@ from rest_framework.throttling import ScopedRateThrottle
 from rest_framework.views import APIView
 
 from apps.documents.auth import HasValidSignacoreSecret, get_admin_actor, get_actor_organization
+from apps.billing.entitlements import PlanFeatureEnum, require_feature
 from apps.documents.models import AdminAuditLog
 from apps.documents.views import get_request_ip
 from apps.signing.models import SigningRequest
@@ -610,6 +611,8 @@ class OrganizationMembersView(APIView):
         ):
             return Response({"detail": "Workspace owner or admin access is required."}, status=status.HTTP_403_FORBIDDEN)
 
+        require_feature(actor, organization, PlanFeatureEnum.TEAM_MANAGEMENT)
+
         serializer = OrganizationInvitationSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         email = serializer.validated_data["email"]
@@ -679,6 +682,7 @@ class OrganizationMembersView(APIView):
             })
         ):
             return Response({"detail": "Workspace owner or admin access is required."}, status=status.HTTP_403_FORBIDDEN)
+        require_feature(actor, organization, PlanFeatureEnum.TEAM_MANAGEMENT)
         if membership is None:
             return Response({"detail": "Workspace member not found."}, status=status.HTTP_404_NOT_FOUND)
         if membership.role == OrganizationMembership.RoleEnum.OWNER:

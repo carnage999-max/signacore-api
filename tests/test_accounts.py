@@ -8,6 +8,7 @@ from django.test import TestCase, override_settings
 from rest_framework.test import APIClient
 
 from apps.accounts.models import AccountProfile, Organization, OrganizationInvitation, OrganizationMembership, SocialIdentity
+from apps.billing.models import OrganizationSubscription
 from apps.documents.models import Document
 from apps.signing.models import SigningRequest
 from services.oauth_client import VerifiedOAuthIdentity
@@ -40,6 +41,11 @@ class OAuthAccountTests(TestCase):
             user=owner,
             role=OrganizationMembership.RoleEnum.OWNER,
         )
+        OrganizationSubscription.objects.create(
+            organization=organization,
+            plan=OrganizationSubscription.PlanEnum.BUSINESS,
+            status=OrganizationSubscription.StatusEnum.ACTIVE,
+        )
         self.client.credentials(
             HTTP_X_SIGNACORE_SECRET="test-signacore-secret",
             HTTP_X_SIGNACORE_ADMIN_ID=str(owner.id),
@@ -57,6 +63,57 @@ class OAuthAccountTests(TestCase):
         self.assertEqual(invitation.email, "member@example.com")
         self.assertEqual(response.json()["item"]["status"], "INVITED")
         self.assertIn("Join workspace", mail.outbox[-1].alternatives[0][0])
+
+    def test_free_owner_cannot_invite_workspace_member(self) -> None:
+        owner = get_user_model().objects.create_user(username="free-owner", is_active=True, is_staff=True)
+        organization = Organization.objects.create(name="Free Company", created_by=owner)
+        OrganizationMembership.objects.create(
+            organization=organization,
+            user=owner,
+            role=OrganizationMembership.RoleEnum.OWNER,
+        )
+        self.client.credentials(
+            HTTP_X_SIGNACORE_SECRET="test-signacore-secret",
+            HTTP_X_SIGNACORE_ADMIN_ID=str(owner.id),
+            HTTP_X_SIGNACORE_ORGANIZATION_ID=str(organization.id),
+        )
+
+        response = self.client.post(
+            "/api/auth/organization/members/",
+            {"email": "member@example.com", "role": "MEMBER"},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 403, response.json())
+        self.assertEqual(response.json()["code"], "PLAN_FEATURE_REQUIRED")
+
+    def test_canceled_business_subscription_cannot_manage_workspace(self) -> None:
+        owner = get_user_model().objects.create_user(username="canceled-owner", is_active=True, is_staff=True)
+        organization = Organization.objects.create(name="Canceled Company", created_by=owner)
+        OrganizationMembership.objects.create(
+            organization=organization,
+            user=owner,
+            role=OrganizationMembership.RoleEnum.OWNER,
+        )
+        OrganizationSubscription.objects.create(
+            organization=organization,
+            plan=OrganizationSubscription.PlanEnum.BUSINESS,
+            status=OrganizationSubscription.StatusEnum.CANCELED,
+        )
+        self.client.credentials(
+            HTTP_X_SIGNACORE_SECRET="test-signacore-secret",
+            HTTP_X_SIGNACORE_ADMIN_ID=str(owner.id),
+            HTTP_X_SIGNACORE_ORGANIZATION_ID=str(organization.id),
+        )
+
+        response = self.client.post(
+            "/api/auth/organization/members/",
+            {"email": "member@example.com", "role": "MEMBER"},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 403, response.json())
+        self.assertEqual(response.json()["plan"], "FREE")
 
     @patch("apps.accounts.views.exchange_oauth_code")
     def test_google_company_signup_creates_owner_workspace(self, exchange_code) -> None:

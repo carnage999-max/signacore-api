@@ -1,5 +1,6 @@
 from rest_framework import serializers
 
+from .entitlements import get_entitlement_snapshot
 from .models import BillingPlanConfiguration, OrganizationSubscription
 
 
@@ -19,6 +20,7 @@ class OrganizationSubscriptionSerializer(serializers.ModelSerializer):
     can_manage_billing = serializers.SerializerMethodField()
     available_plans = serializers.SerializerMethodField()
     seat_count = serializers.SerializerMethodField()
+    entitlements = serializers.SerializerMethodField()
 
     class Meta:
         model = OrganizationSubscription
@@ -33,6 +35,7 @@ class OrganizationSubscriptionSerializer(serializers.ModelSerializer):
             "can_manage_billing",
             "available_plans",
             "seat_count",
+            "entitlements",
         )
         read_only_fields = fields
 
@@ -60,6 +63,13 @@ class OrganizationSubscriptionSerializer(serializers.ModelSerializer):
             status="ACTIVE",
             user__is_active=True,
         ).count()
+
+    def get_entitlements(self, obj: OrganizationSubscription) -> dict:
+        return get_entitlement_snapshot(
+            obj.organization,
+            actor=self.context.get("actor"),
+            subscription=obj,
+        )
 
 
 class CheckoutSessionSerializer(serializers.Serializer):

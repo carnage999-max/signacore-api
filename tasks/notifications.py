@@ -176,9 +176,12 @@ def sync_organization_seat_quantity(organization_id: str) -> None:
     subscription = OrganizationSubscription.objects.filter(organization=organization).first() if organization else None
     if not subscription or not subscription.stripe_subscription_id or not settings.STRIPE_SECRET_KEY:
         return None
-    quantity = max(
-        organization.memberships.filter(status="ACTIVE", user__is_active=True).count(),
-        1,
-    )
+    if subscription.plan != OrganizationSubscription.PlanEnum.BUSINESS:
+        quantity = 1
+    else:
+        quantity = max(
+            organization.memberships.filter(status="ACTIVE", user__is_active=True).count(),
+            1,
+        )
     StripeAPIClient().update_subscription_quantity(subscription.stripe_subscription_id, quantity)
     return None

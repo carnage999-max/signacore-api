@@ -49,7 +49,9 @@ def get_organization_subscription(organization: Organization) -> OrganizationSub
     return subscription
 
 
-def get_organization_seat_count(organization: Organization) -> int:
+def get_organization_seat_count(organization: Organization, plan: str) -> int:
+    if plan != OrganizationSubscription.PlanEnum.BUSINESS:
+        return 1
     return max(
         organization.memberships.filter(
             status=OrganizationMembership.StatusEnum.ACTIVE,
@@ -123,7 +125,7 @@ class BillingStatusView(APIView):
     serializer_class = OrganizationSubscriptionSerializer
 
     def get(self, request):
-        _, organization = get_request_actor_and_organization(request)
+        actor, organization = get_request_actor_and_organization(request)
         subscription = get_organization_subscription(organization)
         log_admin_event(
             request,
@@ -132,7 +134,7 @@ class BillingStatusView(APIView):
             target_type="organization",
             target_id=organization.id,
         )
-        return Response(OrganizationSubscriptionSerializer(subscription).data)
+        return Response(OrganizationSubscriptionSerializer(subscription, context={"actor": actor}).data)
 
 
 class BillingCheckoutView(APIView):
@@ -184,7 +186,7 @@ class BillingCheckoutView(APIView):
                 amount=plan_configuration.amount,
                 currency=plan_configuration.currency,
                 billing_interval=plan_configuration.billing_interval,
-                quantity=get_organization_seat_count(organization),
+                quantity=get_organization_seat_count(organization, plan),
             )
             checkout_url = str(checkout["url"])
         except (httpx.HTTPError, KeyError, ValueError):
