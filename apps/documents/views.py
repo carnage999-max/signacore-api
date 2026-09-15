@@ -81,10 +81,11 @@ def get_scoped_document(request, document_id, *, prefetch: tuple[str, ...] = ())
 
 
 def get_request_ip(request) -> str:
+    real_ip = request.META.get("HTTP_X_REAL_IP", "").strip()
+    if real_ip:
+        return real_ip
     forwarded_for = request.META.get("HTTP_X_FORWARDED_FOR", "")
-    if forwarded_for:
-        return forwarded_for.split(",")[0].strip()
-    return request.META.get("REMOTE_ADDR", "")
+    return forwarded_for.split(",")[0].strip() if forwarded_for else request.META.get("REMOTE_ADDR", "")
 
 
 def get_admin_login_url() -> str:

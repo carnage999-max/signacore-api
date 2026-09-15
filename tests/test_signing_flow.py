@@ -186,7 +186,8 @@ class SignerFlowTests(TestCase):
                 f"/api/sign/{self.signing_request.id}/otp/verify/",
                 {"otp": "123456"},
                 format="json",
-                HTTP_X_FORWARDED_FOR="203.0.113.10, 10.0.0.2",
+                HTTP_X_REAL_IP="203.0.113.10",
+                HTTP_X_FORWARDED_FOR="198.51.100.77, 10.0.0.2",
             )
 
         self.assertEqual(response.status_code, 200, response.json())

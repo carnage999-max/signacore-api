@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hmac
+
 from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.db import transaction
@@ -20,7 +22,7 @@ class HasValidSignacoreSecret(BasePermission):
             return False
 
         provided_secret = request.headers.get("X-Signacore-Secret", "")
-        return provided_secret == expected_secret
+        return hmac.compare_digest(provided_secret, expected_secret)
 
 
 def get_admin_actor(request):

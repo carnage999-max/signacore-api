@@ -40,14 +40,13 @@ def mask_email(email: str) -> str:
 
 
 def get_client_ip(request) -> str:
-    forwarded_for = str(request.META.get("HTTP_X_FORWARDED_FOR", "")).strip()
-    if forwarded_for:
-        return forwarded_for.split(",")[0].strip()
-
     real_ip = str(request.META.get("HTTP_X_REAL_IP", "")).strip()
     if real_ip:
         return real_ip
 
+    forwarded_for = str(request.META.get("HTTP_X_FORWARDED_FOR", "")).strip()
+    if forwarded_for:
+        return forwarded_for.split(",")[0].strip()
     return str(request.META.get("REMOTE_ADDR", "")).strip()
 
 
