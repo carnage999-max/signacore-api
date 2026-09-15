@@ -88,8 +88,10 @@ encrypted_file_storage = EncryptedFileSystemStorage()
 
 def _temporary_root() -> Path:
     root = Path(getattr(settings, "SIGNACORE_TEMP_ROOT", tempfile.gettempdir()))
-    root.mkdir(mode=0o700, parents=True, exist_ok=True)
-    os.chmod(root, 0o700)
+    if not root.exists():
+        root.mkdir(mode=0o700, parents=True)
+    elif not root.is_dir():
+        raise NotADirectoryError(f"SignaCore temporary root is not a directory: {root}")
     return root
 
 

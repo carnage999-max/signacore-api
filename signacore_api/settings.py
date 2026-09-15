@@ -53,8 +53,14 @@ def env_csv(key: str, default: str = "") -> list[str]:
     return [item.strip() for item in raw.split(",") if item.strip()]
 
 
-SECRET_KEY = env("SECRET_KEY", "signacore-local-development-key")
 DEBUG = env_bool("DEBUG", True)
+SECRET_KEY = env("SECRET_KEY")
+if not SECRET_KEY:
+    if not DEBUG:
+        raise ImproperlyConfigured("SECRET_KEY must be configured when DEBUG=False.")
+    SECRET_KEY = "signacore-local-development-key-do-not-use-in-production"
+if not DEBUG and len(SECRET_KEY) < 50:
+    raise ImproperlyConfigured("SECRET_KEY must contain at least 50 characters when DEBUG=False.")
 ALLOWED_HOSTS = env_csv("ALLOWED_HOSTS", "127.0.0.1,localhost")
 
 INSTALLED_APPS = [
@@ -154,6 +160,13 @@ MEDIA_ROOT = SIGNACORE_STORAGE_ROOT
 
 SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
 USE_X_FORWARDED_HOST = True
+SECURE_SSL_REDIRECT = env_bool("SECURE_SSL_REDIRECT", not DEBUG)
+SECURE_HSTS_SECONDS = env_int("SECURE_HSTS_SECONDS", 31536000 if not DEBUG else 0)
+SECURE_HSTS_INCLUDE_SUBDOMAINS = env_bool("SECURE_HSTS_INCLUDE_SUBDOMAINS", not DEBUG)
+SECURE_HSTS_PRELOAD = env_bool("SECURE_HSTS_PRELOAD", not DEBUG)
+SESSION_COOKIE_SECURE = env_bool("SESSION_COOKIE_SECURE", not DEBUG)
+CSRF_COOKIE_SECURE = env_bool("CSRF_COOKIE_SECURE", not DEBUG)
+CSRF_TRUSTED_ORIGINS = env_csv("CSRF_TRUSTED_ORIGINS")
 
 if "test" in sys.argv:
     STATIC_ROOT = BASE_DIR / "staticfiles-test"
@@ -192,6 +205,18 @@ SPECTACULAR_SETTINGS = {
         {"name": "admin", "description": "Admin console operations proxied by the SignaCore web app."},
         {"name": "signer", "description": "Public signer workflow endpoints."},
     ],
+    "ENUM_NAME_OVERRIDES": {
+        "SignacorePlan": (
+            ("FREE", "Free"),
+            ("PROFESSIONAL", "Professional"),
+            ("BUSINESS", "Business"),
+            ("ENTERPRISE", "Enterprise"),
+        ),
+        "SignacoreCheckoutPlan": (
+            ("PROFESSIONAL", "Professional"),
+            ("BUSINESS", "Business"),
+        ),
+    },
 }
 
 CORS_ALLOWED_ORIGINS = env_csv("CORS_ALLOWED_ORIGINS")

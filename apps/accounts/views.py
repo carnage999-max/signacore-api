@@ -12,6 +12,7 @@ from django.contrib.auth import get_user_model
 from django.contrib.auth.hashers import check_password, make_password
 from django.contrib.auth.tokens import default_token_generator
 from django.db import IntegrityError, transaction
+from drf_spectacular.utils import extend_schema, extend_schema_view
 from django.utils import timezone
 from django.utils.http import urlsafe_base64_decode
 from rest_framework import status
@@ -692,6 +693,21 @@ class OrganizationMembersView(APIView):
         enqueue_task(sync_organization_seat_quantity, str(organization.id))
         log_account_event(request, actor, AdminAuditLog.ActionEnum.ORGANIZATION_MEMBER_REMOVE, "Removed a workspace member.")
         return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+@extend_schema_view(
+    get=extend_schema(operation_id="organization_members_list"),
+    post=extend_schema(operation_id="organization_members_invite"),
+)
+class OrganizationMembersCollectionView(OrganizationMembersView):
+    pass
+
+
+@extend_schema_view(
+    delete=extend_schema(operation_id="organization_member_remove"),
+)
+class OrganizationMemberDetailView(OrganizationMembersView):
+    http_method_names = ["delete", "options"]
 
 
 class AccountSigningRequestsView(APIView):
