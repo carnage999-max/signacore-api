@@ -310,6 +310,10 @@ class EmailVerificationView(APIView):
             if was_inactive:
                 user.is_active = True
                 user.save(update_fields=["is_active"])
+                for organization_id in user.signacore_memberships.filter(
+                    status=OrganizationMembership.StatusEnum.ACTIVE,
+                ).values_list("organization_id", flat=True):
+                    enqueue_task(sync_organization_seat_quantity, str(organization_id))
                 log_account_event(
                     request,
                     user,
