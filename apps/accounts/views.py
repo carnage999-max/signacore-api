@@ -32,6 +32,7 @@ from tasks.notifications import (
     send_organization_invitation,
     sync_organization_seat_quantity,
 )
+from utils.email_verification import check_email_verification_token
 from utils.identity import email_digest
 from utils.task_dispatch import enqueue_task
 from utils.throttling import SignacoreRateThrottle
@@ -296,10 +297,12 @@ class EmailVerificationView(APIView):
                 .filter(pk=user_id)
                 .first()
             )
-            if user is None or not default_token_generator.check_token(
-                user,
-                serializer.validated_data["token"],
-            ):
+            token = serializer.validated_data["token"]
+            token_is_valid = user is not None and check_email_verification_token(token, user_id)
+            # Keep links issued before this token format change usable.
+            if user is not None and not token_is_valid:
+                token_is_valid = default_token_generator.check_token(user, token)
+            if user is None or not token_is_valid:
                 return Response(
                     {"detail": "This verification link is invalid or expired."},
                     status=status.HTTP_400_BAD_REQUEST,

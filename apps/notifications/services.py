@@ -1,5 +1,4 @@
 from django.conf import settings
-from django.contrib.auth.tokens import default_token_generator
 from django.core.mail import EmailMultiAlternatives
 from django.utils.encoding import force_bytes
 from django.utils.html import escape
@@ -7,6 +6,7 @@ from django.utils.http import urlsafe_base64_encode
 
 from apps.documents.models import Document
 from apps.signing.models import SigningRequest
+from utils.email_verification import make_email_verification_token
 
 
 def send_email(
@@ -371,7 +371,7 @@ def send_admin_password_changed_email(
 def send_account_verification_email(user) -> None:
     profile = user.signacore_profile
     uid = urlsafe_base64_encode(force_bytes(user.pk))
-    token = default_token_generator.make_token(user)
+    token = make_email_verification_token(user.pk)
     verification_url = f"{settings.SIGNACORE_APP_URL.rstrip('/')}/api/auth/email/verify" f"?uid={uid}&token={token}"
     subject = "Verify your SignaCore account"
     body = (
