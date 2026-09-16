@@ -291,7 +291,7 @@ class EmailVerificationView(APIView):
         with transaction.atomic():
             user = (
                 get_user_model()
-                .objects.select_for_update()
+                .objects.select_for_update(of=("self",))
                 .select_related("signacore_profile")
                 .filter(pk=user_id)
                 .first()
