@@ -51,6 +51,7 @@ test:
 	$(RUN_MANAGE) test
 
 validate:
+	$(RUN_MANAGE) migrate --check
 	$(RUN_MANAGE) check --deploy
 	$(RUN_MANAGE) test
 

@@ -143,7 +143,7 @@ After the staging deployment is healthy, run:
 make validate
 ```
 
-This runs Django's production deployment checks and the full isolated API test suite, including document organization isolation and authentication/OTP abuse throttling. OAuth provider exchanges remain mocked in this suite and must be tested separately with staging credentials.
+This checks that the running database has no pending migrations, runs Django's production deployment checks, and runs the full isolated API test suite, including document organization isolation and authentication/OTP abuse throttling. OAuth provider exchanges remain mocked in this suite and must be tested separately with staging credentials. The staging PostgreSQL user must have `CREATEDB` so Django can create its temporary test database.
 
 ## Commercial account configuration
 
