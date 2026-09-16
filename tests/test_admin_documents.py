@@ -180,6 +180,23 @@ class AdminDocumentUploadTests(TestCase):
             HTTP_X_SIGNACORE_ORGANIZATION_ID=str(self.organization.id),
         )
 
+    def test_admin_login_is_rate_limited_by_proxy_ip(self) -> None:
+        self.client.credentials(
+            HTTP_X_SIGNACORE_SECRET=settings.SIGNACORE_SHARED_SECRET,
+            HTTP_X_REAL_IP="198.51.100.221",
+        )
+        responses = [
+            self.client.post(
+                "/api/admin/auth/login/",
+                {"identifier": "admin", "password": "wrong-password"},
+                format="json",
+            )
+            for _ in range(6)
+        ]
+
+        self.assertTrue(all(response.status_code == 400 for response in responses[:5]))
+        self.assertEqual(responses[-1].status_code, 429)
+
     def test_upload_pdf_creates_document_and_extracts_acroform_fields(self) -> None:
         upload = SimpleUploadedFile(
             "employment.pdf",
@@ -907,3 +924,84 @@ class AdminDocumentUploadTests(TestCase):
             {item["id"] for item in list_response.json()["items"]},
         )
         self.assertEqual(detail_response.status_code, 404, detail_response.json())
+
+    def test_company_members_cannot_mutate_or_download_another_company_document(self) -> None:
+        other_owner = get_user_model().objects.create_user(
+            username="second-owner",
+            password="password123",
+            is_staff=True,
+        )
+        other_organization = Organization.objects.create(
+            name="Second Company",
+            created_by=other_owner,
+        )
+        OrganizationMembership.objects.create(
+            organization=other_organization,
+            user=other_owner,
+            role=OrganizationMembership.RoleEnum.OWNER,
+        )
+        other_document = Document.objects.create(
+            title="Second Private Agreement",
+            original_pdf=SimpleUploadedFile(
+                "second.pdf",
+                build_flat_pdf(),
+                content_type="application/pdf",
+            ),
+            created_by=other_owner,
+            organization=other_organization,
+            status=Document.StatusEnum.SENT,
+        )
+        other_field = DocumentField.objects.create(
+            document=other_document,
+            field_type=DocumentField.FieldTypeEnum.TEXT,
+            label="Private field",
+            page=1,
+            x=72,
+            y=120,
+            width=180,
+            height=24,
+            detection_source=DocumentField.DetectionSourceEnum.MANUAL,
+            order=1,
+        )
+        other_signing_request = SigningRequest.objects.create(
+            document=other_document,
+            signer_email="second-signer@example.com",
+            expires_at=timezone.now() + timedelta(days=7),
+        )
+
+        attempts = [
+            self.client.get(f"/api/admin/documents/{other_document.id}/pages/1/preview/"),
+            self.client.patch(
+                f"/api/admin/documents/{other_document.id}/",
+                {"title": "Changed by attacker"},
+                format="json",
+            ),
+            self.client.patch(
+                f"/api/admin/documents/{other_document.id}/fields/{other_field.id}/",
+                {"label": "Changed by attacker"},
+                format="json",
+            ),
+            self.client.delete(
+                f"/api/admin/documents/{other_document.id}/fields/{other_field.id}/",
+            ),
+            self.client.post(f"/api/admin/documents/{other_document.id}/void/", {}, format="json"),
+            self.client.post(
+                f"/api/admin/documents/{other_document.id}/send/",
+                {"signers": [{"signer_email": "attacker@example.com"}]},
+                format="json",
+            ),
+            self.client.post(
+                f"/api/admin/documents/{other_document.id}/signing-requests/{other_signing_request.id}/resend/",
+                {},
+                format="json",
+            ),
+            self.client.get(f"/api/admin/documents/{other_document.id}/download/"),
+        ]
+
+        self.assertTrue(all(response.status_code == 404 for response in attempts))
+        other_document.refresh_from_db()
+        other_field.refresh_from_db()
+        self.assertEqual(other_document.title, "Second Private Agreement")
+        self.assertEqual(other_document.status, Document.StatusEnum.SENT)
+        self.assertEqual(other_field.label, "Private field")
+        self.assertEqual(other_document.signing_requests.count(), 1)

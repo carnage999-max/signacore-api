@@ -185,7 +185,15 @@ REST_FRAMEWORK = {
     ),
     "DEFAULT_SCHEMA_CLASS": "drf_spectacular.openapi.AutoSchema",
     "DEFAULT_THROTTLE_RATES": {
+        "admin_auth": "5/minute",
         "email_auth": "10/minute",
+        "oauth_exchange": "10/minute",
+        "account_data": "60/minute",
+        "signer_context": "60/minute",
+        "signer_preview": "60/minute",
+        "signer_otp_send": "5/minute",
+        "signer_otp_verify": "10/minute",
+        "signer_submit": "10/minute",
     },
 }
 

@@ -23,6 +23,7 @@ from tasks.notifications import notify_admin_progress, send_completion_emails, s
 from utils.otp import generate_otp, hash_otp, verify_otp
 from utils.signer_session import build_signer_session_token, verify_signer_session_token
 from utils.task_dispatch import enqueue_task
+from utils.throttling import SignacoreRateThrottle
 from utils.file_storage import save_encrypted_field_file, temporary_output_file, temporary_plaintext_file
 
 from .models import FieldSubmission, SigningRequest
@@ -122,6 +123,8 @@ class SignerPortalView(TemplateView):
 class SignerContextView(APIView):
     permission_classes = []
     authentication_classes = []
+    throttle_classes = [SignacoreRateThrottle]
+    throttle_scope = "signer_context"
     serializer_class = SigningRequestSerializer
 
     def get(self, request, token):
@@ -165,6 +168,8 @@ class SignerContextView(APIView):
 class SignerPagePreviewView(APIView):
     permission_classes = []
     authentication_classes = []
+    throttle_classes = [SignacoreRateThrottle]
+    throttle_scope = "signer_preview"
     serializer_class = SigningRequestSerializer
 
     def get(self, request, token, page_number):
@@ -186,6 +191,8 @@ class SignerPagePreviewView(APIView):
 class SignerOtpSendView(APIView):
     permission_classes = []
     authentication_classes = []
+    throttle_classes = [SignacoreRateThrottle]
+    throttle_scope = "signer_otp_send"
     serializer_class = SigningRequestSerializer
 
     def post(self, request, token):
@@ -227,6 +234,8 @@ class SignerOtpSendView(APIView):
 class SignerOtpVerifyView(APIView):
     permission_classes = []
     authentication_classes = []
+    throttle_classes = [SignacoreRateThrottle]
+    throttle_scope = "signer_otp_verify"
     serializer_class = SignerOtpSerializer
 
     def post(self, request, token):
@@ -267,6 +276,8 @@ class SignerOtpVerifyView(APIView):
 class SignerSubmitView(APIView):
     permission_classes = []
     authentication_classes = []
+    throttle_classes = [SignacoreRateThrottle]
+    throttle_scope = "signer_submit"
     parser_classes = [MultiPartParser, FormParser]
     serializer_class = FieldSubmissionSerializer
 

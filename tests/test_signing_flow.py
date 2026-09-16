@@ -7,6 +7,7 @@ from datetime import timedelta
 
 import fitz
 from django.contrib.auth import get_user_model
+from django.core.cache import cache
 from django.core import mail
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import TestCase, override_settings
@@ -39,6 +40,7 @@ def build_png_pixel() -> bytes:
 )
 class SignerFlowTests(TestCase):
     def setUp(self) -> None:
+        cache.clear()
         self.client = APIClient()
         self.user = get_user_model().objects.create_user(
             username="admin",
@@ -178,6 +180,24 @@ class SignerFlowTests(TestCase):
         self.assertEqual(second_response.status_code, 429, second_response.json())
         self.assertIn("retry_after", second_response.json())
         self.assertEqual(len(mail.outbox), 1)
+
+    def test_otp_verification_is_rate_limited_by_proxy_ip(self) -> None:
+        proxy_ip = "198.51.100.220"
+        with self.settings(SIGNACORE_TEST_OTP_CODE="123456"):
+            self.client.post(f"/api/sign/{self.signing_request.id}/otp/send/")
+            responses = [
+                self.client.post(
+                    f"/api/sign/{self.signing_request.id}/otp/verify/",
+                    {"otp": "000000"},
+                    format="json",
+                    HTTP_X_REAL_IP=proxy_ip,
+                    HTTP_X_FORWARDED_FOR="203.0.113.99, 10.0.0.2",
+                )
+                for _ in range(11)
+            ]
+
+        self.assertTrue(all(response.status_code == 400 for response in responses[:10]))
+        self.assertEqual(responses[-1].status_code, 429)
 
     def test_verify_otp_returns_submit_session(self) -> None:
         with self.settings(SIGNACORE_TEST_OTP_CODE="123456"):

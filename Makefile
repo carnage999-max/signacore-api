@@ -9,6 +9,7 @@ RUN_MANAGE := $(COMPOSE) run --rm --entrypoint "" api python manage.py
 	migrate \
 	collectstatic \
 	test \
+	validate \
 	docker-up \
 	docker-down \
 	docker-restart \
@@ -28,6 +29,7 @@ help:
 	@printf "  make migrate             Apply Django migrations in Docker\n"
 	@printf "  make collectstatic       Collect static assets in Docker\n"
 	@printf "  make test                Run the Signacore test suite in Docker\n"
+	@printf "  make validate            Run deployment checks and the full API test suite\n"
 	@printf "  make docker-up           Start containers in detached mode\n"
 	@printf "  make docker-down         Stop containers\n"
 	@printf "  make docker-restart      Restart containers\n"
@@ -46,6 +48,10 @@ collectstatic:
 	$(RUN_MANAGE) collectstatic --noinput
 
 test:
+	$(RUN_MANAGE) test
+
+validate:
+	$(RUN_MANAGE) check --deploy
 	$(RUN_MANAGE) test
 
 docker-up:

@@ -25,6 +25,7 @@ from services.pdf_engine import PDFEngine
 from tasks.notifications import send_invitation_email_for_request
 from tasks.notifications import send_admin_account_created, send_admin_password_changed
 from utils.task_dispatch import enqueue_task
+from utils.throttling import SignacoreRateThrottle
 from utils.identity import email_digest
 from utils.file_storage import temporary_plaintext_file
 
@@ -156,6 +157,8 @@ def serialize_document_detail(document: Document) -> dict:
 class AdminAuthLoginView(APIView):
     authentication_classes = []
     permission_classes = [HasValidSignacoreSecret]
+    throttle_classes = [SignacoreRateThrottle]
+    throttle_scope = "admin_auth"
     serializer_class = AdminLoginSerializer
 
     def post(self, request):

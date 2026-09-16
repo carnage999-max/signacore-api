@@ -16,6 +16,7 @@ class MakefileTests(TestCase):
             "migrate:",
             "collectstatic:",
             "test:",
+            "validate:",
             "up: docker-up",
             "down: docker-down",
             "restart: docker-restart",

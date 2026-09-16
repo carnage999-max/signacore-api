@@ -17,7 +17,6 @@ from django.utils import timezone
 from django.utils.http import urlsafe_base64_decode
 from rest_framework import status
 from rest_framework.response import Response
-from rest_framework.throttling import ScopedRateThrottle
 from rest_framework.views import APIView
 
 from apps.documents.auth import HasValidSignacoreSecret, get_admin_actor, get_actor_organization
@@ -35,6 +34,7 @@ from tasks.notifications import (
 )
 from utils.identity import email_digest
 from utils.task_dispatch import enqueue_task
+from utils.throttling import SignacoreRateThrottle
 
 from .models import (
     AccountProfile,
@@ -176,7 +176,7 @@ def serialize_organization_members(organization: Organization) -> list[dict]:
 class EmailRegistrationView(APIView):
     authentication_classes = []
     permission_classes = [HasValidSignacoreSecret]
-    throttle_classes = [ScopedRateThrottle]
+    throttle_classes = [SignacoreRateThrottle]
     throttle_scope = "email_auth"
     serializer_class = EmailRegistrationSerializer
 
@@ -280,7 +280,7 @@ class EmailRegistrationView(APIView):
 class EmailVerificationView(APIView):
     authentication_classes = []
     permission_classes = [HasValidSignacoreSecret]
-    throttle_classes = [ScopedRateThrottle]
+    throttle_classes = [SignacoreRateThrottle]
     throttle_scope = "email_auth"
     serializer_class = EmailVerificationSerializer
 
@@ -331,7 +331,7 @@ class EmailVerificationView(APIView):
 class EmailLoginView(APIView):
     authentication_classes = []
     permission_classes = [HasValidSignacoreSecret]
-    throttle_classes = [ScopedRateThrottle]
+    throttle_classes = [SignacoreRateThrottle]
     throttle_scope = "email_auth"
     serializer_class = EmailLoginSerializer
 
@@ -374,6 +374,8 @@ class EmailLoginView(APIView):
 class OAuthExchangeView(APIView):
     authentication_classes = []
     permission_classes = [HasValidSignacoreSecret]
+    throttle_classes = [SignacoreRateThrottle]
+    throttle_scope = "oauth_exchange"
     serializer_class = OAuthExchangeSerializer
 
     def post(self, request):
@@ -713,6 +715,8 @@ class OrganizationMemberDetailView(OrganizationMembersView):
 class AccountSigningRequestsView(APIView):
     authentication_classes = []
     permission_classes = [HasValidSignacoreSecret]
+    throttle_classes = [SignacoreRateThrottle]
+    throttle_scope = "account_data"
     serializer_class = AccountSigningRequestSerializer
 
     def get(self, request):
