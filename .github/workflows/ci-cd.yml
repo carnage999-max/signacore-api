@@ -61,6 +61,7 @@ jobs:
       - name: Check migrations and run test suite
         run: |
           mkdir -p "$SIGNACORE_TEMP_ROOT"
+          python manage.py migrate --noinput
           python manage.py migrate --check
           python manage.py test
 
