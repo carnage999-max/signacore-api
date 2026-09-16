@@ -136,6 +136,33 @@ make build
 make build-no-cache
 ```
 
+### CI/CD deployment gate
+
+GitHub Actions runs the full pre-commit quality check and the Django test
+suite for pull requests and pushes to `main`. A successful push to `main`
+then triggers the Coolify staging deployment through an authenticated deploy
+webhook. Production is not triggered by this workflow.
+
+Configure the staging Coolify application as follows:
+
+1. Turn off **Configuration > Advanced > Deployment & Git > Auto Deploy**.
+   This is required because the GitHub App can otherwise deploy the push before
+   GitHub Actions finishes.
+2. Enable Coolify API access under **Settings > Configuration > Advanced**.
+3. Create a Coolify API token with only the `deploy` permission.
+4. Copy the staging application's **Deploy Webhook (auth required)** URL.
+   The webhook URL must use HTTPS; do not send the bearer token to a plain HTTP
+   IP address or an untrusted public endpoint.
+5. Add these GitHub repository secrets under **Settings > Secrets and
+   variables > Actions**:
+   `COOLIFY_STAGING_DEPLOY_WEBHOOK` for the copied URL and
+   `COOLIFY_STAGING_DEPLOY_TOKEN` for the deploy-only API token.
+
+The workflow never stores the webhook URL or token in Git. It deploys staging
+only after isort, Black, Ruff, migration checks, and all Django tests pass.
+Coolify's direct Git App deployment must remain disabled for this gate to be
+effective.
+
 ### First run
 
 ```bash
