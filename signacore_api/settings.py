@@ -177,6 +177,11 @@ if "test" in sys.argv:
     STATIC_ROOT = BASE_DIR / "staticfiles-test"
     SIGNACORE_STORAGE_ROOT = BASE_DIR / "storage-test"
     MEDIA_ROOT = SIGNACORE_STORAGE_ROOT
+    # Django's test client uses HTTP internally; production HTTPS checks must
+    # not redirect every test request before it reaches the API view.
+    SECURE_SSL_REDIRECT = False
+    SESSION_COOKIE_SECURE = False
+    CSRF_COOKIE_SECURE = False
 
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
