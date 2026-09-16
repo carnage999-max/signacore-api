@@ -267,10 +267,12 @@ CELERY_RESULT_BACKEND=redis://redis:6379/4
 
 FERNET_KEY=<unique-staging-fernet-key>
 SIGNACORE_TEMP_ROOT=/run/signacore
-SIGNACORE_STORAGE_ROOT=/mnt/data/media/signa-core-staging
-MEDIA_ROOT=/mnt/data/media/signa-core-staging
+SIGNACORE_HOST_STORAGE_ROOT=/mnt/data/media/signa-core-staging
+SIGNACORE_STORAGE_ROOT=/mnt/data/media/signa-core
+MEDIA_ROOT=/mnt/data/media/signa-core
 MEDIA_URL=/media/
-STATIC_ROOT=/srv/apps/signacore-api-staging/staticfiles
+SIGNACORE_HOST_STATIC_ROOT=/srv/apps/signacore-api-staging/staticfiles
+STATIC_ROOT=/srv/apps/signacore-api/staticfiles
 
 CORS_ALLOWED_ORIGINS=https://staging.mysignacore.com,https://sign-staging.mysignacore.com
 SIGNACORE_SHARED_SECRET=<unique-staging-service-secret>

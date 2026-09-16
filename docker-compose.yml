@@ -15,8 +15,8 @@ services:
       - --timeout
       - ${GUNICORN_TIMEOUT:-120}
     volumes:
-      - ${SIGNACORE_STORAGE_ROOT:-/mnt/data/media/signa-core}:${SIGNACORE_STORAGE_ROOT:-/mnt/data/media/signa-core}
-      - ${STATIC_ROOT:-/srv/apps/signacore-api/staticfiles}:${STATIC_ROOT:-/srv/apps/signacore-api/staticfiles}
+      - ${SIGNACORE_HOST_STORAGE_ROOT:-/mnt/data/media/signa-core}:/mnt/data/media/signa-core
+      - ${SIGNACORE_HOST_STATIC_ROOT:-/srv/apps/signacore-api/staticfiles}:/srv/apps/signacore-api/staticfiles
     ports:
       - "127.0.0.1:${SIGNACORE_API_PORT:-8010}:8010"
     tmpfs:
@@ -37,8 +37,8 @@ services:
       - --loglevel=info
       - --concurrency=${CELERY_CONCURRENCY:-2}
     volumes:
-      - ${SIGNACORE_STORAGE_ROOT:-/mnt/data/media/signa-core}:${SIGNACORE_STORAGE_ROOT:-/mnt/data/media/signa-core}
-      - ${STATIC_ROOT:-/srv/apps/signacore-api/staticfiles}:${STATIC_ROOT:-/srv/apps/signacore-api/staticfiles}
+      - ${SIGNACORE_HOST_STORAGE_ROOT:-/mnt/data/media/signa-core}:/mnt/data/media/signa-core
+      - ${SIGNACORE_HOST_STATIC_ROOT:-/srv/apps/signacore-api/staticfiles}:/srv/apps/signacore-api/staticfiles
     restart: unless-stopped
     depends_on:
       - api
@@ -56,8 +56,8 @@ services:
       - beat
       - --loglevel=info
     volumes:
-      - ${SIGNACORE_STORAGE_ROOT:-/mnt/data/media/signa-core}:${SIGNACORE_STORAGE_ROOT:-/mnt/data/media/signa-core}
-      - ${STATIC_ROOT:-/srv/apps/signacore-api/staticfiles}:${STATIC_ROOT:-/srv/apps/signacore-api/staticfiles}
+      - ${SIGNACORE_HOST_STORAGE_ROOT:-/mnt/data/media/signa-core}:/mnt/data/media/signa-core
+      - ${SIGNACORE_HOST_STATIC_ROOT:-/srv/apps/signacore-api/staticfiles}:/srv/apps/signacore-api/staticfiles
     restart: unless-stopped
     depends_on:
       - api
