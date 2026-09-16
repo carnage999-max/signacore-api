@@ -47,6 +47,11 @@ class EncryptedFileStorageTests(SimpleTestCase):
         with self.assertRaisesMessage(ImproperlyConfigured, "FERNET_KEY must be configured"):
             encrypt_file_payload(b"data")
 
+    @override_settings(FERNET_KEY="not-a-fernet-key")
+    def test_encryption_rejects_an_invalid_key(self) -> None:
+        with self.assertRaisesMessage(ImproperlyConfigured, "FERNET_KEY must be a valid"):
+            encrypt_file_payload(b"data")
+
     @override_settings(SIGNACORE_TEMP_ROOT="/tmp")
     def test_existing_shared_temp_directory_is_not_chmodded(self) -> None:
         from utils.file_storage import _temporary_root

@@ -11,7 +11,10 @@ def get_fernet() -> Fernet:
     key = settings.FERNET_KEY
     if not key:
         raise ImproperlyConfigured("FERNET_KEY must be configured for encrypted fields.")
-    return Fernet(key.encode() if isinstance(key, str) else key)
+    try:
+        return Fernet(key.encode() if isinstance(key, str) else key)
+    except (TypeError, ValueError) as exc:
+        raise ImproperlyConfigured("FERNET_KEY must be a valid 32-byte url-safe base64-encoded key.") from exc
 
 
 def encrypt_value(value: str | None) -> str | None:
