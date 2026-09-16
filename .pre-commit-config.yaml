@@ -1,6 +1,17 @@
 default_language_version:
   python: python3.12
 
+# Only source files are candidates for these hooks. Runtime caches, generated
+# migrations, local databases, and deployment output are intentionally skipped.
+exclude: |
+  (?x)^(
+    (?:.*/)?(?:\.git|\.venv|__pycache__|\.pytest_cache|\.mypy_cache|\.ruff_cache|\.cache)(?:/|$)|
+    .*\.py[co]$|
+    (?:.*/)?migrations/|
+    (?:.*/)?(?:db\.sqlite3|\.coverage|\.DS_Store|todo\.json)$|
+    (?:.*/)?(?:media|storage|staticfiles)(?:/|$)
+  )
+
 repos:
   - repo: https://github.com/pycqa/isort
     rev: 6.0.1

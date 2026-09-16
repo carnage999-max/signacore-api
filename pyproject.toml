@@ -1,15 +1,43 @@
 [tool.black]
 line-length = 120
 target-version = ["py312"]
+extend-exclude = '''
+/(\.git|\.venv|__pycache__|\.pytest_cache|\.mypy_cache|\.ruff_cache|\.cache|migrations|media|storage|staticfiles)/
+|/(db\.sqlite3|\.coverage|\.DS_Store|todo\.json)$
+'''
 
 [tool.isort]
 profile = "black"
 line_length = 120
 known_first_party = ["apps", "services", "signacore_api", "tasks", "tests", "utils"]
+skip_glob = [
+    "*/migrations/*.py",
+    "*/__pycache__/*",
+    "*/.pytest_cache/*",
+    "*/.mypy_cache/*",
+    "*/.ruff_cache/*",
+]
 
 [tool.ruff]
 line-length = 120
 target-version = "py312"
+exclude = [
+    ".git",
+    ".venv",
+    "__pycache__",
+    ".pytest_cache",
+    ".mypy_cache",
+    ".ruff_cache",
+    ".cache",
+    "migrations",
+    "media",
+    "storage",
+    "staticfiles",
+    "db.sqlite3",
+    ".coverage",
+    ".DS_Store",
+    "todo.json",
+]
 
 [tool.ruff.lint]
 select = ["E4", "E7", "E9", "F"]

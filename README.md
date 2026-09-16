@@ -145,17 +145,200 @@ mkdir -p /mnt/data/media/signa-core /srv/apps/signacore-api/staticfiles
 docker compose up --build -d
 ```
 
-### Same-server staging
+### Same-server staging with Coolify
 
-Staging should be a separate Coolify deployment using this same Compose file and a separate environment. Set `SIGNACORE_API_CONTAINER_NAME=signacore-staging-api`, `SIGNACORE_WORKER_CONTAINER_NAME=signacore-staging-worker`, `SIGNACORE_BEAT_CONTAINER_NAME=signacore-staging-beat`, and `SIGNACORE_API_PORT=8011` so it cannot collide with production. Use a separate PostgreSQL database, storage root, Redis database, encryption key, shared secret, OAuth callback URLs, and Stripe test-mode credentials. Never point staging at production PostgreSQL or `/mnt/data/media/signa-core`.
+Staging is a second Coolify Compose application on the same server. It uses
+the same Git repository and Compose file, but must have a separate database,
+Redis database, encryption key, shared secret, storage root, host port, and
+container names. Never point staging at production PostgreSQL or
+`/mnt/data/media/signa-core`.
 
-After the staging deployment is healthy, run:
+#### 1. Prepare the server
+
+The staging storage directory should be separate from production:
+
+```bash
+sudo mkdir -p /mnt/data/media/signa-core-staging
+sudo mkdir -p /srv/apps/signacore-api-staging/staticfiles
+sudo docker network inspect shared-net >/dev/null 2>&1 || sudo docker network create shared-net
+```
+
+The API Compose file binds staging to `127.0.0.1:8011`. Do not use port
+`8010`, and do not reuse the production container names.
+
+#### 2. Create an isolated PostgreSQL database
+
+Create a new database and login role. The staging role needs `CREATEDB` so
+`make validate` can create Django's temporary test database:
+
+```bash
+sudo docker exec -it postgres psql -U admin -d postgres
+```
+
+Run the following SQL, replacing the password with a strong generated value:
+
+```sql
+CREATE USER signacore_staging_user WITH PASSWORD 'replace-with-staging-db-password' CREATEDB;
+CREATE DATABASE signacore_staging_db OWNER signacore_staging_user;
+GRANT ALL PRIVILEGES ON DATABASE signacore_staging_db TO signacore_staging_user;
+\q
+```
+
+If PostgreSQL is a separate Coolify resource, use its internal hostname and
+attach both the PostgreSQL resource and this Compose application to
+`shared-net`. Do not use `localhost` from inside the API container.
+
+#### 3. Allocate a separate Redis database
+
+Use a different Redis database number from production. For example, if
+production uses database `3`, staging can use database `4`:
+
+```text
+REDIS_URL=redis://redis:6379/4
+CELERY_BROKER_URL=redis://redis:6379/4
+CELERY_RESULT_BACKEND=redis://redis:6379/4
+```
+
+The Redis container must also be reachable on `shared-net`. A separate Redis
+resource is preferable if the production Redis instance is managed by another
+team or has no database isolation.
+
+#### 4. Create staging DNS records
+
+Create an A record for the staging API, for example:
+
+```text
+api-staging.mysignacore.com -> <server-public-ip>
+```
+
+If a staging web app will be deployed too, use separate hosts such as
+`staging.mysignacore.com` and `sign-staging.mysignacore.com`. Do not use the
+production app or signer domains in staging CORS, OAuth, or email links.
+
+#### 5. Create the Coolify application
+
+In Coolify:
+
+1. Create a new Project named `SignaCore Staging`.
+2. Add a Docker Compose resource from the `signa-core` Git repository.
+3. Select the `main` branch if staging should auto-deploy every push.
+4. Set the Compose file to `signacore-api/docker-compose.yml` if the repository root contains both apps; if this API repository is connected directly, use `docker-compose.yml`.
+5. Add the staging environment variables from the next section in Coolify's Environment Variables panel. Keep them secret and do not commit `.env`.
+6. Configure the public domain on the `api` service as `https://api-staging.mysignacore.com` and target the service's internal port `8010`. The host mapping remains `8011` only for direct server checks.
+7. Enable automatic deployments/webhooks for `main`.
+8. Deploy once manually and wait for `api`, `worker`, and `beat` to become healthy/running.
+
+The Compose variables that prevent collision are:
+
+```text
+SIGNACORE_API_PORT=8011
+SIGNACORE_API_CONTAINER_NAME=signacore-staging-api
+SIGNACORE_WORKER_CONTAINER_NAME=signacore-staging-worker
+SIGNACORE_BEAT_CONTAINER_NAME=signacore-staging-beat
+```
+
+#### 6. Set the staging environment
+
+Use the following values as the starting point. Generate new values for every
+secret; do not copy production secrets or `FERNET_KEY`:
+
+```text
+SECRET_KEY=<unique-staging-django-secret>
+DEBUG=False
+ALLOWED_HOSTS=api-staging.mysignacore.com,127.0.0.1,localhost
+SECURE_SSL_REDIRECT=True
+SECURE_HSTS_SECONDS=31536000
+SECURE_HSTS_INCLUDE_SUBDOMAINS=True
+SECURE_HSTS_PRELOAD=True
+SESSION_COOKIE_SECURE=True
+CSRF_COOKIE_SECURE=True
+CSRF_TRUSTED_ORIGINS=https://staging.mysignacore.com,https://sign-staging.mysignacore.com
+
+DB_NAME=signacore_staging_db
+DB_USER=signacore_staging_user
+DB_PASSWORD=<unique-staging-db-password>
+DB_HOST=<postgresql-host-on-shared-net>
+DB_PORT=5432
+
+REDIS_URL=redis://redis:6379/4
+CELERY_BROKER_URL=redis://redis:6379/4
+CELERY_RESULT_BACKEND=redis://redis:6379/4
+
+FERNET_KEY=<unique-staging-fernet-key>
+SIGNACORE_TEMP_ROOT=/run/signacore
+SIGNACORE_STORAGE_ROOT=/mnt/data/media/signa-core-staging
+MEDIA_ROOT=/mnt/data/media/signa-core-staging
+MEDIA_URL=/media/
+STATIC_ROOT=/srv/apps/signacore-api-staging/staticfiles
+
+CORS_ALLOWED_ORIGINS=https://staging.mysignacore.com,https://sign-staging.mysignacore.com
+SIGNACORE_SHARED_SECRET=<unique-staging-service-secret>
+SIGNACORE_SERVICE_USERNAME=signacore-staging-service
+SIGNACORE_APP_URL=https://staging.mysignacore.com
+SIGNACORE_SIGNER_PORTAL_URL=https://sign-staging.mysignacore.com
+SIGNING_LINK_EXPIRY_DAYS=7
+OTP_EXPIRY_MINUTES=10
+OTP_RESEND_COOLDOWN_SECONDS=60
+
+STRIPE_SECRET_KEY=sk_test_<staging-test-mode-key>
+STRIPE_WEBHOOK_SECRET=whsec_<staging-webhook-secret>
+STRIPE_API_VERSION=2026-02-25.clover
+
+EMAIL_HOST=smtp.resend.com
+EMAIL_PORT=465
+EMAIL_USE_SSL=True
+EMAIL_HOST_USER=resend
+EMAIL_HOST_PASSWORD=<staging-email-provider-key>
+DEFAULT_FROM_EMAIL=SignaCore Staging <verified-staging-sender@mysignacore.com>
+
+SIGNACORE_API_PORT=8011
+SIGNACORE_API_CONTAINER_NAME=signacore-staging-api
+SIGNACORE_WORKER_CONTAINER_NAME=signacore-staging-worker
+SIGNACORE_BEAT_CONTAINER_NAME=signacore-staging-beat
+GUNICORN_WORKERS=2
+GUNICORN_TIMEOUT=120
+CELERY_CONCURRENCY=2
+```
+
+Leave Google and Apple credentials empty unless OAuth is being tested. If
+OAuth is enabled, register only the exact staging callback URLs with each
+provider and use staging client credentials:
+
+```text
+GOOGLE_OAUTH_REDIRECT_URI=https://staging.mysignacore.com/api/auth/oauth/callback/google
+APPLE_OAUTH_REDIRECT_URI=https://staging.mysignacore.com/api/auth/oauth/callback/apple
+```
+
+#### 7. Run the first deployment checks
+
+From the API repository checkout used by the deployment, verify the rendered
+Compose configuration and service separation:
+
+```bash
+docker compose config --quiet
+docker ps --format '{{.Names}}' | grep signacore-staging
+curl -I https://api-staging.mysignacore.com/api/health/
+```
+
+Then run the deployment validation against the staging database. If executing
+from the server checkout, ensure its `.env` contains the staging values before
+running this command:
 
 ```bash
 make validate
 ```
 
-This checks that the running database has no pending migrations, runs Django's production deployment checks, and runs the full isolated API test suite, including document organization isolation and authentication/OTP abuse throttling. OAuth provider exchanges remain mocked in this suite and must be tested separately with staging credentials. The staging PostgreSQL user must have `CREATEDB` so Django can create its temporary test database.
+This checks pending migrations, Django production checks, organization data
+isolation, authentication/OTP throttling, and the full API test suite. OAuth
+provider exchanges remain mocked in the suite and require a separate manual
+staging test with provider credentials.
+
+#### 8. Production promotion
+
+Pushing to `main` can deploy staging automatically through the Coolify
+webhook. Keep production deployment manual: review the staging health check,
+logs, migrations, email delivery, signer flow, and billing webhook behavior,
+then deploy production deliberately with its existing production environment.
 
 ## Commercial account configuration
 

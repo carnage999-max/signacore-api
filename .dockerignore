@@ -7,7 +7,12 @@ __pycache__/
 *.pyd
 .pytest_cache/
 .mypy_cache/
+.ruff_cache/
+.cache/
+.coverage
+.DS_Store
 db.sqlite3
+todo.json
 media/
 storage/
 staticfiles/
@@ -16,4 +21,3 @@ apps/**/__pycache__/
 services/__pycache__/
 signacore_api/__pycache__/
 utils/__pycache__/
-
