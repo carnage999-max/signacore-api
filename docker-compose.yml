@@ -2,7 +2,7 @@ services:
   api:
     build:
       context: .
-    container_name: signacore-api
+    container_name: ${SIGNACORE_API_CONTAINER_NAME:-signacore-api}
     env_file:
       - .env
     command:
@@ -26,7 +26,7 @@ services:
   worker:
     build:
       context: .
-    container_name: signacore-worker
+    container_name: ${SIGNACORE_WORKER_CONTAINER_NAME:-signacore-worker}
     env_file:
       - .env
     command:
@@ -46,7 +46,7 @@ services:
   beat:
     build:
       context: .
-    container_name: signacore-beat
+    container_name: ${SIGNACORE_BEAT_CONTAINER_NAME:-signacore-beat}
     env_file:
       - .env
     command:

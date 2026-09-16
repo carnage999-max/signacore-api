@@ -104,6 +104,7 @@ make makemigrations
 make migrate
 make collectstatic
 make test
+make validate
 make docker-up
 make docker-down
 make docker-restart
@@ -131,6 +132,18 @@ cp .env.example .env
 mkdir -p /mnt/data/media/signa-core /srv/apps/signacore-api/staticfiles
 docker compose up --build -d
 ```
+
+### Same-server staging
+
+Staging should be a separate Coolify deployment using this same Compose file and a separate environment. Set `SIGNACORE_API_CONTAINER_NAME=signacore-staging-api`, `SIGNACORE_WORKER_CONTAINER_NAME=signacore-staging-worker`, `SIGNACORE_BEAT_CONTAINER_NAME=signacore-staging-beat`, and `SIGNACORE_API_PORT=8011` so it cannot collide with production. Use a separate PostgreSQL database, storage root, Redis database, encryption key, shared secret, OAuth callback URLs, and Stripe test-mode credentials. Never point staging at production PostgreSQL or `/mnt/data/media/signa-core`.
+
+After the staging deployment is healthy, run:
+
+```bash
+make validate
+```
+
+This runs Django's production deployment checks and the full isolated API test suite, including document organization isolation and authentication/OTP abuse throttling. OAuth provider exchanges remain mocked in this suite and must be tested separately with staging credentials.
 
 ## Commercial account configuration
 
