@@ -1,5 +1,5 @@
-from django.test import SimpleTestCase
 import fitz
+from django.test import SimpleTestCase
 
 from apps.accounts.models import AccountProfile, OAuthIntentEnum, Organization, OrganizationMembership, SocialIdentity
 from apps.billing.models import BillingPlanConfiguration, OrganizationSubscription, StripeWebhookEvent

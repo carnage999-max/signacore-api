@@ -1,14 +1,13 @@
 from __future__ import annotations
 
-import base64
 import tempfile
-from pathlib import Path
 from datetime import timedelta
+from pathlib import Path
 
 import fitz
 from django.contrib.auth import get_user_model
-from django.core.cache import cache
 from django.core import mail
+from django.core.cache import cache
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import TestCase, override_settings
 from django.utils import timezone
@@ -18,10 +17,8 @@ from apps.accounts.models import Organization
 from apps.documents.models import Document, DocumentField
 from apps.signing.models import FieldSubmission, SigningRequest
 from utils.file_storage import ENCRYPTED_FILE_HEADER
-from utils.otp import generate_otp
 
 from .test_admin_documents import build_flat_pdf
-
 
 TEST_MEDIA_ROOT = tempfile.mkdtemp(prefix="signacore-test-media-")
 
@@ -342,9 +339,7 @@ class SignerFlowTests(TestCase):
         self.assertTrue(self.document.signed_pdf.name.endswith(".pdf"))
         self.assertEqual(FieldSubmission.objects.count(), 3)
         signed_payload = (Path(TEST_MEDIA_ROOT) / self.document.signed_pdf.name).read_bytes()
-        signature_submission = FieldSubmission.objects.get(
-            value_type=FieldSubmission.ValueTypeEnum.SIGNATURE_PNG
-        )
+        signature_submission = FieldSubmission.objects.get(value_type=FieldSubmission.ValueTypeEnum.SIGNATURE_PNG)
         signature_payload = (Path(TEST_MEDIA_ROOT) / signature_submission.image_value.name).read_bytes()
         self.assertTrue(signed_payload.startswith(ENCRYPTED_FILE_HEADER))
         self.assertNotIn(b"%PDF", signed_payload)

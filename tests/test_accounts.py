@@ -1,13 +1,19 @@
 from unittest.mock import patch
 
 from django.contrib.auth import get_user_model
-from django.core.cache import cache
 from django.core import mail
+from django.core.cache import cache
 from django.core.files.base import ContentFile
 from django.test import TestCase, override_settings
 from rest_framework.test import APIClient
 
-from apps.accounts.models import AccountProfile, Organization, OrganizationInvitation, OrganizationMembership, SocialIdentity
+from apps.accounts.models import (
+    AccountProfile,
+    Organization,
+    OrganizationInvitation,
+    OrganizationMembership,
+    SocialIdentity,
+)
 from apps.billing.models import OrganizationSubscription
 from apps.documents.models import Document
 from apps.signing.models import SigningRequest
@@ -441,10 +447,7 @@ class EmailAccountTests(TestCase):
         )
         from urllib.parse import parse_qs, urlparse
 
-        return {
-            key: values[0]
-            for key, values in parse_qs(urlparse(verification_url).query).items()
-        }
+        return {key: values[0] for key, values in parse_qs(urlparse(verification_url).query).items()}
 
     def test_company_registration_requires_email_verification(self) -> None:
         response = self.register()

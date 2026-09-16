@@ -90,9 +90,7 @@ class BillingApiTests(TestCase):
 
         self.assertEqual(response.status_code, 200, response.json())
         professional_plans = [
-            plan
-            for plan in response.json()
-            if plan["plan"] == BillingPlanConfiguration.PlanEnum.PROFESSIONAL
+            plan for plan in response.json() if plan["plan"] == BillingPlanConfiguration.PlanEnum.PROFESSIONAL
         ]
         self.assertTrue(professional_plans)
         self.assertIn("9.99", {plan["amount"] for plan in professional_plans})

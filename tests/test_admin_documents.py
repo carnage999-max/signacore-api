@@ -1,15 +1,13 @@
 from __future__ import annotations
 
-import tempfile
-from pathlib import Path
 from datetime import timedelta
 
 import fitz
-from django.contrib.auth import get_user_model
 from django.conf import settings
+from django.contrib.auth import get_user_model
+from django.core import mail
 from django.core.files.base import ContentFile
 from django.core.files.uploadedfile import SimpleUploadedFile
-from django.core import mail
 from django.test import TestCase, override_settings
 from django.utils import timezone
 from rest_framework.test import APIClient
@@ -244,12 +242,8 @@ class AdminDocumentUploadTests(TestCase):
         payload = response.json()
         self.assertEqual(payload["detection_summary"]["source"], "HEURISTIC")
         self.assertGreaterEqual(payload["detection_summary"]["field_count"], 2)
-        self.assertTrue(
-            any(field["field_type"] == "SIGNATURE" for field in payload["fields"])
-        )
-        self.assertTrue(
-            any(field["field_type"] == "TEXT" for field in payload["fields"])
-        )
+        self.assertTrue(any(field["field_type"] == "SIGNATURE" for field in payload["fields"]))
+        self.assertTrue(any(field["field_type"] == "TEXT" for field in payload["fields"]))
 
     def test_upload_pdf_detects_inline_signature_date_text_and_checkbox_fields(self) -> None:
         upload = SimpleUploadedFile(
@@ -466,9 +460,7 @@ class AdminDocumentUploadTests(TestCase):
             order=1,
         )
 
-        response = self.client.delete(
-            f"/api/admin/documents/{document.id}/fields/{field.id}/"
-        )
+        response = self.client.delete(f"/api/admin/documents/{document.id}/fields/{field.id}/")
 
         self.assertEqual(response.status_code, 204)
         self.assertFalse(DocumentField.objects.filter(id=field.id).exists())
