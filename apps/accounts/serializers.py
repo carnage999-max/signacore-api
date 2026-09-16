@@ -52,9 +52,7 @@ class EmailRegistrationSerializer(serializers.Serializer):
             attrs["account_type"] == AccountProfile.AccountTypeEnum.COMPANY
             and not attrs.get("company_name", "").strip()
         ):
-            raise serializers.ValidationError(
-                {"company_name": ["Company name is required for a company account."]}
-            )
+            raise serializers.ValidationError({"company_name": ["Company name is required for a company account."]})
         return attrs
 
 

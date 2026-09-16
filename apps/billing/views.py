@@ -6,7 +6,6 @@ from datetime import UTC, datetime
 
 import httpx
 from django.conf import settings
-from django.db import transaction
 from django.utils import timezone
 from drf_spectacular.utils import extend_schema
 from rest_framework import status
@@ -288,7 +287,9 @@ class StripeWebhookView(APIView):
                 organization = Organization.objects.filter(pk=metadata.get("organization_id")).first()
                 if organization:
                     subscription = get_organization_subscription(organization)
-                    subscription.stripe_customer_id = str(event_object.get("customer") or subscription.stripe_customer_id)
+                    subscription.stripe_customer_id = str(
+                        event_object.get("customer") or subscription.stripe_customer_id
+                    )
                     subscription.stripe_subscription_id = str(
                         event_object.get("subscription") or subscription.stripe_subscription_id
                     )

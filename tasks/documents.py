@@ -9,4 +9,3 @@ def analyse_document_fields(document_id: str) -> None:
 @shared_task(name="tasks.documents.flatten_document")
 def flatten_document(document_id: str) -> None:
     return None
-

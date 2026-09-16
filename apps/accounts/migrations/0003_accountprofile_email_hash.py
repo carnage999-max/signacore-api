@@ -11,11 +11,15 @@ def backfill_email_hashes(apps, schema_editor):
     account_profile = apps.get_model("accounts", "AccountProfile")
     for profile in account_profile.objects.all().iterator():
         email = (profile.email or "").strip().casefold()
-        profile.email_hash = hmac.new(
-            settings.SECRET_KEY.encode(),
-            email.encode(),
-            hashlib.sha256,
-        ).hexdigest() if email else ""
+        profile.email_hash = (
+            hmac.new(
+                settings.SECRET_KEY.encode(),
+                email.encode(),
+                hashlib.sha256,
+            ).hexdigest()
+            if email
+            else ""
+        )
         profile.save(update_fields=["email_hash"])
 
 
@@ -30,9 +34,7 @@ class Migration(migrations.Migration):
         migrations.AddField(
             model_name="accountprofile",
             name="email_hash",
-            field=models.CharField(
-                db_index=True, default="", editable=False, max_length=64
-            ),
+            field=models.CharField(db_index=True, default="", editable=False, max_length=64),
         ),
         migrations.RunPython(backfill_email_hashes, migrations.RunPython.noop),
     ]

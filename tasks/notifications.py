@@ -2,14 +2,16 @@ from celery import shared_task
 
 from apps.documents.models import Document
 from apps.notifications.services import (
-    send_admin_account_created_email,
-    send_admin_password_changed_email,
     send_account_login_email,
     send_account_verification_email,
     send_account_welcome_email,
+    send_admin_account_created_email,
+    send_admin_password_changed_email,
     send_completion_email,
     send_invitation_email,
-    send_organization_invitation as send_organization_invitation_email,
+)
+from apps.notifications.services import send_organization_invitation as send_organization_invitation_email
+from apps.notifications.services import (
     send_otp_email_message,
     send_progress_email,
 )
@@ -34,11 +36,7 @@ def send_invitation_emails(document_id: str) -> None:
 
 @shared_task(name="tasks.notifications.send_invitation_email_for_request")
 def send_invitation_email_for_request(signing_request_id: str) -> None:
-    signing_request = (
-        SigningRequest.objects.select_related("document")
-        .filter(pk=signing_request_id)
-        .first()
-    )
+    signing_request = SigningRequest.objects.select_related("document").filter(pk=signing_request_id).first()
     if signing_request is None:
         return None
 
@@ -75,11 +73,7 @@ def send_completion_emails(document_id: str) -> None:
 
 @shared_task(name="tasks.notifications.send_otp_email")
 def send_otp_email(signing_request_id: str, otp_code: str) -> None:
-    signing_request = (
-        SigningRequest.objects.select_related("document")
-        .filter(pk=signing_request_id)
-        .first()
-    )
+    signing_request = SigningRequest.objects.select_related("document").filter(pk=signing_request_id).first()
     if signing_request is None:
         return None
 
@@ -90,11 +84,7 @@ def send_otp_email(signing_request_id: str, otp_code: str) -> None:
 @shared_task(name="tasks.notifications.notify_admin_progress")
 def notify_admin_progress(document_id: str, signing_request_id: str) -> None:
     document = Document.objects.select_related("created_by").filter(pk=document_id).first()
-    signing_request = (
-        SigningRequest.objects.select_related("document")
-        .filter(pk=signing_request_id)
-        .first()
-    )
+    signing_request = SigningRequest.objects.select_related("document").filter(pk=signing_request_id).first()
     if document is None or signing_request is None:
         return None
 
@@ -118,12 +108,7 @@ def send_admin_password_changed(email: str, username: str, temporary_password: s
 def send_account_verification(user_id: int) -> None:
     from django.contrib.auth import get_user_model
 
-    user = (
-        get_user_model()
-        .objects.select_related("signacore_profile")
-        .filter(pk=user_id, is_active=False)
-        .first()
-    )
+    user = get_user_model().objects.select_related("signacore_profile").filter(pk=user_id, is_active=False).first()
     if user is None:
         return None
 
@@ -135,12 +120,7 @@ def send_account_verification(user_id: int) -> None:
 def send_account_welcome(user_id: int) -> None:
     from django.contrib.auth import get_user_model
 
-    user = (
-        get_user_model()
-        .objects.select_related("signacore_profile")
-        .filter(pk=user_id, is_active=True)
-        .first()
-    )
+    user = get_user_model().objects.select_related("signacore_profile").filter(pk=user_id, is_active=True).first()
     if user is None:
         return None
 
@@ -152,12 +132,7 @@ def send_account_welcome(user_id: int) -> None:
 def send_account_login_alert(user_id: int, method: str) -> None:
     from django.contrib.auth import get_user_model
 
-    user = (
-        get_user_model()
-        .objects.select_related("signacore_profile")
-        .filter(pk=user_id, is_active=True)
-        .first()
-    )
+    user = get_user_model().objects.select_related("signacore_profile").filter(pk=user_id, is_active=True).first()
     if user is None:
         return None
 
@@ -167,9 +142,10 @@ def send_account_login_alert(user_id: int, method: str) -> None:
 
 @shared_task(name="tasks.notifications.sync_organization_seat_quantity")
 def sync_organization_seat_quantity(organization_id: str) -> None:
+    from django.conf import settings
+
     from apps.accounts.models import Organization
     from apps.billing.models import OrganizationSubscription
-    from django.conf import settings
     from services.stripe_client import StripeAPIClient
 
     organization = Organization.objects.filter(pk=organization_id).first()

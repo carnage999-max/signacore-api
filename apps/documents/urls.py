@@ -5,18 +5,17 @@ from .views import (
     AdminAuthLoginView,
     AdminAuthLogoutView,
     AdminDocumentDetailView,
+    AdminDocumentDownloadView,
     AdminDocumentFieldDetailView,
     AdminDocumentFieldsView,
-    AdminDocumentDownloadView,
     AdminDocumentPagePreviewView,
     AdminDocumentSendView,
+    AdminDocumentsView,
+    AdminDocumentVoidView,
     AdminSigningRequestResendView,
     AdminUserPasswordView,
     AdminUsersView,
-    AdminDocumentVoidView,
-    AdminDocumentsView,
 )
-
 
 urlpatterns = [
     path("auth/login/", AdminAuthLoginView.as_view(), name="admin-auth-login"),

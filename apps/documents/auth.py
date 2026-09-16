@@ -30,11 +30,7 @@ def get_admin_actor(request):
     if not actor_id:
         return None
 
-    return (
-        get_user_model()
-        .objects.filter(pk=actor_id, is_staff=True, is_active=True)
-        .first()
-    )
+    return get_user_model().objects.filter(pk=actor_id, is_staff=True, is_active=True).first()
 
 
 def require_superuser_actor(request):

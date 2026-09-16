@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-import fitz
 from datetime import timedelta
 from pathlib import Path
 
+import fitz
 from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.db import transaction
@@ -11,23 +11,26 @@ from django.db.models import Count, Q
 from django.http import FileResponse, HttpResponse
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
+from drf_spectacular.utils import extend_schema
 from rest_framework import status
 from rest_framework.exceptions import PermissionDenied, ValidationError
 from rest_framework.parsers import FormParser, MultiPartParser
 from rest_framework.response import Response
 from rest_framework.views import APIView
-from drf_spectacular.utils import extend_schema
 
-from apps.signing.models import SigningRequest
 from apps.accounts.models import AccountProfile, OrganizationMembership
 from apps.billing.entitlements import PlanFeatureEnum, require_feature, require_monthly_document_capacity
+from apps.signing.models import SigningRequest
 from services.pdf_engine import PDFEngine
-from tasks.notifications import send_invitation_email_for_request
-from tasks.notifications import send_admin_account_created, send_admin_password_changed
+from tasks.notifications import (
+    send_admin_account_created,
+    send_admin_password_changed,
+    send_invitation_email_for_request,
+)
+from utils.file_storage import temporary_plaintext_file
+from utils.identity import email_digest
 from utils.task_dispatch import enqueue_task
 from utils.throttling import SignacoreRateThrottle
-from utils.identity import email_digest
-from utils.file_storage import temporary_plaintext_file
 
 from .auth import (
     HasValidSignacoreSecret,
@@ -44,9 +47,9 @@ from .serializers import (
     AdminPasswordChangeSerializer,
     AdminUserCreateSerializer,
     AdminUserSerializer,
-    DocumentSendSerializer,
     DocumentFieldSerializer,
     DocumentFieldUpdateSerializer,
+    DocumentSendSerializer,
     DocumentUpdateSerializer,
     DocumentUploadSerializer,
     ManualDocumentFieldCreateSerializer,
@@ -336,15 +339,18 @@ class AdminAuditLogsView(APIView):
         actor, organization = get_request_actor_and_organization(request)
         if organization is None:
             raise PermissionDenied("No active company workspace is available.")
-        if not actor.is_superuser and not OrganizationMembership.objects.filter(
-            organization=organization,
-            user=actor,
-            status=OrganizationMembership.StatusEnum.ACTIVE,
-            role__in=(
-                OrganizationMembership.RoleEnum.OWNER,
-                OrganizationMembership.RoleEnum.ADMIN,
-            ),
-        ).exists():
+        if (
+            not actor.is_superuser
+            and not OrganizationMembership.objects.filter(
+                organization=organization,
+                user=actor,
+                status=OrganizationMembership.StatusEnum.ACTIVE,
+                role__in=(
+                    OrganizationMembership.RoleEnum.OWNER,
+                    OrganizationMembership.RoleEnum.ADMIN,
+                ),
+            ).exists()
+        ):
             raise PermissionDenied("Workspace administrator access is required.")
         require_feature(actor, organization, PlanFeatureEnum.AUDIT_HISTORY)
         logs = AdminAuditLog.objects.select_related("actor").filter(organization=organization)[:100]
@@ -446,7 +452,9 @@ class AdminDocumentsView(APIView):
         payload = serialize_document_detail(document)
         payload["page_count"] = page_count
         payload["detection_summary"] = {
-            "source": detected_fields[0].detection_source if detected_fields else DocumentField.DetectionSourceEnum.HEURISTIC,
+            "source": (
+                detected_fields[0].detection_source if detected_fields else DocumentField.DetectionSourceEnum.HEURISTIC
+            ),
             "field_count": len(detected_fields),
         }
         return Response(payload, status=status.HTTP_201_CREATED)
@@ -617,15 +625,15 @@ class AdminDocumentSendView(APIView):
                             email_hash=email_digest(item["signer_email"]),
                             account_type=AccountProfile.AccountTypeEnum.SIGNER,
                             user__is_active=True,
-                        ).values_list("user", flat=True).first()
+                        )
+                        .values_list("user", flat=True)
+                        .first()
                     ),
                     expires_at=expiry,
                 )
                 for item in serializer.validated_data["signers"]
             ]
-            signed_request_exists = document.signing_requests.filter(
-                status=SigningRequest.StatusEnum.SIGNED
-            ).exists()
+            signed_request_exists = document.signing_requests.filter(status=SigningRequest.StatusEnum.SIGNED).exists()
             document.status = (
                 Document.StatusEnum.PARTIALLY_SIGNED if signed_request_exists else Document.StatusEnum.SENT
             )
@@ -727,9 +735,11 @@ class AdminSigningRequestResendView(APIView):
                 document.signed_pdf.delete(save=False)
                 document.signed_pdf = None
 
-            has_other_signed_requests = document.signing_requests.exclude(pk=signing_request.pk).filter(
-                status=SigningRequest.StatusEnum.SIGNED
-            ).exists()
+            has_other_signed_requests = (
+                document.signing_requests.exclude(pk=signing_request.pk)
+                .filter(status=SigningRequest.StatusEnum.SIGNED)
+                .exists()
+            )
             document.status = (
                 Document.StatusEnum.PARTIALLY_SIGNED if has_other_signed_requests else Document.StatusEnum.SENT
             )

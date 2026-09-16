@@ -31,9 +31,7 @@ class Migration(migrations.Migration):
         migrations.AddField(
             model_name="signingrequest",
             name="signer_email_hash",
-            field=models.CharField(
-                db_index=True, default="", editable=False, max_length=64
-            ),
+            field=models.CharField(db_index=True, default="", editable=False, max_length=64),
         ),
         migrations.AddField(
             model_name="signingrequest",

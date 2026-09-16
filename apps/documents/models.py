@@ -3,10 +3,9 @@ import uuid
 from django.conf import settings
 from django.db import models
 
+from apps.accounts.models import Organization
 from utils.encryption import EncryptedEmailField, EncryptedTextField
 from utils.file_storage import encrypted_file_storage, original_pdf_upload_to, signed_pdf_upload_to
-
-from apps.accounts.models import Organization
 
 
 class Document(models.Model):

@@ -5,8 +5,8 @@ from django.db import models
 
 from apps.documents.models import Document, DocumentField
 from utils.encryption import EncryptedEmailField, EncryptedTextField
-from utils.identity import email_digest
 from utils.file_storage import encrypted_file_storage, signature_image_upload_to
+from utils.identity import email_digest
 
 
 class SigningRequest(models.Model):

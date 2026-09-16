@@ -7,9 +7,9 @@ from drf_spectacular.views import SpectacularAPIView, SpectacularRedocView
 from rest_framework.permissions import IsAdminUser
 
 from apps.signing.views import SignerPortalView
+
 from .api.health import HealthCheckView
 from .docs import SignacoreApiDocsView
-
 
 admin.site.site_header = "SignaCore Admin"
 admin.site.site_title = "SignaCore Admin"

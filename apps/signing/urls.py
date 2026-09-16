@@ -8,7 +8,6 @@ from .views import (
     SignerSubmitView,
 )
 
-
 urlpatterns = [
     path("<uuid:token>/", SignerContextView.as_view(), name="signer-context"),
     path("<uuid:token>/pages/<int:page_number>/preview/", SignerPagePreviewView.as_view(), name="signer-page-preview"),

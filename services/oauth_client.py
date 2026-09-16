@@ -6,10 +6,10 @@ import time
 from dataclasses import dataclass
 from typing import Any
 
+from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import ec, padding, rsa
 from cryptography.hazmat.primitives.asymmetric.utils import decode_dss_signature
-from cryptography.exceptions import InvalidSignature
 from django.conf import settings
 
 from utils.base_api_client import BaseAPIClient
@@ -56,9 +56,7 @@ def validate_common_claims(
     nonce: str,
 ) -> None:
     token_audience = claims.get("aud")
-    valid_audience = token_audience == audience or (
-        isinstance(token_audience, list) and audience in token_audience
-    )
+    valid_audience = token_audience == audience or (isinstance(token_audience, list) and audience in token_audience)
     if claims.get("iss") != issuer or not valid_audience:
         raise OAuthExchangeError("The identity token was not issued for SignaCore.")
     if int(claims.get("exp") or 0) <= int(time.time()):
@@ -153,11 +151,7 @@ class AppleOAuthClient(BaseAPIClient):
             raise OAuthExchangeError("The Apple identity token uses an unsupported signature.")
         key_set = self.get("/keys").json()
         matching_key = next(
-            (
-                key
-                for key in key_set.get("keys", [])
-                if isinstance(key, dict) and key.get("kid") == header["kid"]
-            ),
+            (key for key in key_set.get("keys", []) if isinstance(key, dict) and key.get("kid") == header["kid"]),
             None,
         )
         if not matching_key:

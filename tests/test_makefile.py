@@ -16,6 +16,7 @@ class MakefileTests(TestCase):
             "migrate:",
             "collectstatic:",
             "test:",
+            "lint:",
             "validate:",
             "up: docker-up",
             "down: docker-down",
@@ -34,3 +35,17 @@ class MakefileTests(TestCase):
 
         self.assertIn('RUN_MANAGE := $(COMPOSE) run --rm --entrypoint "" api python manage.py', contents)
         self.assertNotIn(".venv/bin/python", contents)
+
+    def test_pre_commit_configuration_runs_required_python_tools(self) -> None:
+        repository_root = Path(__file__).resolve().parent.parent
+        config = (repository_root / ".pre-commit-config.yaml").read_text()
+
+        for expected in (
+            "https://github.com/pycqa/isort",
+            "https://github.com/psf/black-pre-commit-mirror",
+            "https://github.com/astral-sh/ruff-pre-commit",
+            "- id: isort",
+            "- id: black",
+            "- id: ruff",
+        ):
+            self.assertIn(expected, config)

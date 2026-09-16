@@ -5,7 +5,7 @@ import tempfile
 import uuid
 from contextlib import contextmanager
 from pathlib import Path
-from typing import BinaryIO, Iterator
+from typing import Iterator
 
 from cryptography.fernet import InvalidToken
 from django.conf import settings
@@ -14,7 +14,6 @@ from django.core.files.storage import FileSystemStorage
 from django.utils.deconstruct import deconstructible
 
 from utils.encryption import get_fernet
-
 
 ENCRYPTED_FILE_HEADER = b"SIGNACORE-FERNET-V1\n"
 

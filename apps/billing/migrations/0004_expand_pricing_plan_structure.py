@@ -3,7 +3,6 @@ from decimal import Decimal
 import django.core.validators
 from django.db import migrations, models
 
-
 DEFAULT_PLAN_PRICES = (
     {
         "plan": "FREE",
@@ -49,11 +48,7 @@ def seed_expanded_plan_prices(apps, schema_editor) -> None:
         billing_plan.objects.update_or_create(
             plan=defaults["plan"],
             billing_interval=defaults["billing_interval"],
-            defaults={
-                key: value
-                for key, value in defaults.items()
-                if key not in {"plan", "billing_interval"}
-            },
+            defaults={key: value for key, value in defaults.items() if key not in {"plan", "billing_interval"}},
         )
 
 

@@ -40,4 +40,3 @@ class BaseAPIClient:
 
     def post(self, path: str, **kwargs: Any) -> httpx.Response:
         return self.request("POST", path, **kwargs)
-

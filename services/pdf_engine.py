@@ -1,8 +1,8 @@
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from pathlib import Path
-import re
 from typing import Any
 
 import fitz
@@ -52,9 +52,7 @@ class PDFEngine:
                 detected_fields.append(
                     DetectedField(
                         field_type=self._map_widget_type(widget),
-                        label=self._normalize_label(
-                            widget.field_label or widget.field_name or f"Field {order}"
-                        ),
+                        label=self._normalize_label(widget.field_label or widget.field_name or f"Field {order}"),
                         page=page_index,
                         x=rect.x0,
                         y=rect.y0,
@@ -261,9 +259,10 @@ class PDFEngine:
                 if label_type is not None:
                     field_type = label_type
                 else:
-                    field_type = self._heuristic_type_for_text(
-                        f"{label_context} {' '.join(next_words)} {suffix}".lower()
-                    ) or DocumentField.FieldTypeEnum.TEXT
+                    field_type = (
+                        self._heuristic_type_for_text(f"{label_context} {' '.join(next_words)} {suffix}".lower())
+                        or DocumentField.FieldTypeEnum.TEXT
+                    )
                 fields.append(
                     DetectedField(
                         field_type=field_type,
@@ -337,11 +336,7 @@ class PDFEngine:
                     continue
                 x0, y0, x1, y1 = map(float, word[:4])
                 label = self._clean_label(
-                    " ".join(
-                        str(item[4])
-                        for item in words
-                        if str(item[4] or "") not in self.checkbox_chars
-                    )
+                    " ".join(str(item[4]) for item in words if str(item[4] or "") not in self.checkbox_chars)
                 )
                 fields.append(
                     DetectedField(
@@ -410,9 +405,7 @@ class PDFEngine:
         vertical_lines = [
             drawing["rect"]
             for drawing in drawings
-            if drawing.get("rect")
-            and drawing["rect"].width <= 2.5
-            and drawing["rect"].height >= 18.0
+            if drawing.get("rect") and drawing["rect"].width <= 2.5 and drawing["rect"].height >= 18.0
         ]
 
         for drawing in drawings:
@@ -471,11 +464,7 @@ class PDFEngine:
         left_words = [item for item in nearby_words if item[2] <= rect.x0 + 2.0]
         right_words = [item for item in nearby_words if item[0] >= rect.x1 - 2.0]
 
-        left_phrase_words = [
-            token
-            for _, _, _, _, token in left_words
-            if token.lower() not in {"tenant", "landlord"}
-        ]
+        left_phrase_words = [token for _, _, _, _, token in left_words if token.lower() not in {"tenant", "landlord"}]
         left_phrase = " ".join(left_phrase_words[-4:]).strip()
         right_phrase = " ".join(token for _, _, _, _, token in right_words[:8]).strip()
         label = self._clean_label(" ".join(part for part in [left_phrase, right_phrase] if part))

@@ -1,8 +1,8 @@
 from django.conf import settings
-from django.core.mail import EmailMultiAlternatives
-from django.utils.html import escape
 from django.contrib.auth.tokens import default_token_generator
+from django.core.mail import EmailMultiAlternatives
 from django.utils.encoding import force_bytes
+from django.utils.html import escape
 from django.utils.http import urlsafe_base64_encode
 
 from apps.documents.models import Document
@@ -64,22 +64,34 @@ def build_branded_email_html(
                         <td style="padding:10px 0;border-bottom:1px solid rgba(148,163,184,0.18);font-size:14px;font-weight:700;color:#e5edf5;text-align:right;">{escape(value)}</td>
                       </tr>
 """
-    details_html = f"""\
+    details_html = (
+        f"""\
                 <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="margin:0 0 26px;border:1px solid rgba(148,163,184,0.22);border-radius:18px;background:#0c1722;padding:8px 18px;">
                   {detail_rows}
                 </table>
-""" if detail_rows else ""
-    code_html = f"""\
+"""
+        if detail_rows
+        else ""
+    )
+    code_html = (
+        f"""\
                 <div style="margin:0 0 26px;border:1px solid rgba(110,231,249,0.35);border-radius:18px;background:#08121c;padding:22px;text-align:center;">
                   <div style="font-size:12px;font-weight:900;letter-spacing:0.14em;text-transform:uppercase;color:#6ee7f9;">Verification code</div>
                   <div style="margin-top:10px;font-family: ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:34px;font-weight:900;letter-spacing:0.22em;color:#f8fafc;">{safe_code}</div>
                 </div>
-""" if safe_code else ""
-    action_html = f"""\
+"""
+        if safe_code
+        else ""
+    )
+    action_html = (
+        f"""\
                 <a href="{safe_action_url}" style="display:inline-block;border-radius:14px;background:#f8fafc;color:#07111d;font-size:15px;font-weight:900;text-decoration:none;padding:15px 22px;">{safe_action_label}</a>
                 <p style="margin:24px 0 0;font-size:12px;line-height:1.6;color:#8191a3;">If the button does not work, copy this link into your browser:</p>
                 <p style="margin:8px 0 0;font-size:12px;line-height:1.6;word-break:break-all;color:#6ee7f9;">{safe_action_url}</p>
-""" if safe_action_label and safe_action_url else ""
+"""
+        if safe_action_label and safe_action_url
+        else ""
+    )
     return f"""\
 <!doctype html>
 <html lang="en">
@@ -165,10 +177,7 @@ def send_organization_invitation(
     role: str,
     token: str,
 ) -> None:
-    invitation_url = (
-        f"{settings.SIGNACORE_APP_URL.rstrip('/')}/register"
-        f"?role=company&invite={token}"
-    )
+    invitation_url = f"{settings.SIGNACORE_APP_URL.rstrip('/')}/register" f"?role=company&invite={token}"
     subject = f"You have been invited to {organization_name} on SignaCore"
     body = (
         f"Hello,\n\n{inviter_name} invited you to join {organization_name} on SignaCore.\n\n"
@@ -188,6 +197,8 @@ def send_organization_invitation(
             footer="This invitation expires in 7 days. If you were not expecting it, ignore this email.",
         ),
     )
+
+
 def send_otp_email_message(signing_request: SigningRequest, otp_code: str) -> None:
     signer_name = signing_request.signer_name or "there"
     subject = f"Your Signacore verification code for {signing_request.document.title}"
@@ -361,10 +372,7 @@ def send_account_verification_email(user) -> None:
     profile = user.signacore_profile
     uid = urlsafe_base64_encode(force_bytes(user.pk))
     token = default_token_generator.make_token(user)
-    verification_url = (
-        f"{settings.SIGNACORE_APP_URL.rstrip('/')}/api/auth/email/verify"
-        f"?uid={uid}&token={token}"
-    )
+    verification_url = f"{settings.SIGNACORE_APP_URL.rstrip('/')}/api/auth/email/verify" f"?uid={uid}&token={token}"
     subject = "Verify your SignaCore account"
     body = (
         f"Hello {profile.display_name or 'there'},\n\n"

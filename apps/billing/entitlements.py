@@ -25,7 +25,9 @@ class BillingErrorCodeEnum(str, Enum):
 
 class BillingMessageEnum(str, Enum):
     PLAN_FEATURE_REQUIRED = "This action is not included in your current plan. Upgrade to continue."
-    FREE_MONTHLY_LIMIT_REACHED = "Your Free plan allows five documents per month. Upgrade for unlimited document sending."
+    FREE_MONTHLY_LIMIT_REACHED = (
+        "Your Free plan allows five documents per month. Upgrade for unlimited document sending."
+    )
 
 
 FREE_DOCUMENT_LIMIT = 5
@@ -80,11 +82,15 @@ def get_effective_plan(organization, *, actor=None, subscription=None) -> str:
     subscription = subscription or OrganizationSubscription.objects.filter(organization=organization).first()
     if subscription is None:
         return OrganizationSubscription.PlanEnum.FREE
-    if subscription.plan in {
-        OrganizationSubscription.PlanEnum.PROFESSIONAL,
-        OrganizationSubscription.PlanEnum.BUSINESS,
-        OrganizationSubscription.PlanEnum.ENTERPRISE,
-    } and subscription.status in PAID_SUBSCRIPTION_STATUSES:
+    if (
+        subscription.plan
+        in {
+            OrganizationSubscription.PlanEnum.PROFESSIONAL,
+            OrganizationSubscription.PlanEnum.BUSINESS,
+            OrganizationSubscription.PlanEnum.ENTERPRISE,
+        }
+        and subscription.status in PAID_SUBSCRIPTION_STATUSES
+    ):
         return subscription.plan
     return OrganizationSubscription.PlanEnum.FREE
 
@@ -99,11 +105,16 @@ def get_monthly_document_usage(organization) -> dict[str, int]:
         created_at__gte=start,
         created_at__lte=end,
     ).count()
-    sent = SigningRequest.objects.filter(
-        document__organization=organization,
-        created_at__gte=start,
-        created_at__lte=end,
-    ).values("document_id").distinct().count()
+    sent = (
+        SigningRequest.objects.filter(
+            document__organization=organization,
+            created_at__gte=start,
+            created_at__lte=end,
+        )
+        .values("document_id")
+        .distinct()
+        .count()
+    )
     return {"created": created, "sent": sent}
 
 
@@ -131,10 +142,14 @@ def get_entitlement_snapshot(organization, *, actor=None, subscription=None) -> 
                     else usage["sent"] if feature == PlanFeatureEnum.SIGNING_REQUEST_SEND else None
                 ),
                 "upgrade_plan": (
-                    OrganizationSubscription.PlanEnum.BUSINESS
-                    if feature == PlanFeatureEnum.TEAM_MANAGEMENT
-                    else OrganizationSubscription.PlanEnum.PROFESSIONAL
-                ) if feature not in features else None,
+                    (
+                        OrganizationSubscription.PlanEnum.BUSINESS
+                        if feature == PlanFeatureEnum.TEAM_MANAGEMENT
+                        else OrganizationSubscription.PlanEnum.PROFESSIONAL
+                    )
+                    if feature not in features
+                    else None
+                ),
             }
             for feature in PlanFeatureEnum
         },
@@ -145,7 +160,15 @@ class BillingEntitlementError(APIException):
     status_code = 403
     default_code = BillingErrorCodeEnum.PLAN_FEATURE_REQUIRED.value
 
-    def __init__(self, code: BillingErrorCodeEnum, message: BillingMessageEnum, *, plan: str, feature: PlanFeatureEnum, upgrade_plan: str):
+    def __init__(
+        self,
+        code: BillingErrorCodeEnum,
+        message: BillingMessageEnum,
+        *,
+        plan: str,
+        feature: PlanFeatureEnum,
+        upgrade_plan: str,
+    ):
         self.detail = {
             "code": code.value,
             "message": message.value,
@@ -201,10 +224,6 @@ def require_monthly_document_capacity(actor, organization, *, operation: str, do
         BillingErrorCodeEnum.FREE_MONTHLY_LIMIT_REACHED,
         BillingMessageEnum.FREE_MONTHLY_LIMIT_REACHED,
         plan=effective_plan,
-        feature=(
-            PlanFeatureEnum.DOCUMENT_CREATE
-            if operation == "create"
-            else PlanFeatureEnum.SIGNING_REQUEST_SEND
-        ),
+        feature=(PlanFeatureEnum.DOCUMENT_CREATE if operation == "create" else PlanFeatureEnum.SIGNING_REQUEST_SEND),
         upgrade_plan=OrganizationSubscription.PlanEnum.PROFESSIONAL,
     )

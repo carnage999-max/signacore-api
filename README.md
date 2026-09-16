@@ -30,6 +30,17 @@ python manage.py test
 python manage.py runserver 127.0.0.1:8010
 ```
 
+Install the Git hooks once per checkout so every commit checks changed Python
+files with isort, Black, and Ruff:
+
+```bash
+pre-commit install
+make lint
+```
+
+The hooks run automatically before each commit. `make lint` runs them against
+the full repository when you want to check everything explicitly.
+
 ## Current foundation
 
 - Django project settings for local SQLite and server PostgreSQL
@@ -104,6 +115,7 @@ make makemigrations
 make migrate
 make collectstatic
 make test
+make lint
 make validate
 make docker-up
 make docker-down

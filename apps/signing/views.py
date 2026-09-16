@@ -20,11 +20,11 @@ from apps.documents.models import Document, DocumentField
 from apps.documents.serializers import DocumentFieldSerializer
 from services.pdf_engine import PDFEngine
 from tasks.notifications import notify_admin_progress, send_completion_emails, send_otp_email
+from utils.file_storage import save_encrypted_field_file, temporary_output_file, temporary_plaintext_file
 from utils.otp import generate_otp, hash_otp, verify_otp
 from utils.signer_session import build_signer_session_token, verify_signer_session_token
 from utils.task_dispatch import enqueue_task
 from utils.throttling import SignacoreRateThrottle
-from utils.file_storage import save_encrypted_field_file, temporary_output_file, temporary_plaintext_file
 
 from .models import FieldSubmission, SigningRequest
 from .serializers import FieldSubmissionSerializer, SignerOtpSerializer, SigningRequestSerializer
@@ -289,7 +289,9 @@ class SignerSubmitView(APIView):
 
         session_token = str(request.data.get("session_token", "")).strip() or get_request_session_token(request)
         if not verify_signer_session_token(session_token, str(signing_request.id), signing_request.otp_hash):
-            return Response({"session_token": ["Invalid or expired session token."]}, status=status.HTTP_400_BAD_REQUEST)
+            return Response(
+                {"session_token": ["Invalid or expired session token."]}, status=status.HTTP_400_BAD_REQUEST
+            )
 
         field_errors: dict[str, list[str]] = {}
         submissions_to_create: list[FieldSubmission] = []

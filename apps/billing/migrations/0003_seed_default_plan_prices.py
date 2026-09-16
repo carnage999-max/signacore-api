@@ -2,7 +2,6 @@ from decimal import Decimal
 
 from django.db import migrations
 
-
 DEFAULT_PLANS = (
     {
         "plan": "PROFESSIONAL",

@@ -4,7 +4,6 @@ import hashlib
 
 from django.core.signing import BadSignature, SignatureExpired, TimestampSigner
 
-
 SIGNER_SESSION_SALT = "signacore.signer.session"
 
 

@@ -8,7 +8,6 @@ from .views import (
     StripeWebhookView,
 )
 
-
 urlpatterns = [
     path("billing/plans/", PublicBillingPlanListView.as_view(), name="billing-plan-list"),
     path("admin/billing/", BillingStatusView.as_view(), name="billing-status"),

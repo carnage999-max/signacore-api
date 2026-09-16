@@ -14,4 +14,3 @@ class SigningRequestAdmin(admin.ModelAdmin):
 class FieldSubmissionAdmin(admin.ModelAdmin):
     list_display = ("id", "signing_request", "document_field", "value_type", "submitted_at")
     list_filter = ("value_type",)
-

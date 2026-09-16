@@ -1,11 +1,10 @@
 from __future__ import annotations
 
+from cryptography.fernet import Fernet, InvalidToken
 from django.conf import settings
 from django.core.exceptions import ImproperlyConfigured
 from django.core.validators import EmailValidator
 from django.db import models
-
-from cryptography.fernet import Fernet, InvalidToken
 
 
 def get_fernet() -> Fernet:
@@ -45,4 +44,3 @@ class EncryptedTextField(models.TextField):
 
 class EncryptedEmailField(EncryptedTextField):
     default_validators = [EmailValidator()]
-

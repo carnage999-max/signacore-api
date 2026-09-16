@@ -12,15 +12,15 @@ from django.contrib.auth import get_user_model
 from django.contrib.auth.hashers import check_password, make_password
 from django.contrib.auth.tokens import default_token_generator
 from django.db import IntegrityError, transaction
-from drf_spectacular.utils import extend_schema, extend_schema_view
 from django.utils import timezone
 from django.utils.http import urlsafe_base64_decode
+from drf_spectacular.utils import extend_schema, extend_schema_view
 from rest_framework import status
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from apps.documents.auth import HasValidSignacoreSecret, get_admin_actor, get_actor_organization
 from apps.billing.entitlements import PlanFeatureEnum, require_feature
+from apps.documents.auth import HasValidSignacoreSecret, get_actor_organization, get_admin_actor
 from apps.documents.models import AdminAuditLog
 from apps.documents.views import get_request_ip
 from apps.signing.models import SigningRequest
@@ -54,7 +54,6 @@ from .serializers import (
     OrganizationInvitationSerializer,
     OrganizationMemberSerializer,
 )
-
 
 DUMMY_PASSWORD_HASH = make_password(None)
 logger = logging.getLogger(__name__)
@@ -198,11 +197,7 @@ class EmailRegistrationView(APIView):
                 {"detail": "This invitation is for a company workspace account."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
-        existing_profile = (
-            AccountProfile.objects.select_related("user")
-            .filter(email_hash=digest)
-            .first()
-        )
+        existing_profile = AccountProfile.objects.select_related("user").filter(email_hash=digest).first()
         if existing_profile is not None:
             existing_user = existing_profile.user
             if (
@@ -260,9 +255,11 @@ class EmailRegistrationView(APIView):
                     request,
                     user,
                     AdminAuditLog.ActionEnum.EMAIL_REGISTER,
-                    "Joined a company workspace with email and password."
-                    if invitation is not None
-                    else "Created an account with email and password.",
+                    (
+                        "Joined a company workspace with email and password."
+                        if invitation is not None
+                        else "Created an account with email and password."
+                    ),
                 )
         except IntegrityError:
             return Response(
@@ -339,11 +336,7 @@ class EmailLoginView(APIView):
         serializer = EmailLoginSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         values = serializer.validated_data
-        profile = (
-            AccountProfile.objects.select_related("user")
-            .filter(email_hash=email_digest(values["email"]))
-            .first()
-        )
+        profile = AccountProfile.objects.select_related("user").filter(email_hash=email_digest(values["email"])).first()
         encoded_password = profile.user.password if profile is not None else DUMMY_PASSWORD_HASH
         password_matches = check_password(values["password"], encoded_password)
         if (
@@ -414,10 +407,14 @@ class OAuthExchangeView(APIView):
             )
 
         digest = subject_digest(verified_identity.provider, verified_identity.subject)
-        identity = SocialIdentity.objects.select_related("user__signacore_profile").filter(
-            provider=verified_identity.provider,
-            subject_hash=digest,
-        ).first()
+        identity = (
+            SocialIdentity.objects.select_related("user__signacore_profile")
+            .filter(
+                provider=verified_identity.provider,
+                subject_hash=digest,
+            )
+            .first()
+        )
         is_new = identity is None
         linked_profile = None
 
@@ -586,33 +583,50 @@ class OrganizationMembersView(APIView):
         organization = get_actor_organization(request, actor)
         if actor is None or organization is None:
             return Response({"detail": "Company workspace access is required."}, status=status.HTTP_403_FORBIDDEN)
-        if not actor.is_superuser and not OrganizationMembership.objects.filter(
-            organization=organization,
-            user=actor,
-            status=OrganizationMembership.StatusEnum.ACTIVE,
-        ).exists():
+        if (
+            not actor.is_superuser
+            and not OrganizationMembership.objects.filter(
+                organization=organization,
+                user=actor,
+                status=OrganizationMembership.StatusEnum.ACTIVE,
+            ).exists()
+        ):
             return Response({"detail": "Company workspace access is required."}, status=status.HTTP_403_FORBIDDEN)
-        log_account_event(request, actor, AdminAuditLog.ActionEnum.ORGANIZATION_MEMBER_LIST, "Viewed workspace members.")
+        log_account_event(
+            request, actor, AdminAuditLog.ActionEnum.ORGANIZATION_MEMBER_LIST, "Viewed workspace members."
+        )
         return Response({"items": serialize_organization_members(organization)}, status=status.HTTP_200_OK)
 
     def post(self, request):
         actor = get_admin_actor(request)
         organization = get_actor_organization(request, actor)
-        membership = OrganizationMembership.objects.filter(
-            organization=organization,
-            user=actor,
-            status=OrganizationMembership.StatusEnum.ACTIVE,
-        ).first() if actor and organization else None
-        if actor is None or organization is None or (
-            not actor.is_superuser and (
-                membership is None
-                or membership.role not in {
-                    OrganizationMembership.RoleEnum.OWNER,
-                    OrganizationMembership.RoleEnum.ADMIN,
-                }
+        membership = (
+            OrganizationMembership.objects.filter(
+                organization=organization,
+                user=actor,
+                status=OrganizationMembership.StatusEnum.ACTIVE,
+            ).first()
+            if actor and organization
+            else None
+        )
+        if (
+            actor is None
+            or organization is None
+            or (
+                not actor.is_superuser
+                and (
+                    membership is None
+                    or membership.role
+                    not in {
+                        OrganizationMembership.RoleEnum.OWNER,
+                        OrganizationMembership.RoleEnum.ADMIN,
+                    }
+                )
             )
         ):
-            return Response({"detail": "Workspace owner or admin access is required."}, status=status.HTTP_403_FORBIDDEN)
+            return Response(
+                {"detail": "Workspace owner or admin access is required."}, status=status.HTTP_403_FORBIDDEN
+            )
 
         require_feature(actor, organization, PlanFeatureEnum.TEAM_MANAGEMENT)
 
@@ -631,7 +645,9 @@ class OrganizationMembersView(APIView):
             accepted_at__isnull=True,
             expires_at__gt=timezone.now(),
         ).exists():
-            return Response({"detail": "An invitation is already pending for this email."}, status=status.HTTP_409_CONFLICT)
+            return Response(
+                {"detail": "An invitation is already pending for this email."}, status=status.HTTP_409_CONFLICT
+            )
 
         token = secrets.token_urlsafe(32)
         invitation = OrganizationInvitation.objects.create(
@@ -657,9 +673,7 @@ class OrganizationMembersView(APIView):
             token,
         )
         serialized_members = serialize_organization_members(organization)
-        invited_item = next(
-            item for item in serialized_members if str(item["id"]) == str(invitation.id)
-        )
+        invited_item = next(item for item in serialized_members if str(item["id"]) == str(invitation.id))
         return Response(
             {"detail": "Invitation sent.", "item": invited_item},
             status=status.HTTP_201_CREATED,
@@ -668,23 +682,44 @@ class OrganizationMembersView(APIView):
     def delete(self, request, membership_id):
         actor = get_admin_actor(request)
         organization = get_actor_organization(request, actor)
-        membership = OrganizationMembership.objects.filter(
-            id=membership_id,
-            organization=organization,
-            status=OrganizationMembership.StatusEnum.ACTIVE,
-        ).select_related("user").first() if actor and organization else None
-        actor_membership = OrganizationMembership.objects.filter(
-            organization=organization,
-            user=actor,
-            status=OrganizationMembership.StatusEnum.ACTIVE,
-        ).first() if actor and organization else None
-        if actor is None or organization is None or (
-            not actor.is_superuser and (actor_membership is None or actor_membership.role not in {
-                OrganizationMembership.RoleEnum.OWNER,
-                OrganizationMembership.RoleEnum.ADMIN,
-            })
+        membership = (
+            OrganizationMembership.objects.filter(
+                id=membership_id,
+                organization=organization,
+                status=OrganizationMembership.StatusEnum.ACTIVE,
+            )
+            .select_related("user")
+            .first()
+            if actor and organization
+            else None
+        )
+        actor_membership = (
+            OrganizationMembership.objects.filter(
+                organization=organization,
+                user=actor,
+                status=OrganizationMembership.StatusEnum.ACTIVE,
+            ).first()
+            if actor and organization
+            else None
+        )
+        if (
+            actor is None
+            or organization is None
+            or (
+                not actor.is_superuser
+                and (
+                    actor_membership is None
+                    or actor_membership.role
+                    not in {
+                        OrganizationMembership.RoleEnum.OWNER,
+                        OrganizationMembership.RoleEnum.ADMIN,
+                    }
+                )
+            )
         ):
-            return Response({"detail": "Workspace owner or admin access is required."}, status=status.HTTP_403_FORBIDDEN)
+            return Response(
+                {"detail": "Workspace owner or admin access is required."}, status=status.HTTP_403_FORBIDDEN
+            )
         require_feature(actor, organization, PlanFeatureEnum.TEAM_MANAGEMENT)
         if membership is None:
             return Response({"detail": "Workspace member not found."}, status=status.HTTP_404_NOT_FOUND)
@@ -693,7 +728,9 @@ class OrganizationMembersView(APIView):
         membership.status = OrganizationMembership.StatusEnum.SUSPENDED
         membership.save(update_fields=["status", "updated_at"])
         enqueue_task(sync_organization_seat_quantity, str(organization.id))
-        log_account_event(request, actor, AdminAuditLog.ActionEnum.ORGANIZATION_MEMBER_REMOVE, "Removed a workspace member.")
+        log_account_event(
+            request, actor, AdminAuditLog.ActionEnum.ORGANIZATION_MEMBER_REMOVE, "Removed a workspace member."
+        )
         return Response(status=status.HTTP_204_NO_CONTENT)
 
 
