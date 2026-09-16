@@ -259,6 +259,7 @@ DB_USER=signacore_staging_user
 DB_PASSWORD=<unique-staging-db-password>
 DB_HOST=<postgresql-host-on-shared-net>
 DB_PORT=5432
+DB_SSLMODE=require
 
 REDIS_URL=redis://redis:6379/4
 CELERY_BROKER_URL=redis://redis:6379/4

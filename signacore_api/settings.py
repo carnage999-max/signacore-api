@@ -115,6 +115,10 @@ ASGI_APPLICATION = "signacore_api.asgi.application"
 
 DATABASE_NAME = env("DB_NAME")
 if DATABASE_NAME:
+    database_options = {}
+    database_sslmode = env("DB_SSLMODE")
+    if database_sslmode:
+        database_options["sslmode"] = database_sslmode
     DATABASES = {
         "default": {
             "ENGINE": "django.db.backends.postgresql",
@@ -123,6 +127,7 @@ if DATABASE_NAME:
             "PASSWORD": env("DB_PASSWORD", ""),
             "HOST": env("DB_HOST", "127.0.0.1"),
             "PORT": env("DB_PORT", "5432"),
+            "OPTIONS": database_options,
         }
     }
 else:
