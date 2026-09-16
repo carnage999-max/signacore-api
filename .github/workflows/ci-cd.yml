@@ -79,6 +79,6 @@ jobs:
           test -n "$COOLIFY_WEBHOOK" || { echo "COOLIFY_STAGING_DEPLOY_WEBHOOK is not configured"; exit 1; }
           test -n "$COOLIFY_TOKEN" || { echo "COOLIFY_STAGING_DEPLOY_TOKEN is not configured"; exit 1; }
           curl --fail --silent --show-error --retry 3 --retry-all-errors \
-            --request GET \
+            --request POST \
             --header "Authorization: Bearer $COOLIFY_TOKEN" \
             "$COOLIFY_WEBHOOK"
