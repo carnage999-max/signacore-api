@@ -11,6 +11,7 @@
     signatureMode: "draw",
     typedSignature: "",
     resendTimerId: 0,
+    submitted: false,
   };
 
   const nodes = {
@@ -49,6 +50,7 @@
   const canvasContext = nodes.signatureCanvas.getContext("2d");
   let isDrawing = false;
   let isSavingSignature = false;
+  let isSubmitting = false;
 
   function formatDate(value) {
     if (!value) return "Not set";
@@ -126,7 +128,7 @@
   }
 
   function updateSubmitState() {
-    if (!state.context || !state.context.is_verified || state.context.access_message) {
+    if (state.submitted || !state.context || !state.context.is_verified || state.context.access_message) {
       nodes.submitButton.disabled = true;
       return;
     }
@@ -532,7 +534,7 @@
   }
 
   async function submitDocument() {
-    if (!state.context || !state.context.is_verified) return;
+    if (isSubmitting || state.submitted || !state.context || !state.context.is_verified) return;
     const formData = new FormData();
     // The HttpOnly signer cookie keeps resumed sessions valid after a refresh.
     if (state.sessionToken) {
@@ -555,13 +557,15 @@
     });
 
     try {
+      isSubmitting = true;
       nodes.submitButton.disabled = true;
       const payload = await request(app.dataset.submitUrl, {
         method: "POST",
         body: formData,
       });
+      state.submitted = true;
+      nodes.submitButton.textContent = "Document submitted";
       setNotice(payload.message || "Document signed successfully.", "success");
-      await loadContext();
     } catch (error) {
       if (error instanceof Error) {
         setNotice(error.message, "error");
@@ -572,7 +576,10 @@
         void reloadError;
       }
     } finally {
-      updateSubmitState();
+      isSubmitting = false;
+      if (!state.submitted) {
+        updateSubmitState();
+      }
     }
   }
 
