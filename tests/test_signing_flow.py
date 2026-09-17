@@ -349,3 +349,32 @@ class SignerFlowTests(TestCase):
         for message in mail.outbox:
             self.assertEqual(message.alternatives[0][1], "text/html")
             self.assertIn("SignaCore - by Se7en", message.alternatives[0][0])
+
+    def test_submit_uses_verified_cookie_when_body_session_token_is_missing(self) -> None:
+        with self.settings(SIGNACORE_TEST_OTP_CODE="123456"):
+            self.client.post(f"/api/sign/{self.signing_request.id}/otp/send/")
+            verify_response = self.client.post(
+                f"/api/sign/{self.signing_request.id}/otp/verify/",
+                {"otp": "123456"},
+                format="json",
+            )
+
+        self.assertIn("signacore_signer_session", verify_response.cookies)
+        with self.captureOnCommitCallbacks(execute=True):
+            response = self.client.post(
+                f"/api/sign/{self.signing_request.id}/submit/",
+                {
+                    f"field_{self.text_field.id}_type": "TEXT",
+                    f"field_{self.text_field.id}_value": "Jane Doe",
+                    f"field_{self.signature_field.id}_type": "SIGNATURE_PNG",
+                    f"field_{self.signature_field.id}_image": SimpleUploadedFile(
+                        "signature.png",
+                        build_png_pixel(),
+                        content_type="image/png",
+                    ),
+                },
+                format="multipart",
+            )
+
+        self.assertEqual(response.status_code, 200, response.json())
+        self.assertEqual(response.json()["status"], "COMPLETED")

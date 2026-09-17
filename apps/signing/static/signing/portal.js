@@ -532,9 +532,12 @@
   }
 
   async function submitDocument() {
-    if (!state.context || !state.sessionToken) return;
+    if (!state.context || !state.context.is_verified) return;
     const formData = new FormData();
-    formData.append("session_token", state.sessionToken);
+    // The HttpOnly signer cookie keeps resumed sessions valid after a refresh.
+    if (state.sessionToken) {
+      formData.append("session_token", state.sessionToken);
+    }
     state.fieldErrors = {};
 
     state.context.fields.forEach((field) => {
