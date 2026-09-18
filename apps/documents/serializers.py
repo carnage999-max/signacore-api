@@ -6,6 +6,7 @@ from rest_framework import serializers
 
 from apps.accounts.models import OrganizationMembership
 from apps.signing.serializers import SignerInputSerializer, SigningRequestSerializer
+from services.authored_pdf import AuthoredPDFRenderer
 
 from .models import AdminAuditLog, Document, DocumentField
 
@@ -20,6 +21,17 @@ class DocumentUploadSerializer(serializers.Serializer):
         if content_type != "application/pdf" and not file_name.lower().endswith(".pdf"):
             raise serializers.ValidationError("Only PDF uploads are allowed.")
         return value
+
+
+class AuthoredDocumentSerializer(serializers.Serializer):
+    title = serializers.CharField(max_length=255)
+    content = serializers.JSONField()
+
+    def validate_content(self, value):
+        try:
+            return AuthoredPDFRenderer().validate(value)
+        except ValueError as exc:
+            raise serializers.ValidationError(str(exc)) from exc
 
 
 class DocumentFieldSerializer(serializers.ModelSerializer):
@@ -92,6 +104,7 @@ class DocumentSerializer(serializers.ModelSerializer):
         fields = (
             "id",
             "title",
+            "source",
             "status",
             "created_by",
             "organization",
@@ -113,6 +126,7 @@ class AdminDocumentListSerializer(serializers.ModelSerializer):
         fields = (
             "id",
             "title",
+            "source",
             "status",
             "created_at",
             "updated_at",

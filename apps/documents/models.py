@@ -9,6 +9,10 @@ from utils.file_storage import encrypted_file_storage, original_pdf_upload_to, s
 
 
 class Document(models.Model):
+    class SourceEnum(models.TextChoices):
+        UPLOADED = "UPLOADED", "Uploaded PDF"
+        AUTHORED = "AUTHORED", "Created in SignaCore"
+
     class StatusEnum(models.TextChoices):
         DRAFT = "DRAFT", "Draft"
         SENT = "SENT", "Sent"
@@ -18,6 +22,8 @@ class Document(models.Model):
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     title = EncryptedTextField(max_length=255)
+    source = models.CharField(max_length=32, choices=SourceEnum.choices, default=SourceEnum.UPLOADED)
+    authored_content = EncryptedTextField(blank=True, default="")
     original_pdf = models.FileField(storage=encrypted_file_storage, upload_to=original_pdf_upload_to)
     signed_pdf = models.FileField(
         storage=encrypted_file_storage,
@@ -59,6 +65,7 @@ class DocumentField(models.Model):
         ACROFORM = "ACROFORM", "AcroForm"
         HEURISTIC = "HEURISTIC", "Heuristic"
         MANUAL = "MANUAL", "Manual"
+        AUTHORED = "AUTHORED", "Authored document"
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     document = models.ForeignKey(Document, on_delete=models.CASCADE, related_name="fields")
@@ -87,6 +94,7 @@ class AdminAuditLog(models.Model):
         DOCUMENT_LIST = "DOCUMENT_LIST", "Document List"
         DOCUMENT_VIEW = "DOCUMENT_VIEW", "Document View"
         DOCUMENT_UPLOAD = "DOCUMENT_UPLOAD", "Document Upload"
+        DOCUMENT_AUTHOR = "DOCUMENT_AUTHOR", "Document Author"
         DOCUMENT_UPDATE = "DOCUMENT_UPDATE", "Document Update"
         DOCUMENT_VOID = "DOCUMENT_VOID", "Document Void"
         DOCUMENT_DOWNLOAD = "DOCUMENT_DOWNLOAD", "Document Download"

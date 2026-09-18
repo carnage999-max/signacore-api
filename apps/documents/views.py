@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+import json
+import uuid
 from datetime import timedelta
 from pathlib import Path
 
 import fitz
 from django.conf import settings
 from django.contrib.auth import get_user_model
+from django.core.files.base import ContentFile
 from django.db import transaction
 from django.db.models import Count, Q
 from django.http import FileResponse, HttpResponse
@@ -21,6 +24,7 @@ from rest_framework.views import APIView
 from apps.accounts.models import AccountProfile, OrganizationMembership
 from apps.billing.entitlements import PlanFeatureEnum, require_feature, require_monthly_document_capacity
 from apps.signing.models import SigningRequest
+from services.authored_pdf import AuthoredPDFRenderer
 from services.pdf_engine import PDFEngine
 from tasks.notifications import (
     send_admin_account_created,
@@ -47,6 +51,7 @@ from .serializers import (
     AdminPasswordChangeSerializer,
     AdminUserCreateSerializer,
     AdminUserSerializer,
+    AuthoredDocumentSerializer,
     DocumentFieldSerializer,
     DocumentFieldUpdateSerializer,
     DocumentSendSerializer,
@@ -458,6 +463,129 @@ class AdminDocumentsView(APIView):
             "field_count": len(detected_fields),
         }
         return Response(payload, status=status.HTTP_201_CREATED)
+
+
+class AdminAuthoredDocumentView(APIView):
+    authentication_classes = []
+    permission_classes = [HasValidSignacoreSecret]
+    serializer_class = AuthoredDocumentSerializer
+
+    def post(self, request):
+        actor, organization = get_request_actor_and_organization(request)
+        require_monthly_document_capacity(actor, organization, operation="create")
+        serializer = AuthoredDocumentSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        content = serializer.validated_data["content"]
+        pdf_bytes, rendered_fields = AuthoredPDFRenderer().render(content)
+        with transaction.atomic():
+            document = Document.objects.create(
+                title=serializer.validated_data["title"],
+                source=Document.SourceEnum.AUTHORED,
+                authored_content=json.dumps(content, separators=(",", ":")),
+                original_pdf=ContentFile(pdf_bytes, name=f"authored-{uuid.uuid4()}.pdf"),
+                created_by=actor,
+                organization=organization,
+            )
+            DocumentField.objects.bulk_create(
+                [
+                    DocumentField(
+                        document=document,
+                        field_type=field.field_type,
+                        label=field.label,
+                        page=field.page,
+                        x=field.x,
+                        y=field.y,
+                        width=field.width,
+                        height=field.height,
+                        is_required=field.is_required,
+                        detection_source=DocumentField.DetectionSourceEnum.AUTHORED,
+                        order=field.order,
+                    )
+                    for field in rendered_fields
+                ]
+            )
+            log_admin_event(
+                request,
+                AdminAuditLog.ActionEnum.DOCUMENT_AUTHOR,
+                f"Created authored document: {document.title}.",
+                actor=actor,
+                target_type="document",
+                target_id=document.id,
+                metadata={"field_count": len(rendered_fields)},
+            )
+
+        document = Document.objects.prefetch_related("fields", "signing_requests").get(pk=document.pk)
+        return Response(serialize_document_detail(document), status=status.HTTP_201_CREATED)
+
+
+class AdminAuthoredDocumentDetailView(APIView):
+    authentication_classes = []
+    permission_classes = [HasValidSignacoreSecret]
+    serializer_class = AuthoredDocumentSerializer
+
+    def get(self, request, document_id):
+        document = get_scoped_document(request, document_id, prefetch=("fields", "signing_requests"))
+        if document.source != Document.SourceEnum.AUTHORED:
+            raise ValidationError({"document": ["Only authored documents can be opened here."]})
+        try:
+            content = json.loads(document.authored_content or "{}")
+        except json.JSONDecodeError as exc:
+            raise ValidationError({"document": ["This authored document has invalid saved content."]}) from exc
+        return Response(
+            {**serialize_document_detail(document), "content": content},
+            status=status.HTTP_200_OK,
+        )
+
+    def patch(self, request, document_id):
+        document = get_scoped_document(request, document_id)
+        if document.source != Document.SourceEnum.AUTHORED:
+            raise ValidationError({"document": ["Only authored documents can be edited here."]})
+        if document.status != Document.StatusEnum.DRAFT:
+            raise ValidationError({"document": ["Only draft authored documents can be edited."]})
+
+        serializer = AuthoredDocumentSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        content = serializer.validated_data["content"]
+        pdf_bytes, rendered_fields = AuthoredPDFRenderer().render(content)
+
+        with transaction.atomic():
+            if document.original_pdf:
+                document.original_pdf.delete(save=False)
+            document.title = serializer.validated_data["title"]
+            document.authored_content = json.dumps(content, separators=(",", ":"))
+            document.original_pdf = ContentFile(pdf_bytes, name=f"authored-{uuid.uuid4()}.pdf")
+            document.save(update_fields=["title", "authored_content", "original_pdf", "updated_at"])
+            document.fields.all().delete()
+            DocumentField.objects.bulk_create(
+                [
+                    DocumentField(
+                        document=document,
+                        field_type=field.field_type,
+                        label=field.label,
+                        page=field.page,
+                        x=field.x,
+                        y=field.y,
+                        width=field.width,
+                        height=field.height,
+                        is_required=field.is_required,
+                        detection_source=DocumentField.DetectionSourceEnum.AUTHORED,
+                        order=field.order,
+                    )
+                    for field in rendered_fields
+                ]
+            )
+            log_admin_event(
+                request,
+                AdminAuditLog.ActionEnum.DOCUMENT_UPDATE,
+                f"Updated authored document: {document.title}.",
+                target_type="document",
+                target_id=document.id,
+                metadata={"field_count": len(rendered_fields)},
+            )
+
+        document = Document.objects.prefetch_related("fields", "signing_requests").get(pk=document.pk)
+        return Response(serialize_document_detail(document), status=status.HTTP_200_OK)
 
 
 class AdminDocumentDetailView(APIView):
