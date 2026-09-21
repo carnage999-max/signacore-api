@@ -126,6 +126,14 @@ class BillingStatusView(APIView):
     def get(self, request):
         actor, organization = get_request_actor_and_organization(request)
         subscription = get_organization_subscription(organization)
+        if subscription.stripe_subscription_id and settings.STRIPE_SECRET_KEY:
+            try:
+                stripe_subscription = StripeAPIClient().retrieve_subscription(subscription.stripe_subscription_id)
+                sync_subscription_object(stripe_subscription)
+                subscription.refresh_from_db()
+            except (httpx.HTTPError, KeyError, ValueError):
+                # The webhook snapshot remains usable if Stripe is temporarily unavailable.
+                pass
         log_admin_event(
             request,
             AdminAuditLog.ActionEnum.BILLING_VIEW,

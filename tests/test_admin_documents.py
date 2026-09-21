@@ -219,11 +219,161 @@ class AdminDocumentUploadTests(TestCase):
             [field["field_type"] for field in payload["fields"]],
             ["TEXT", "SIGNATURE"],
         )
-
         document = Document.objects.get(pk=payload["id"])
         self.assertEqual(document.created_by, self.user)
         self.assertEqual(document.organization, self.organization)
         self.assertEqual(document.fields.count(), 2)
+
+    def test_authored_document_creates_encrypted_pdf_and_exact_fields(self) -> None:
+        response = self.client.post(
+            "/api/admin/documents/authored/",
+            {
+                "title": "Created agreement",
+                "content": {
+                    "type": "doc",
+                    "attrs": {"pageSize": "LETTER"},
+                    "content": [
+                        {
+                            "type": "heading",
+                            "attrs": {"level": 1},
+                            "content": [{"type": "text", "text": "Created agreement"}],
+                        },
+                        {
+                            "type": "paragraph",
+                            "content": [{"type": "text", "text": "Please review these terms."}],
+                        },
+                        {
+                            "type": "signacoreField",
+                            "attrs": {
+                                "fieldType": "SIGNATURE",
+                                "label": "Customer signature",
+                                "required": True,
+                            },
+                        },
+                    ],
+                },
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 201, response.json())
+        payload = response.json()
+        document = Document.objects.get(pk=payload["id"])
+        self.assertEqual(document.source, Document.SourceEnum.AUTHORED)
+        self.assertTrue(document.original_pdf.name.endswith(".pdf"))
+        self.assertTrue(document.authored_content)
+        self.assertEqual(payload["page_count"], 1)
+        self.assertEqual(len(payload["fields"]), 1)
+        self.assertEqual(payload["fields"][0]["field_type"], "SIGNATURE")
+        self.assertEqual(payload["fields"][0]["detection_source"], "AUTHORED")
+        self.assertGreater(payload["fields"][0]["width"], 0)
+
+    def test_authored_document_rejects_unknown_content_nodes(self) -> None:
+        response = self.client.post(
+            "/api/admin/documents/authored/",
+            {
+                "title": "Invalid agreement",
+                "content": {
+                    "type": "doc",
+                    "content": [{"type": "video", "attrs": {}}],
+                },
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 400, response.json())
+        self.assertIn("content", response.json())
+
+    def test_authored_document_update_rebuilds_fields_and_pdf(self) -> None:
+        create_response = self.client.post(
+            "/api/admin/documents/authored/",
+            {
+                "title": "Draft agreement",
+                "content": {
+                    "type": "doc",
+                    "attrs": {"pageSize": "A4"},
+                    "content": [
+                        {
+                            "type": "signacoreField",
+                            "attrs": {"fieldType": "TEXT", "label": "Name", "required": True},
+                        }
+                    ],
+                },
+            },
+            format="json",
+        )
+        document_id = create_response.json()["id"]
+
+        update_response = self.client.patch(
+            f"/api/admin/documents/{document_id}/authored/",
+            {
+                "title": "Updated agreement",
+                "content": {
+                    "type": "doc",
+                    "attrs": {"pageSize": "A4"},
+                    "content": [
+                        {
+                            "type": "signacoreField",
+                            "attrs": {"fieldType": "INITIALS", "label": "Initials", "required": False},
+                        },
+                        {
+                            "type": "signacoreField",
+                            "attrs": {"fieldType": "SIGNATURE", "label": "Signature", "required": True},
+                        },
+                    ],
+                },
+            },
+            format="json",
+        )
+
+        self.assertEqual(update_response.status_code, 200, update_response.json())
+        document = Document.objects.get(pk=document_id)
+        self.assertEqual(document.title, "Updated agreement")
+        self.assertEqual(document.fields.count(), 2)
+        self.assertEqual(
+            list(document.fields.values_list("field_type", flat=True)),
+            ["INITIALS", "SIGNATURE"],
+        )
+
+        reopen_response = self.client.get(f"/api/admin/documents/{document_id}/authored/")
+        self.assertEqual(reopen_response.status_code, 200, reopen_response.json())
+        self.assertEqual(reopen_response.json()["content"]["attrs"]["pageSize"], "A4")
+
+    def test_authored_document_generates_additional_pages_without_losing_fields(self) -> None:
+        response = self.client.post(
+            "/api/admin/documents/authored/",
+            {
+                "title": "Long agreement",
+                "content": {
+                    "type": "doc",
+                    "attrs": {"pageSize": "LETTER"},
+                    "content": [
+                        {
+                            "type": "paragraph",
+                            "content": [
+                                {
+                                    "type": "text",
+                                    "text": "This paragraph is repeated to verify deterministic page breaks in the authored document renderer.",
+                                }
+                            ],
+                        }
+                        for _ in range(60)
+                    ]
+                    + [
+                        {
+                            "type": "signacoreField",
+                            "attrs": {"fieldType": "SIGNATURE", "label": "Final signature", "required": True},
+                        }
+                    ],
+                },
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 201, response.json())
+        payload = response.json()
+        self.assertGreater(payload["page_count"], 1)
+        self.assertEqual(payload["fields"][0]["page"], payload["page_count"])
 
     def test_upload_pdf_falls_back_to_heuristic_detection_when_no_widgets_exist(self) -> None:
         upload = SimpleUploadedFile(

@@ -1,4 +1,5 @@
 from django.conf import settings
+from django.core.exceptions import ObjectDoesNotExist
 from django.core.mail import EmailMultiAlternatives
 from django.utils.encoding import force_bytes
 from django.utils.html import escape
@@ -30,6 +31,14 @@ def send_email(
     for attachment in attachments or []:
         message.attach(*attachment)
     message.send(fail_silently=False)
+
+
+def get_account_email(user) -> str:
+    try:
+        profile = user.signacore_profile
+    except ObjectDoesNotExist:
+        profile = None
+    return (getattr(profile, "email", "") or getattr(user, "email", "") or "").strip()
 
 
 def build_signing_link(signing_request: SigningRequest) -> str:
@@ -235,7 +244,7 @@ def send_completion_email(document: Document) -> None:
         dict.fromkeys(
             [
                 *(request.signer_email for request in document.signing_requests.all()),
-                getattr(document.created_by, "email", "") or "",
+                get_account_email(document.created_by),
             ]
         )
     )
@@ -273,7 +282,7 @@ def send_completion_email(document: Document) -> None:
 
 
 def send_progress_email(document: Document, signing_request: SigningRequest) -> None:
-    admin_email = getattr(document.created_by, "email", "") or ""
+    admin_email = get_account_email(document.created_by)
     if not admin_email:
         return
 
