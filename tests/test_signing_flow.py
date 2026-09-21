@@ -13,8 +13,9 @@ from django.test import TestCase, override_settings
 from django.utils import timezone
 from rest_framework.test import APIClient
 
-from apps.accounts.models import Organization
+from apps.accounts.models import AccountProfile, Organization
 from apps.documents.models import Document, DocumentField
+from apps.notifications.services import send_progress_email
 from apps.signing.models import FieldSubmission, SigningRequest
 from utils.file_storage import ENCRYPTED_FILE_HEADER
 
@@ -177,6 +178,19 @@ class SignerFlowTests(TestCase):
         self.assertEqual(second_response.status_code, 429, second_response.json())
         self.assertIn("retry_after", second_response.json())
         self.assertEqual(len(mail.outbox), 1)
+
+    def test_progress_email_uses_encrypted_account_profile_email(self) -> None:
+        AccountProfile.objects.create(
+            user=self.user,
+            account_type=AccountProfile.AccountTypeEnum.COMPANY,
+            email="owner@example.com",
+        )
+
+        send_progress_email(self.document, self.signing_request)
+
+        self.assertEqual(len(mail.outbox), 1)
+        self.assertEqual(mail.outbox[0].to, ["owner@example.com"])
+        self.assertEqual(mail.outbox[0].alternatives[0][1], "text/html")
 
     def test_otp_verification_is_rate_limited_by_proxy_ip(self) -> None:
         proxy_ip = "198.51.100.220"

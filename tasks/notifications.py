@@ -21,7 +21,7 @@ from apps.signing.models import SigningRequest
 @shared_task(name="tasks.notifications.send_invitation_emails")
 def send_invitation_emails(document_id: str) -> None:
     document = (
-        Document.objects.select_related("created_by")
+        Document.objects.select_related("created_by", "created_by__signacore_profile")
         .prefetch_related("signing_requests")
         .filter(pk=document_id)
         .first()
@@ -59,7 +59,7 @@ def send_organization_invitation(
 @shared_task(name="tasks.notifications.send_completion_emails")
 def send_completion_emails(document_id: str) -> None:
     document = (
-        Document.objects.select_related("created_by")
+        Document.objects.select_related("created_by", "created_by__signacore_profile")
         .prefetch_related("signing_requests")
         .filter(pk=document_id)
         .first()
@@ -83,7 +83,9 @@ def send_otp_email(signing_request_id: str, otp_code: str) -> None:
 
 @shared_task(name="tasks.notifications.notify_admin_progress")
 def notify_admin_progress(document_id: str, signing_request_id: str) -> None:
-    document = Document.objects.select_related("created_by").filter(pk=document_id).first()
+    document = (
+        Document.objects.select_related("created_by", "created_by__signacore_profile").filter(pk=document_id).first()
+    )
     signing_request = SigningRequest.objects.select_related("document").filter(pk=signing_request_id).first()
     if document is None or signing_request is None:
         return None
