@@ -669,6 +669,26 @@ class AdminDocumentUploadTests(TestCase):
         self.assertEqual(response.status_code, 204)
         self.assertFalse(DocumentField.objects.filter(id=field.id).exists())
 
+    def test_delete_document_removes_document_and_audit_log(self) -> None:
+        document = Document.objects.create(
+            title="Delete me",
+            original_pdf=SimpleUploadedFile("delete.pdf", build_flat_pdf(), content_type="application/pdf"),
+            created_by=self.user,
+            organization=self.organization,
+        )
+
+        response = self.client.delete(f"/api/admin/documents/{document.id}/")
+
+        self.assertEqual(response.status_code, 204)
+        self.assertFalse(Document.objects.filter(pk=document.id).exists())
+        self.assertTrue(
+            AdminAuditLog.objects.filter(
+                organization=self.organization,
+                action=AdminAuditLog.ActionEnum.DOCUMENT_DELETE,
+                target_id=str(document.id),
+            ).exists()
+        )
+
     def test_send_document_creates_signing_requests_and_marks_document_sent(self) -> None:
         mail.outbox = []
         document = Document.objects.create(

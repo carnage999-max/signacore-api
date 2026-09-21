@@ -97,6 +97,7 @@ class AdminAuditLog(models.Model):
         DOCUMENT_IMPORT = "DOCUMENT_IMPORT", "Document Import"
         DOCUMENT_AUTHOR = "DOCUMENT_AUTHOR", "Document Author"
         DOCUMENT_UPDATE = "DOCUMENT_UPDATE", "Document Update"
+        DOCUMENT_DELETE = "DOCUMENT_DELETE", "Document Delete"
         DOCUMENT_VOID = "DOCUMENT_VOID", "Document Void"
         DOCUMENT_DOWNLOAD = "DOCUMENT_DOWNLOAD", "Document Download"
         FIELD_CREATE = "FIELD_CREATE", "Field Create"

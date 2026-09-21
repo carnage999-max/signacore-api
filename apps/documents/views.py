@@ -657,6 +657,30 @@ class AdminDocumentDetailView(APIView):
         )
         return Response(AdminDocumentDetailSerializer(document).data, status=status.HTTP_200_OK)
 
+    def delete(self, request, document_id):
+        document = get_scoped_document(request, document_id)
+        document_title = document.title
+        original_name = document.original_pdf.name if document.original_pdf else ""
+        signed_name = document.signed_pdf.name if document.signed_pdf else ""
+        original_storage = document.original_pdf.storage if document.original_pdf else None
+        signed_storage = document.signed_pdf.storage if document.signed_pdf else None
+
+        with transaction.atomic():
+            document.delete()
+            log_admin_event(
+                request,
+                AdminAuditLog.ActionEnum.DOCUMENT_DELETE,
+                f"Deleted document: {document_title}.",
+                target_type="document",
+                target_id=document_id,
+            )
+            if original_storage and original_name:
+                transaction.on_commit(lambda: original_storage.delete(original_name))
+            if signed_storage and signed_name:
+                transaction.on_commit(lambda: signed_storage.delete(signed_name))
+
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
 
 class AdminDocumentFieldsView(APIView):
     authentication_classes = []
