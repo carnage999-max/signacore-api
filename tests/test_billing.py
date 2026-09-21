@@ -126,6 +126,34 @@ class BillingApiTests(TestCase):
             quantity=1,
         )
 
+    @patch("apps.billing.views.StripeAPIClient")
+    def test_billing_status_reconciles_cancellation_from_stripe(self, stripe_client_class) -> None:
+        subscription = OrganizationSubscription.objects.create(
+            organization=self.organization,
+            plan=OrganizationSubscription.PlanEnum.PROFESSIONAL,
+            status=OrganizationSubscription.StatusEnum.ACTIVE,
+            stripe_customer_id="cus_123",
+            stripe_subscription_id="sub_123",
+        )
+        stripe_client_class.return_value.retrieve_subscription.return_value = {
+            "id": "sub_123",
+            "customer": "cus_123",
+            "status": "canceled",
+            "cancel_at_period_end": False,
+            "metadata": {
+                "organization_id": str(self.organization.id),
+                "plan": "PROFESSIONAL",
+            },
+        }
+
+        response = self.client.get("/api/admin/billing/")
+
+        self.assertEqual(response.status_code, 200, response.json())
+        self.assertEqual(response.json()["status"], OrganizationSubscription.StatusEnum.CANCELED)
+        self.assertFalse(response.json()["cancel_at_period_end"])
+        subscription.refresh_from_db()
+        self.assertEqual(subscription.status, OrganizationSubscription.StatusEnum.CANCELED)
+
     def test_inactive_plan_cannot_start_checkout(self) -> None:
         self.professional_plan.is_active = False
         self.professional_plan.save(update_fields=["is_active", "updated_at"])
