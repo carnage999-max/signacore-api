@@ -202,6 +202,7 @@ REST_FRAMEWORK = {
         "signer_otp_send": "5/minute",
         "signer_otp_verify": "10/minute",
         "signer_submit": "10/minute",
+        "document_import": "10/minute",
     },
 }
 

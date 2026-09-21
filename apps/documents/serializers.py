@@ -34,6 +34,17 @@ class AuthoredDocumentSerializer(serializers.Serializer):
             raise serializers.ValidationError(str(exc)) from exc
 
 
+class DocxImportSerializer(serializers.Serializer):
+    docx_file = serializers.FileField()
+
+    def validate_docx_file(self, value):
+        if not str(getattr(value, "name", "")).lower().endswith(".docx"):
+            raise serializers.ValidationError("Only DOCX files can be imported into the document editor.")
+        if getattr(value, "size", 0) > 10 * 1024 * 1024:
+            raise serializers.ValidationError("DOCX files must be 10 MB or smaller.")
+        return value
+
+
 class DocumentFieldSerializer(serializers.ModelSerializer):
     class Meta:
         model = DocumentField

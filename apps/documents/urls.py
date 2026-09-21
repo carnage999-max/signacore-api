@@ -5,6 +5,7 @@ from .views import (
     AdminAuthLoginView,
     AdminAuthLogoutView,
     AdminAuthoredDocumentDetailView,
+    AdminAuthoredDocumentImportView,
     AdminAuthoredDocumentView,
     AdminDocumentDetailView,
     AdminDocumentDownloadView,
@@ -27,6 +28,11 @@ urlpatterns = [
     path("audit-logs/", AdminAuditLogsView.as_view(), name="admin-audit-logs"),
     path("documents/", AdminDocumentsView.as_view(), name="admin-documents"),
     path("documents/authored/", AdminAuthoredDocumentView.as_view(), name="admin-authored-documents"),
+    path(
+        "documents/authored/import/",
+        AdminAuthoredDocumentImportView.as_view(),
+        name="admin-authored-document-import",
+    ),
     path(
         "documents/<uuid:document_id>/authored/",
         AdminAuthoredDocumentDetailView.as_view(),

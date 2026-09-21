@@ -25,6 +25,7 @@ from apps.accounts.models import AccountProfile, OrganizationMembership
 from apps.billing.entitlements import PlanFeatureEnum, require_feature, require_monthly_document_capacity
 from apps.signing.models import SigningRequest
 from services.authored_pdf import AuthoredPDFRenderer
+from services.docx_import import DocxImporter, DocxImportError
 from services.pdf_engine import PDFEngine
 from tasks.notifications import (
     send_admin_account_created,
@@ -57,6 +58,7 @@ from .serializers import (
     DocumentSendSerializer,
     DocumentUpdateSerializer,
     DocumentUploadSerializer,
+    DocxImportSerializer,
     ManualDocumentFieldCreateSerializer,
 )
 
@@ -517,6 +519,41 @@ class AdminAuthoredDocumentView(APIView):
 
         document = Document.objects.prefetch_related("fields", "signing_requests").get(pk=document.pk)
         return Response(serialize_document_detail(document), status=status.HTTP_201_CREATED)
+
+
+class AdminAuthoredDocumentImportView(APIView):
+    authentication_classes = []
+    permission_classes = [HasValidSignacoreSecret]
+    parser_classes = [MultiPartParser, FormParser]
+    throttle_classes = [SignacoreRateThrottle]
+    throttle_scope = "document_import"
+    serializer_class = DocxImportSerializer
+
+    def post(self, request):
+        actor, organization = get_request_actor_and_organization(request)
+        require_feature(actor, organization, PlanFeatureEnum.DOCUMENT_CREATE)
+        serializer = DocxImportSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        docx_file = serializer.validated_data["docx_file"]
+        try:
+            result = DocxImporter().import_bytes(docx_file.read(), docx_file.name)
+        except DocxImportError as exc:
+            raise ValidationError({"docx_file": [str(exc)]}) from exc
+        log_admin_event(
+            request,
+            AdminAuditLog.ActionEnum.DOCUMENT_IMPORT,
+            "Imported a DOCX into the document editor.",
+            actor=actor,
+            metadata={"warning_count": len(result.warnings)},
+        )
+        return Response(
+            {
+                "title": result.title,
+                "content": result.content,
+                "warnings": result.warnings,
+            },
+            status=status.HTTP_200_OK,
+        )
 
 
 class AdminAuthoredDocumentDetailView(APIView):

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import timedelta
+from io import BytesIO
 
 import fitz
 from django.conf import settings
@@ -10,6 +11,7 @@ from django.core.files.base import ContentFile
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import TestCase, override_settings
 from django.utils import timezone
+from docx import Document as WordDocument
 from rest_framework.test import APIClient
 
 from apps.accounts.models import Organization, OrganizationMembership
@@ -89,6 +91,18 @@ def build_heuristic_signature_checkbox_pdf() -> bytes:
     pdf_bytes = document.tobytes()
     document.close()
     return pdf_bytes
+
+
+def build_docx() -> bytes:
+    document = WordDocument()
+    document.add_heading("Imported agreement", level=1)
+    document.add_paragraph("Review these terms before sending the agreement.")
+    document.add_paragraph("First requirement", style="List Bullet")
+    document.add_paragraph("Second requirement", style="List Bullet")
+    document.add_paragraph("Final approval", style="List Number")
+    payload = BytesIO()
+    document.save(payload)
+    return payload.getvalue()
 
 
 @override_settings(
@@ -267,6 +281,46 @@ class AdminDocumentUploadTests(TestCase):
         self.assertEqual(payload["fields"][0]["field_type"], "SIGNATURE")
         self.assertEqual(payload["fields"][0]["detection_source"], "AUTHORED")
         self.assertGreater(payload["fields"][0]["width"], 0)
+
+    def test_docx_import_returns_native_editor_content_without_creating_document(self) -> None:
+        response = self.client.post(
+            "/api/admin/documents/authored/import/",
+            {
+                "docx_file": SimpleUploadedFile(
+                    "employment-agreement.docx",
+                    build_docx(),
+                    content_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                )
+            },
+            format="multipart",
+        )
+
+        self.assertEqual(response.status_code, 200, response.json())
+        payload = response.json()
+        self.assertEqual(payload["title"], "employment-agreement")
+        self.assertEqual(payload["content"]["type"], "doc")
+        self.assertEqual(
+            [node["type"] for node in payload["content"]["content"]],
+            ["heading", "paragraph", "bulletList", "orderedList"],
+        )
+        self.assertEqual(payload["warnings"], [])
+        self.assertTrue(
+            AdminAuditLog.objects.filter(
+                organization=self.organization,
+                action=AdminAuditLog.ActionEnum.DOCUMENT_IMPORT,
+            ).exists()
+        )
+        self.assertEqual(Document.objects.filter(organization=self.organization).count(), 0)
+
+    def test_docx_import_rejects_non_docx_files(self) -> None:
+        response = self.client.post(
+            "/api/admin/documents/authored/import/",
+            {"docx_file": SimpleUploadedFile("agreement.pdf", b"not a docx", content_type="application/pdf")},
+            format="multipart",
+        )
+
+        self.assertEqual(response.status_code, 400, response.json())
+        self.assertIn("docx_file", response.json())
 
     def test_authored_document_rejects_unknown_content_nodes(self) -> None:
         response = self.client.post(
