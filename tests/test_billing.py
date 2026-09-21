@@ -169,6 +169,27 @@ class BillingApiTests(TestCase):
 
         self.assertEqual(response.status_code, 503, response.json())
 
+    def test_active_subscription_must_use_billing_portal_for_plan_changes(self) -> None:
+        OrganizationSubscription.objects.create(
+            organization=self.organization,
+            plan=OrganizationSubscription.PlanEnum.PROFESSIONAL,
+            status=OrganizationSubscription.StatusEnum.ACTIVE,
+            stripe_customer_id="cus_123",
+            stripe_subscription_id="sub_123",
+        )
+
+        response = self.client.post(
+            "/api/admin/billing/checkout/",
+            {
+                "plan": OrganizationSubscription.PlanEnum.BUSINESS,
+                "billing_interval": BillingPlanConfiguration.BillingIntervalEnum.MONTH,
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 409, response.json())
+        self.assertEqual(response.json()["detail"], "Use the billing portal to change an active subscription.")
+
     def test_non_owner_cannot_manage_billing(self) -> None:
         admin_user = get_user_model().objects.create_user(
             username="company-admin",
@@ -238,6 +259,33 @@ class BillingApiTests(TestCase):
             HTTP_STRIPE_SIGNATURE=self.sign_payload(changed_body),
         )
         self.assertEqual(changed_response.status_code, 400, changed_response.json())
+
+    @patch("apps.billing.views.StripeAPIClient")
+    def test_billing_status_preserves_scheduled_cancellation(self, stripe_client_class) -> None:
+        OrganizationSubscription.objects.create(
+            organization=self.organization,
+            plan=OrganizationSubscription.PlanEnum.PROFESSIONAL,
+            status=OrganizationSubscription.StatusEnum.ACTIVE,
+            stripe_customer_id="cus_123",
+            stripe_subscription_id="sub_123",
+        )
+        stripe_client_class.return_value.retrieve_subscription.return_value = {
+            "id": "sub_123",
+            "customer": "cus_123",
+            "status": "active",
+            "cancel_at_period_end": True,
+            "current_period_end": 1_800_000_000,
+            "metadata": {
+                "organization_id": str(self.organization.id),
+                "plan": "PROFESSIONAL",
+            },
+        }
+
+        response = self.client.get("/api/admin/billing/")
+
+        self.assertEqual(response.status_code, 200, response.json())
+        self.assertEqual(response.json()["status"], OrganizationSubscription.StatusEnum.ACTIVE)
+        self.assertTrue(response.json()["cancel_at_period_end"])
 
     def test_webhook_rejects_invalid_signature(self) -> None:
         self.client.credentials()

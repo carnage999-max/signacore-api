@@ -41,6 +41,24 @@ make lint
 The hooks run automatically before each commit. `make lint` runs them against
 the full repository when you want to check everything explicitly.
 
+## Testing standard
+
+Every feature, behavior change, and bug fix must include a regression test at
+the layer where the behavior is owned. API behavior belongs in `tests/` and is
+run with Django's full test suite. Frontend presentation and interaction rules
+belong in the web repository's Vitest suite. A change is not ready to merge
+until its focused test and the full validation command pass.
+
+Run complete API validation locally with:
+
+```bash
+make validate
+```
+
+The CI workflow runs formatting, linting, migration checks, and all API tests
+for pull requests targeting `main` or `staging`. It deploys staging only after
+the required checks pass.
+
 ## Current foundation
 
 - Django project settings for local SQLite and server PostgreSQL
