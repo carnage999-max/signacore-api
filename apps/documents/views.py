@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import uuid
 from datetime import timedelta
 from pathlib import Path
@@ -61,6 +62,8 @@ from .serializers import (
     DocxImportSerializer,
     ManualDocumentFieldCreateSerializer,
 )
+
+logger = logging.getLogger(__name__)
 
 
 def get_signacore_service_user():
@@ -640,7 +643,23 @@ class AdminDocumentDetailView(APIView):
             target_type="document",
             target_id=document.id,
         )
-        return Response(serialize_document_detail(document), status=status.HTTP_200_OK)
+        try:
+            payload = serialize_document_detail(document)
+        except Exception:
+            logger.exception(
+                "Admin document detail serialization failed",
+                extra={
+                    "document_id": str(document.id),
+                    "original_pdf_name": document.original_pdf.name if document.original_pdf else "",
+                },
+            )
+            return Response(
+                {
+                    "detail": "This document could not be opened because its PDF preview is unavailable. Try again shortly."
+                },
+                status=status.HTTP_503_SERVICE_UNAVAILABLE,
+            )
+        return Response(payload, status=status.HTTP_200_OK)
 
     def patch(self, request, document_id):
         document = get_scoped_document(request, document_id)
@@ -854,12 +873,26 @@ class AdminDocumentPagePreviewView(APIView):
 
     def get(self, request, document_id, page_number):
         document = get_scoped_document(request, document_id)
-        with temporary_plaintext_file(document.original_pdf, suffix=".pdf") as pdf_path:
-            with fitz.open(pdf_path) as pdf_document:
-                if page_number < 1 or page_number > pdf_document.page_count:
-                    return Response({"detail": "Page not found."}, status=status.HTTP_404_NOT_FOUND)
-                page = pdf_document[page_number - 1]
-                pixmap = page.get_pixmap(matrix=fitz.Matrix(2, 2), alpha=False)
+        try:
+            with temporary_plaintext_file(document.original_pdf, suffix=".pdf") as pdf_path:
+                with fitz.open(pdf_path) as pdf_document:
+                    if page_number < 1 or page_number > pdf_document.page_count:
+                        return Response({"detail": "Page not found."}, status=status.HTTP_404_NOT_FOUND)
+                    page = pdf_document[page_number - 1]
+                    pixmap = page.get_pixmap(matrix=fitz.Matrix(2, 2), alpha=False)
+        except Exception:
+            logger.exception(
+                "Admin document page preview failed",
+                extra={
+                    "document_id": str(document.id),
+                    "page_number": page_number,
+                    "original_pdf_name": document.original_pdf.name if document.original_pdf else "",
+                },
+            )
+            return Response(
+                {"detail": "This PDF page could not be previewed. Try again shortly."},
+                status=status.HTTP_503_SERVICE_UNAVAILABLE,
+            )
         log_admin_event(
             request,
             AdminAuditLog.ActionEnum.DOCUMENT_VIEW,

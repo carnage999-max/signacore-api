@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import timedelta
 from io import BytesIO
+from unittest.mock import patch
 
 import fitz
 from django.conf import settings
@@ -565,6 +566,26 @@ class AdminDocumentUploadTests(TestCase):
         self.assertEqual(payload["page_count"], 1)
         self.assertEqual(len(payload["pages"]), 1)
         self.assertIn(f"/api/admin/documents/{document.id}/pages/1/preview/", payload["pages"][0]["preview_url"])
+
+    @patch("apps.documents.views.serialize_document_detail", side_effect=OSError("encrypted PDF is unavailable"))
+    def test_document_detail_returns_json_when_pdf_preview_generation_fails(self, serialize_detail) -> None:
+        document = Document.objects.create(
+            title="Unavailable Preview",
+            original_pdf=SimpleUploadedFile("unavailable.pdf", build_flat_pdf(), content_type="application/pdf"),
+            created_by=self.user,
+            organization=self.organization,
+        )
+
+        with self.assertLogs("apps.documents.views", level="ERROR") as logs:
+            response = self.client.get(f"/api/admin/documents/{document.id}/")
+
+        self.assertEqual(response.status_code, 503, response.json())
+        self.assertEqual(
+            response.json()["detail"],
+            "This document could not be opened because its PDF preview is unavailable. Try again shortly.",
+        )
+        self.assertTrue(any("Admin document detail serialization failed" in message for message in logs.output))
+        serialize_detail.assert_called_once_with(document)
 
     def test_document_page_preview_returns_png(self) -> None:
         document = Document.objects.create(
