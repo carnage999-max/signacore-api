@@ -355,6 +355,34 @@ set either application path to `/mnt/data/media/signa-core-staging` inside the
 container. The staging Fernet key must be generated with `Fernet.generate_key()`
 and must not be replaced after staging files have been created.
 
+If `SIGNACORE_STORAGE_ROOT` is set to the host path while the Compose mount
+still targets `/mnt/data/media/signa-core`, uploads are written to the
+container's writable layer instead of the server directory. They disappear
+when Coolify recreates the container, leaving database records that reference
+missing PDFs. Fix the environment mapping before redeploying:
+
+```text
+SIGNACORE_HOST_STORAGE_ROOT=/mnt/data/media/signa-core-staging
+SIGNACORE_STORAGE_ROOT=/mnt/data/media/signa-core
+MEDIA_ROOT=/mnt/data/media/signa-core
+SIGNACORE_HOST_STATIC_ROOT=/srv/apps/signacore-api-staging/staticfiles
+STATIC_ROOT=/srv/apps/signacore-api/staticfiles
+```
+
+Verify the rendered mount and application paths before starting the services:
+
+```bash
+docker compose config | grep -E 'signa-core(-staging)?|staticfiles'
+docker compose run --rm --entrypoint sh api -lc 'printf "MEDIA_ROOT=%s\\n" "$MEDIA_ROOT"; test -d /mnt/data/media/signa-core && test -w /mnt/data/media/signa-core'
+```
+
+If a document was uploaded before this mapping was corrected, check the old
+container layer before recreating it. Copy any recoverable files to the host
+staging directory, then verify the database paths and re-open the document.
+If the old layer contains no files, the database row cannot reconstruct the
+encrypted PDF and the document must be uploaded again. Do not copy production
+files into staging or change the staging Fernet key.
+
 Leave Google and Apple credentials empty unless OAuth is being tested. If
 OAuth is enabled, register only the exact staging callback URLs with each
 provider and use staging client credentials:
