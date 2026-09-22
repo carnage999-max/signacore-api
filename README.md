@@ -397,9 +397,13 @@ then deploy production deliberately with its existing production environment.
 
 ## Commercial account configuration
 
-Stripe credentials are configured only on the Django service. Subscription amounts, currencies, billing intervals, and availability are managed by the superuser under **Billing plan prices** in Django admin. Register this production webhook in Stripe:
+Stripe credentials are configured only on the Django service. Subscription amounts, currencies, billing intervals, and availability are managed by the superuser under **Billing plan prices** in Django admin. Register one webhook per Stripe mode/environment:
 
 ```text
+# Staging / Stripe test mode
+https://api-staging.mysignacore.com/api/billing/webhooks/stripe/
+
+# Production / Stripe live mode
 https://api.mysignacore.com/api/billing/webhooks/stripe/
 ```
 
