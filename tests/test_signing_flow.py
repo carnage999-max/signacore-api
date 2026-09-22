@@ -120,6 +120,7 @@ class SignerFlowTests(TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, "Signacore Signer Portal")
+        self.assertContains(response, 'href="/static/signing/favicon.svg"')
         self.assertContains(response, "Send verification code")
         self.assertContains(response, "Create a free signer account.")
 
