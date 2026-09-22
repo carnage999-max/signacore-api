@@ -5,6 +5,7 @@ import sys
 from pathlib import Path
 
 from corsheaders.defaults import default_headers
+from cryptography.fernet import Fernet
 from django.core.exceptions import ImproperlyConfigured
 
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -262,6 +263,13 @@ if not FERNET_KEY and "test" in sys.argv:
     FERNET_KEY = "WtF08bpUcDm4uvofwRRmm-JO-17mi6T6qwrmeJEC9Gc="
 if not FERNET_KEY:
     raise ImproperlyConfigured("FERNET_KEY must be configured; SignaCore cannot start without encryption.")
+try:
+    Fernet(FERNET_KEY.encode())
+except (TypeError, ValueError) as exc:
+    raise ImproperlyConfigured(
+        "FERNET_KEY must be a valid 32-byte url-safe base64-encoded key. "
+        "Generate one with: python -c 'from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())'"
+    ) from exc
 SIGNACORE_TEMP_ROOT = Path(env("SIGNACORE_TEMP_ROOT", "/run/signacore"))
 FILE_UPLOAD_TEMP_DIR = str(SIGNACORE_TEMP_ROOT)
 SIGNACORE_SHARED_SECRET = env("SIGNACORE_SHARED_SECRET", "")

@@ -310,7 +310,7 @@ REDIS_URL=redis://redis:6379/4
 CELERY_BROKER_URL=redis://redis:6379/4
 CELERY_RESULT_BACKEND=redis://redis:6379/4
 
-FERNET_KEY=<unique-staging-fernet-key>
+FERNET_KEY=<44-character output of Fernet.generate_key()>
 SIGNACORE_TEMP_ROOT=/run/signacore
 SIGNACORE_HOST_STORAGE_ROOT=/mnt/data/media/signa-core-staging
 SIGNACORE_STORAGE_ROOT=/mnt/data/media/signa-core
@@ -347,6 +347,13 @@ GUNICORN_WORKERS=2
 GUNICORN_TIMEOUT=120
 CELERY_CONCURRENCY=2
 ```
+
+`SIGNACORE_HOST_STORAGE_ROOT` is the host directory. The Compose file mounts it
+at the fixed container path `/mnt/data/media/signa-core`, so keep
+`SIGNACORE_STORAGE_ROOT` and `MEDIA_ROOT` set to that container path. Do not
+set either application path to `/mnt/data/media/signa-core-staging` inside the
+container. The staging Fernet key must be generated with `Fernet.generate_key()`
+and must not be replaced after staging files have been created.
 
 Leave Google and Apple credentials empty unless OAuth is being tested. If
 OAuth is enabled, register only the exact staging callback URLs with each
