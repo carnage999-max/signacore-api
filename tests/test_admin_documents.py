@@ -449,6 +449,13 @@ class AdminDocumentUploadTests(TestCase):
         self.assertGreaterEqual(payload["detection_summary"]["field_count"], 2)
         self.assertTrue(any(field["field_type"] == "SIGNATURE" for field in payload["fields"]))
         self.assertTrue(any(field["field_type"] == "TEXT" for field in payload["fields"]))
+        self.assertTrue(
+            all(
+                8 <= field["height"] <= 16
+                for field in payload["fields"]
+                if field["field_type"] in {"SIGNATURE", "TEXT"}
+            )
+        )
 
     def test_upload_pdf_detects_inline_signature_date_text_and_checkbox_fields(self) -> None:
         upload = SimpleUploadedFile(

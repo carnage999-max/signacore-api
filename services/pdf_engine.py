@@ -31,6 +31,9 @@ class PDFEngine:
     max_label_length = 255
     checkbox_chars = ("☐", "□")
     underscore_pattern = re.compile(r"_{3,}")
+    minimum_inferred_line_height = 8.0
+    maximum_inferred_line_height = 24.0
+    fallback_inferred_line_height = 12.0
 
     def analyse(self, pdf_path: str | Path) -> list[DetectedField]:
         document = fitz.open(pdf_path)
@@ -271,7 +274,7 @@ class PDFEngine:
                         x=field_x0,
                         y=page_height - y1,
                         width=max(36.0, field_x1 - field_x0),
-                        height=max(22.0, y1 - y0 + 8.0),
+                        height=self._line_height_for_words(words),
                         is_required=True,
                         detection_source=DocumentField.DetectionSourceEnum.HEURISTIC,
                         order=order,
@@ -301,7 +304,6 @@ class PDFEngine:
             label = self._clean_label(line_text)
             field_type = self._heuristic_type_for_text(label.lower()) or DocumentField.FieldTypeEnum.TEXT
             x1 = max(float(word[2]) for word in words)
-            y0 = min(float(word[1]) for word in words)
             y1 = max(float(word[3]) for word in words)
             fields.append(
                 DetectedField(
@@ -311,7 +313,7 @@ class PDFEngine:
                     x=x1 + 8.0,
                     y=page_height - y1,
                     width=160.0,
-                    height=max(22.0, y1 - y0 + 8.0),
+                    height=self._line_height_for_words(words),
                     is_required=True,
                     detection_source=DocumentField.DetectionSourceEnum.HEURISTIC,
                     order=order,
@@ -433,7 +435,7 @@ class PDFEngine:
                     x=rect.x0,
                     y=page_height - rect.y1,
                     width=rect.width,
-                    height=24.0,
+                    height=self._line_height_near_rect(rect, line_words),
                     is_required=True,
                     detection_source=DocumentField.DetectionSourceEnum.HEURISTIC,
                     order=order,
@@ -473,6 +475,37 @@ class PDFEngine:
             return label
 
         return self._clean_label(" ".join(token for _, _, _, _, token in nearby_words))
+
+    def _line_height_for_words(self, words: list[tuple[Any, ...]]) -> float:
+        """Use the PDF text bounds so inferred fields match the source line height."""
+        heights = [float(word[3]) - float(word[1]) for word in words]
+        if not heights:
+            return self.fallback_inferred_line_height
+        return max(
+            self.minimum_inferred_line_height,
+            min(self.maximum_inferred_line_height, max(heights)),
+        )
+
+    def _line_height_near_rect(self, rect: fitz.Rect, line_words: list[list[tuple[Any, ...]]]) -> float:
+        line_center_y = (rect.y0 + rect.y1) / 2
+        nearby_lines = [
+            words
+            for words in line_words
+            if words
+            and abs(
+                ((min(float(word[1]) for word in words) + max(float(word[3]) for word in words)) / 2) - line_center_y
+            )
+            <= 16.0
+        ]
+        if not nearby_lines:
+            return self.fallback_inferred_line_height
+        closest_line = min(
+            nearby_lines,
+            key=lambda words: abs(
+                ((min(float(word[1]) for word in words) + max(float(word[3]) for word in words)) / 2) - line_center_y
+            ),
+        )
+        return self._line_height_for_words(closest_line)
 
     def _label_for_horizontal_line(self, rect: fitz.Rect, line_words: list[list[tuple[Any, ...]]]) -> str:
         candidates: list[str] = []

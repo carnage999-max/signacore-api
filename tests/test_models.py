@@ -86,3 +86,13 @@ class SignacoreEnumTests(SimpleTestCase):
         self.assertEqual(PDFEngine._field_text_font_size(fitz.Rect(0, 0, 120, 12)), 8.64)
         self.assertEqual(PDFEngine._field_text_font_size(fitz.Rect(0, 0, 180, 24)), 12.0)
         self.assertEqual(PDFEngine._field_text_font_size(fitz.Rect(0, 0, 20, 8)), 7.0)
+
+    def test_inferred_field_height_uses_pdf_line_bounds(self) -> None:
+        engine = PDFEngine()
+        words = [
+            (72.0, 100.0, 105.0, 111.5, "Tenant", 0, 0, 0),
+            (109.0, 100.0, 150.0, 111.5, "Name", 0, 0, 1),
+        ]
+
+        self.assertEqual(engine._line_height_for_words(words), 11.5)
+        self.assertEqual(engine._line_height_for_words([]), 12.0)
