@@ -95,4 +95,13 @@ class SignacoreEnumTests(SimpleTestCase):
         ]
 
         self.assertEqual(engine._line_height_for_words(words), 11.5)
-        self.assertEqual(engine._line_height_for_words([]), 12.0)
+        self.assertIsNone(engine._line_height_for_words([]))
+
+    def test_drawn_line_uses_the_closest_document_line_height(self) -> None:
+        engine = PDFEngine()
+        line_words = [
+            [(72.0, 90.0, 130.0, 101.0, "Tenant", 0, 0, 0)],
+            [(72.0, 190.0, 130.0, 205.5, "Signature", 0, 1, 0)],
+        ]
+
+        self.assertEqual(engine._line_height_near_rect(fitz.Rect(180, 192, 340, 193), line_words), 15.5)

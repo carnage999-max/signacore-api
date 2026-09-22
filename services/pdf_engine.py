@@ -31,9 +31,6 @@ class PDFEngine:
     max_label_length = 255
     checkbox_chars = ("☐", "□")
     underscore_pattern = re.compile(r"_{3,}")
-    minimum_inferred_line_height = 8.0
-    maximum_inferred_line_height = 24.0
-    fallback_inferred_line_height = 12.0
 
     def analyse(self, pdf_path: str | Path) -> list[DetectedField]:
         document = fitz.open(pdf_path)
@@ -221,6 +218,9 @@ class PDFEngine:
         fields: list[DetectedField] = []
         order = order_start
         for words in line_words:
+            line_height = self._line_height_for_words(words)
+            if line_height is None:
+                continue
             line_text = " ".join(str(word[4]) for word in words).strip()
             if "_" not in line_text:
                 continue
@@ -274,7 +274,7 @@ class PDFEngine:
                         x=field_x0,
                         y=page_height - y1,
                         width=max(36.0, field_x1 - field_x0),
-                        height=self._line_height_for_words(words),
+                        height=line_height,
                         is_required=True,
                         detection_source=DocumentField.DetectionSourceEnum.HEURISTIC,
                         order=order,
@@ -293,6 +293,9 @@ class PDFEngine:
         fields: list[DetectedField] = []
         order = order_start
         for words in line_words:
+            line_height = self._line_height_for_words(words)
+            if line_height is None:
+                continue
             line_text = " ".join(str(word[4]) for word in words).strip()
             if "_" in line_text or any(char in line_text for char in self.checkbox_chars):
                 continue
@@ -313,7 +316,7 @@ class PDFEngine:
                     x=x1 + 8.0,
                     y=page_height - y1,
                     width=160.0,
-                    height=self._line_height_for_words(words),
+                    height=line_height,
                     is_required=True,
                     detection_source=DocumentField.DetectionSourceEnum.HEURISTIC,
                     order=order,
@@ -347,8 +350,8 @@ class PDFEngine:
                         page=page_index,
                         x=x0,
                         y=page_height - y1,
-                        width=max(12.0, x1 - x0),
-                        height=max(12.0, y1 - y0),
+                        width=x1 - x0,
+                        height=y1 - y0,
                         is_required=True,
                         detection_source=DocumentField.DetectionSourceEnum.HEURISTIC,
                         order=order,
@@ -421,6 +424,10 @@ class PDFEngine:
             if self._line_overlaps_text(rect, line_words):
                 continue
 
+            line_height = self._line_height_near_rect(rect, line_words)
+            if line_height is None:
+                continue
+
             label = self._label_for_horizontal_line(rect, line_words)
             if not label:
                 label = f"Signature {order}"
@@ -435,7 +442,7 @@ class PDFEngine:
                     x=rect.x0,
                     y=page_height - rect.y1,
                     width=rect.width,
-                    height=self._line_height_near_rect(rect, line_words),
+                    height=line_height,
                     is_required=True,
                     detection_source=DocumentField.DetectionSourceEnum.HEURISTIC,
                     order=order,
@@ -476,31 +483,18 @@ class PDFEngine:
 
         return self._clean_label(" ".join(token for _, _, _, _, token in nearby_words))
 
-    def _line_height_for_words(self, words: list[tuple[Any, ...]]) -> float:
+    def _line_height_for_words(self, words: list[tuple[Any, ...]]) -> float | None:
         """Use the PDF text bounds so inferred fields match the source line height."""
         heights = [float(word[3]) - float(word[1]) for word in words]
-        if not heights:
-            return self.fallback_inferred_line_height
-        return max(
-            self.minimum_inferred_line_height,
-            min(self.maximum_inferred_line_height, max(heights)),
-        )
+        return max(heights) if heights else None
 
-    def _line_height_near_rect(self, rect: fitz.Rect, line_words: list[list[tuple[Any, ...]]]) -> float:
+    def _line_height_near_rect(self, rect: fitz.Rect, line_words: list[list[tuple[Any, ...]]]) -> float | None:
         line_center_y = (rect.y0 + rect.y1) / 2
-        nearby_lines = [
-            words
-            for words in line_words
-            if words
-            and abs(
-                ((min(float(word[1]) for word in words) + max(float(word[3]) for word in words)) / 2) - line_center_y
-            )
-            <= 16.0
-        ]
-        if not nearby_lines:
-            return self.fallback_inferred_line_height
+        lines_with_metrics = [words for words in line_words if self._line_height_for_words(words) is not None]
+        if not lines_with_metrics:
+            return None
         closest_line = min(
-            nearby_lines,
+            lines_with_metrics,
             key=lambda words: abs(
                 ((min(float(word[1]) for word in words) + max(float(word[3]) for word in words)) / 2) - line_center_y
             ),
