@@ -346,6 +346,15 @@ input {
   color: rgba(17, 24, 39, 0.45);
 }
 
+.multiline-field-input {
+  width: 100%;
+  height: 100%;
+  border: 0;
+  resize: none;
+  line-height: 1.25;
+  font-size: clamp(7px, 18cqh, var(--field-font-size, 11px));
+}
+
 .checkbox-input {
   width: 100%;
   height: 100%;

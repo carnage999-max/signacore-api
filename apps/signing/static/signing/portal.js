@@ -119,7 +119,9 @@
   function fieldIsComplete(field) {
     const value = getFieldValue(field.id);
     if (!value) return false;
-    if (field.field_type === "TEXT") return Boolean(value.textValue && value.textValue.trim());
+    if (field.field_type === "TEXT" || field.field_type === "MULTILINE") {
+      return Boolean(value.textValue && value.textValue.trim());
+    }
     if (field.field_type === "CHECKBOX") {
       if (field.is_required) return Boolean(value.checked);
       return typeof value.checked === "boolean";
@@ -173,6 +175,23 @@
       updateSubmitState();
     });
     return input;
+  }
+
+  function buildMultilineField(field) {
+    const textarea = document.createElement("textarea");
+    textarea.className = "text-field-input multiline-field-input";
+    textarea.placeholder = field.label;
+    textarea.value = getFieldValue(field.id)?.textValue || "";
+    textarea.addEventListener("input", () => {
+      state.values[field.id] = {
+        type: "TEXT",
+        textValue: textarea.value,
+      };
+      delete state.fieldErrors[field.id];
+      renderFieldList();
+      updateSubmitState();
+    });
+    return textarea;
   }
 
   function buildCheckboxField(field) {
@@ -281,18 +300,13 @@
           const left = (field.x / pageData.width) * 100;
           const width = (field.width / pageData.width) * 100;
           const height = (field.height / pageData.height) * 100;
-          const typeClassName =
-            field.field_type === "TEXT"
-              ? "field-overlay-text"
-              : field.field_type === "CHECKBOX"
-                ? "field-overlay-checkbox"
-                : "field-overlay-signature";
-          const minHeightPercent =
-            field.field_type === "TEXT"
-              ? 1.15
-              : field.field_type === "CHECKBOX"
-                ? 1.2
-                : 1.8;
+          const isTextual = field.field_type === "TEXT" || field.field_type === "MULTILINE";
+          const typeClassName = isTextual
+            ? "field-overlay-text"
+            : field.field_type === "CHECKBOX"
+              ? "field-overlay-checkbox"
+              : "field-overlay-signature";
+          const minHeightPercent = isTextual ? 1.15 : field.field_type === "CHECKBOX" ? 1.2 : 1.8;
 
           fieldNode.className = `field-overlay ${typeClassName} ${field.is_required ? "field-overlay-required" : ""} ${
             state.fieldErrors[field.id] ? "field-error" : ""
@@ -308,6 +322,8 @@
           let fieldContent;
           if (field.field_type === "TEXT") {
             fieldContent = buildTextField(field);
+          } else if (field.field_type === "MULTILINE") {
+            fieldContent = buildMultilineField(field);
           } else if (field.field_type === "CHECKBOX") {
             fieldContent = buildCheckboxField(field);
           } else {

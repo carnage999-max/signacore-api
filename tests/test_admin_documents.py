@@ -246,7 +246,10 @@ class AdminDocumentUploadTests(TestCase):
         self.assertEqual(payload["title"], "Employment Agreement")
         self.assertEqual(payload["status"], "DRAFT")
         self.assertEqual(payload["page_count"], 1)
-        self.assertEqual(payload["detection_summary"], {"source": "ACROFORM", "field_count": 2})
+        self.assertEqual(payload["detection_summary"]["source"], "ACROFORM")
+        self.assertEqual(payload["detection_summary"]["field_count"], 2)
+        self.assertEqual(payload["detection_summary"]["native_widget_count"], 2)
+        self.assertEqual(payload["detection_summary"]["ignored_widget_count"], 0)
         self.assertEqual(len(payload["fields"]), 2)
         self.assertEqual(
             [field["field_type"] for field in payload["fields"]],

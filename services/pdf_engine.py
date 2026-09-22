@@ -8,6 +8,15 @@ from typing import Any
 import fitz
 
 from apps.documents.models import DocumentField
+from services.pdf_form_import import (
+    ImportReport,
+    ImportWarningEnum,
+    classify_widget,
+    collect_text_lines,
+    is_widget_required,
+    resolve_label,
+)
+from services.pdf_sanitizer import assert_sanitized, sanitize_document
 
 
 @dataclass
@@ -24,6 +33,12 @@ class DetectedField:
     order: int
 
 
+@dataclass
+class ImportResult:
+    fields: list[DetectedField]
+    report: ImportReport
+
+
 class PDFEngine:
     signature_keywords = ("signature",)
     initials_keywords = ("initials", "int.")
@@ -32,39 +47,80 @@ class PDFEngine:
     checkbox_chars = ("☐", "□")
     underscore_pattern = re.compile(r"_{3,}")
 
-    def analyse(self, pdf_path: str | Path) -> list[DetectedField]:
+    def analyse(self, pdf_path: str | Path) -> ImportResult:
         document = fitz.open(pdf_path)
         try:
-            fields = self._extract_acroform_fields(document)
-            if fields:
-                return fields
-            return self.detect_heuristic(document)
+            native_result = self._import_native_widgets(document)
+            if native_result.report.native_widget_count:
+                return native_result
+            heuristic_fields = self.detect_heuristic(document)
+            return ImportResult(
+                fields=heuristic_fields,
+                report=ImportReport(
+                    source=DocumentField.DetectionSourceEnum.HEURISTIC,
+                    imported_field_count=len(heuristic_fields),
+                ),
+            )
         finally:
             document.close()
 
-    def _extract_acroform_fields(self, document: fitz.Document) -> list[DetectedField]:
+    def _import_native_widgets(self, document: fitz.Document) -> ImportResult:
+        """Import only widgets SignaCore can represent faithfully, reporting everything skipped.
+
+        A PDF that has native widgets never falls back to heuristics, even when every widget is
+        skipped, so unsupported controls are not recreated from their visual outlines.
+        """
         detected_fields: list[DetectedField] = []
+        report = ImportReport(source=DocumentField.DetectionSourceEnum.ACROFORM)
         order = 1
+
         for page_index, page in enumerate(document, start=1):
             widgets = list(page.widgets() or [])
+            if not widgets:
+                continue
+            text_lines = collect_text_lines(page)
+            page_height = page.rect.height
+            page_field_index = 1
+            label_counts: dict[str, int] = {}
+
             for widget in widgets:
+                report.native_widget_count += 1
+                label = resolve_label(widget, text_lines, page_index, page_field_index)
+                field_type, warning_code = classify_widget(document, widget, label)
+                if field_type is None:
+                    report.ignored_widget_count += 1
+                    report.warning_codes.append(warning_code)
+                    continue
+
+                label_counts[label] = label_counts.get(label, 0) + 1
+                if label_counts[label] > 1:
+                    label = f"{label} ({label_counts[label]})"
+
                 rect = widget.rect
                 detected_fields.append(
                     DetectedField(
-                        field_type=self._map_widget_type(widget),
-                        label=self._normalize_label(widget.field_label or widget.field_name or f"Field {order}"),
+                        field_type=field_type,
+                        label=self._normalize_label(label),
                         page=page_index,
                         x=rect.x0,
-                        y=rect.y0,
+                        y=page_height - rect.y1,
                         width=rect.width,
                         height=rect.height,
-                        is_required=self._is_widget_required(widget),
+                        is_required=is_widget_required(widget),
                         detection_source=DocumentField.DetectionSourceEnum.ACROFORM,
                         order=order,
                     )
                 )
                 order += 1
-        return detected_fields
+                page_field_index += 1
+
+        report.imported_field_count = len(detected_fields)
+        if report.native_widget_count:
+            if not detected_fields:
+                report.warning_codes.append(ImportWarningEnum.NO_SUPPORTED_FIELDS_IMPORTED)
+            if not any(field.field_type == DocumentField.FieldTypeEnum.SIGNATURE for field in detected_fields):
+                report.warning_codes.append(ImportWarningEnum.SIGNATURE_FIELD_NOT_DETECTED)
+        return ImportResult(fields=detected_fields, report=report)
 
     def detect_heuristic(self, document: fitz.Document) -> list[DetectedField]:
         detected_fields: list[DetectedField] = []
@@ -142,7 +198,10 @@ class PDFEngine:
                     page_height - submission["y"],
                 )
                 if submission["value_type"] == "TEXT":
-                    font_size = self._field_text_font_size(rect)
+                    if submission.get("field_type") == DocumentField.FieldTypeEnum.MULTILINE:
+                        font_size = self._multiline_text_font_size(rect)
+                    else:
+                        font_size = self._field_text_font_size(rect)
                     page.insert_textbox(rect, submission["text_value"], fontsize=font_size)
                 elif submission["value_type"] == "CHECKBOX":
                     if str(submission["text_value"]).lower() in {"true", "1", "yes", "on"}:
@@ -155,34 +214,20 @@ class PDFEngine:
                 else:
                     page.insert_image(rect, filename=submission["image_path"])
 
-            for page in document:
-                widgets = list(page.widgets() or [])
-                for widget in widgets:
-                    page.delete_widget(widget)
-
-            document.save(output_pdf)
+            sanitize_document(document)
+            document.save(output_pdf, garbage=4, clean=True, deflate=True)
         finally:
             document.close()
+        assert_sanitized(output_pdf)
 
     @staticmethod
     def _field_text_font_size(rect: fitz.Rect) -> float:
         return max(7.0, min(12.0, rect.height * 0.72, rect.width * 0.16))
 
-    def _map_widget_type(self, widget: fitz.Widget) -> str:
-        field_type = str(getattr(widget, "field_type_string", "") or "").lower()
-        field_name = str(getattr(widget, "field_name", "") or "").lower()
-        candidate = f"{field_type} {field_name}"
-        if "check" in candidate:
-            return DocumentField.FieldTypeEnum.CHECKBOX
-        if "sig" in candidate:
-            return DocumentField.FieldTypeEnum.SIGNATURE
-        if "initial" in candidate:
-            return DocumentField.FieldTypeEnum.INITIALS
-        return DocumentField.FieldTypeEnum.TEXT
-
-    def _is_widget_required(self, widget: fitz.Widget) -> bool:
-        flags = int(getattr(widget, "field_flags", 0) or 0)
-        return bool(flags & (1 << 1))
+    @staticmethod
+    def _multiline_text_font_size(rect: fitz.Rect) -> float:
+        """Multiline boxes wrap, so size by line height rather than by the whole rectangle."""
+        return max(7.0, min(11.0, rect.width * 0.16))
 
     def _heuristic_type_for_text(self, text: str) -> str | None:
         normalized = str(text or "").lower()

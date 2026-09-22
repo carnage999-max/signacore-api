@@ -32,6 +32,7 @@ class Document(models.Model):
         blank=True,
     )
     status = models.CharField(max_length=32, choices=StatusEnum.choices, default=StatusEnum.DRAFT)
+    import_report = models.JSONField(default=dict, blank=True)
     created_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         on_delete=models.PROTECT,
@@ -59,6 +60,7 @@ class DocumentField(models.Model):
         SIGNATURE = "SIGNATURE", "Signature"
         INITIALS = "INITIALS", "Initials"
         TEXT = "TEXT", "Text"
+        MULTILINE = "MULTILINE", "Multiline text"
         CHECKBOX = "CHECKBOX", "Checkbox"
 
     class DetectionSourceEnum(models.TextChoices):
