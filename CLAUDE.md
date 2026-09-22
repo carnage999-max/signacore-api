@@ -54,6 +54,60 @@ Current bad conversions include:
 
 The source contains `/JavaScript`, `/SubmitForm`, `/ResetForm`, `/Hide`, `/AA`, `/Btn`, `/Ch`, and external-action data. The original submit action targets `https://www.pdftron.com`.
 
+## W-9 regression evidence
+
+`/Users/Apple/Downloads/fw9.pdf` is the March 2024 IRS Form W-9. It is a 6-page, 138 KiB tagged PDF reported by `pdfinfo` as:
+
+```text
+Form: XFA
+JavaScript: yes
+Pages: 6
+```
+
+It contains 23 fallback native widgets on page 1 and none on pages 2 through 6. Running the current `PDFEngine().analyse()` against this exact file produces:
+
+```text
+23 imported fields
+15 TEXT
+8 CHECKBOX
+0 SIGNATURE
+0 required fields
+```
+
+This is not a usable import result:
+
+- Labels are internal XFA paths such as `topmostSubform[0].Page1[0].f1_01[0]`, not customer-facing labels such as "Name" or "Address".
+- The W-9's signature line is printed content, not a native signature widget. The current AcroForm-first path suppresses heuristic detection entirely, so no SignaCore signature field is created.
+- Requiredness is not imported for any of the W-9 widgets, even though the form visibly identifies required information.
+- The document includes XFA/JavaScript behavior that SignaCore must not execute.
+
+There is a separate coordinate-system bug that makes imported native widgets appear in the wrong vertical location. PyMuPDF widget rectangles use a top-left origin. SignaCore stores `widget.rect.y0` unchanged, but both the signer portal and completion flattener treat the stored value as a bottom-left coordinate:
+
+```text
+W-9 first native field: y=118.0pt, height=14.0pt on a 791.968pt page
+Actual visual location: 14.9% from the top
+Current signer overlay location: 791.968 - 118.0 - 14.0 = 660.0pt, or 83.3% from the top
+```
+
+Relevant code:
+
+- `services/pdf_engine.py::_extract_acroform_fields()` stores `rect.y0` directly.
+- `apps/signing/static/signing/portal.js` computes overlay top as `pageData.height - field.y - field.height`.
+- `services/pdf_engine.py::flatten()` makes the same bottom-origin assumption.
+
+`DocumentField`'s effective canonical coordinate system is bottom-left origin. For newly imported PyMuPDF widgets, convert the rectangle before persistence:
+
+```python
+x = rect.x0
+y = page.rect.height - rect.y1
+width = rect.width
+height = rect.height
+```
+
+Do not migrate or reinterpret existing persisted fields as part of this fix without a separate data-migration plan. Add regression tests proving an imported widget renders and flattens at the same visual coordinates as the source PDF.
+
+For W-9 quality, do not expose XFA field paths as labels. Prefer a confident nearby visible label extracted from the rendered/text layer. When no reliable label is available, use a neutral, human-readable fallback such as `Page 1 field 1`; never expose internal form paths. A production-quality W-9 flow must also guide the admin to add a SignaCore signature field at the printed signature line.
+
 ## Current implementation
 
 Important files:
@@ -81,6 +135,8 @@ The final signed document cannot be claimed to have active content stripped unti
 Replace the current blanket AcroForm import with explicit classification. Inspect each widget's native type, flags, visibility, options, and actions. A PDF with widgets must not fall back to visual heuristic detection merely because all native widgets were skipped; doing so could recreate unsupported controls from their visual outlines.
 
 Only import a widget when its complete behavior is supported by the SignaCore signer UI and PDF flattening pipeline.
+
+Normalize a supported native widget's rectangle into the model's existing bottom-left coordinate system before it is persisted. This applies to all AcroForm/XFA fallback widgets. Do not change the coordinate convention of existing heuristic, manual, or authored fields.
 
 Initial safe supported set:
 
@@ -166,6 +222,9 @@ At minimum, add API-level tests for:
 - Multiline widget ignored with `UNSUPPORTED_MULTILINE_TEXT` warning until textarea support exists.
 - A mixed-form PDF imports only supported widgets and persists the report.
 - A form PDF containing only unsupported widgets creates no SignaCore fields and does not invoke heuristics.
+- An imported top-origin native widget is converted to the bottom-origin model position and renders at the original visual location in both the admin preview and signer portal.
+- A W-9-like XFA fallback field does not expose its internal XFA path as a label.
+- A W-9-like document with a printed signature line but no native signature widget tells the administrator to add a SignaCore signature field; it must not imply that a signature field was detected.
 - Completed-PDF sanitization removes active form and action content.
 - Regression tests for existing plain-PDF heuristic detection and signing completion.
 
