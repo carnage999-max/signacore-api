@@ -317,7 +317,7 @@ SIGNACORE_STORAGE_ROOT=/mnt/data/media/signa-core
 MEDIA_ROOT=/mnt/data/media/signa-core
 MEDIA_URL=/media/
 SIGNACORE_HOST_STATIC_ROOT=/srv/apps/signacore-api-staging/staticfiles
-STATIC_ROOT=/srv/apps/signacore-api/staticfiles
+STATIC_ROOT=/srv/apps/signacore-api-staging/staticfiles
 
 CORS_ALLOWED_ORIGINS=https://staging.mysignacore.com,https://sign-staging.mysignacore.com
 SIGNACORE_SHARED_SECRET=<unique-staging-service-secret>
