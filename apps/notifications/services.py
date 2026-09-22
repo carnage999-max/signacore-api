@@ -5,6 +5,8 @@ from django.utils.encoding import force_bytes
 from django.utils.html import escape
 from django.utils.http import urlsafe_base64_encode
 
+from apps.accounts.models import Organization
+from apps.billing.models import OrganizationSubscription
 from apps.documents.models import Document
 from apps.signing.models import SigningRequest
 from utils.email_verification import make_email_verification_token
@@ -464,5 +466,52 @@ def send_account_login_email(user, method: str) -> None:
             message=f"A new sign-in to your SignaCore account was completed using {safe_method}.",
             action_label="Open SignaCore",
             action_url=account_url,
+        ),
+    )
+
+
+def send_subscription_activated_email(organization_id: str) -> None:
+    organization = (
+        Organization.objects.select_related("created_by", "created_by__signacore_profile")
+        .filter(pk=organization_id)
+        .first()
+    )
+    if organization is None:
+        return
+
+    subscription = OrganizationSubscription.objects.filter(organization=organization).first()
+    recipient = get_account_email(organization.created_by)
+    if subscription is None or not recipient:
+        return
+
+    plan_name = subscription.get_plan_display()
+    account_url = f"{settings.SIGNACORE_APP_URL.rstrip('/')}/admin/billing"
+    try:
+        profile = organization.created_by.signacore_profile
+    except ObjectDoesNotExist:
+        profile = None
+    subject = f"Your SignaCore {plan_name} plan is active"
+    body = (
+        f"Hello {get_account_email(organization.created_by) or 'there'},\n\n"
+        f"Your SignaCore {plan_name} subscription for {organization.name} is now active.\n\n"
+        f"Manage your workspace: {account_url}\n\n"
+        "Stripe securely handles your payment details. If you did not authorize this payment, contact support immediately.\n"
+    )
+    send_email(
+        subject,
+        body,
+        [recipient],
+        html_body=build_branded_email_html(
+            name=getattr(profile, "display_name", "") or "there",
+            title="Your plan is active",
+            message=f"Your {plan_name} subscription for {organization.name} is active and ready to use.",
+            action_label="Open billing",
+            action_url=account_url,
+            details=[
+                ("Workspace", organization.name),
+                ("Plan", plan_name),
+                ("Status", subscription.get_status_display()),
+            ],
+            footer="Stripe securely handles your payment details. If you did not authorize this payment, contact support immediately.",
         ),
     )

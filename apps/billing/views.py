@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 from datetime import UTC, datetime
 
 import httpx
@@ -17,6 +18,8 @@ from apps.documents.auth import HasValidSignacoreSecret
 from apps.documents.models import AdminAuditLog
 from apps.documents.views import get_request_actor_and_organization, log_admin_event
 from services.stripe_client import StripeAPIClient, verify_stripe_signature
+from tasks.notifications import send_subscription_activated
+from utils.task_dispatch import enqueue_task
 
 from .models import BillingPlanConfiguration, OrganizationSubscription, StripeWebhookEvent
 from .serializers import (
@@ -24,9 +27,12 @@ from .serializers import (
     BillingPortalResponseSerializer,
     CheckoutSessionResponseSerializer,
     CheckoutSessionSerializer,
+    CheckoutSessionStatusSerializer,
     OrganizationSubscriptionSerializer,
     StripeWebhookResponseSerializer,
 )
+
+logger = logging.getLogger(__name__)
 
 
 def require_billing_manager(actor, organization: Organization) -> None:
@@ -66,7 +72,7 @@ def timestamp_to_datetime(value) -> datetime | None:
     return datetime.fromtimestamp(value, tz=UTC)
 
 
-def sync_subscription_object(payload: dict) -> bool:
+def sync_subscription_object(payload: dict, *, notify: bool = True) -> bool:
     subscription_id = str(payload.get("id") or "")
     customer_id = str(payload.get("customer") or "")
     metadata = payload.get("metadata") if isinstance(payload.get("metadata"), dict) else {}
@@ -93,6 +99,7 @@ def sync_subscription_object(payload: dict) -> bool:
     valid_statuses = {value for value, _ in OrganizationSubscription.StatusEnum.choices}
 
     subscription = get_organization_subscription(organization)
+    previous_status = subscription.status
     subscription.stripe_customer_id = customer_id or subscription.stripe_customer_id
     subscription.stripe_subscription_id = subscription_id or subscription.stripe_subscription_id
     subscription.stripe_price_id = price_id or subscription.stripe_price_id
@@ -104,7 +111,59 @@ def sync_subscription_object(payload: dict) -> bool:
     subscription.current_period_end = timestamp_to_datetime(period_end)
     subscription.cancel_at_period_end = bool(payload.get("cancel_at_period_end", False))
     subscription.save()
+    if (
+        notify
+        and subscription.status
+        in {
+            OrganizationSubscription.StatusEnum.ACTIVE,
+            OrganizationSubscription.StatusEnum.TRIALING,
+        }
+        and previous_status
+        not in {
+            OrganizationSubscription.StatusEnum.ACTIVE,
+            OrganizationSubscription.StatusEnum.TRIALING,
+        }
+    ):
+        try:
+            enqueue_task(send_subscription_activated, str(organization.id))
+        except Exception:
+            logger.exception(
+                "Subscription activation email dispatch failed",
+                extra={"organization_id": str(organization.id)},
+            )
     return True
+
+
+def sync_checkout_session(session: dict, organization: Organization) -> bool:
+    metadata = session.get("metadata") if isinstance(session.get("metadata"), dict) else {}
+    if str(metadata.get("organization_id") or "") != str(organization.id):
+        return False
+
+    subscription = get_organization_subscription(organization)
+    customer_id = str(session.get("customer") or "")
+    if subscription.stripe_customer_id and customer_id != subscription.stripe_customer_id:
+        return False
+
+    session_status = str(session.get("status") or "").lower()
+    payment_status = str(session.get("payment_status") or "").lower()
+    if session_status != "complete" or payment_status not in {"paid", "no_payment_required"}:
+        return False
+
+    subscription_id = str(session.get("subscription") or "")
+    if not customer_id or not subscription_id:
+        return False
+
+    plan = str(metadata.get("plan") or "").upper()
+    valid_plans = {value for value, _ in OrganizationSubscription.PlanEnum.choices}
+    if plan not in valid_plans:
+        return False
+
+    subscription.stripe_customer_id = customer_id
+    subscription.stripe_subscription_id = subscription_id
+    subscription.plan = plan
+    subscription.save(update_fields=["stripe_customer_id", "stripe_subscription_id", "plan", "updated_at"])
+    stripe_subscription = StripeAPIClient().retrieve_subscription(subscription_id)
+    return sync_subscription_object(stripe_subscription)
 
 
 class PublicBillingPlanListView(APIView):
@@ -133,7 +192,14 @@ class BillingStatusView(APIView):
                 subscription.refresh_from_db()
             except (httpx.HTTPError, KeyError, ValueError):
                 # The webhook snapshot remains usable if Stripe is temporarily unavailable.
-                pass
+                logger.warning(
+                    "Stripe subscription reconciliation failed",
+                    extra={
+                        "organization_id": str(organization.id),
+                        "subscription_id": subscription.stripe_subscription_id,
+                    },
+                    exc_info=True,
+                )
         log_admin_event(
             request,
             AdminAuditLog.ActionEnum.BILLING_VIEW,
@@ -215,6 +281,67 @@ class BillingCheckoutView(APIView):
         return Response({"checkout_url": checkout_url}, status=status.HTTP_201_CREATED)
 
 
+class BillingCheckoutStatusView(APIView):
+    authentication_classes = []
+    permission_classes = [HasValidSignacoreSecret]
+    serializer_class = OrganizationSubscriptionSerializer
+
+    @extend_schema(request=CheckoutSessionStatusSerializer, responses=OrganizationSubscriptionSerializer)
+    def post(self, request):
+        actor, organization = get_request_actor_and_organization(request)
+        require_billing_manager(actor, organization)
+        serializer = CheckoutSessionStatusSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        session_id = serializer.validated_data["session_id"]
+        subscription = get_organization_subscription(organization)
+
+        if not settings.STRIPE_SECRET_KEY:
+            return Response(
+                {"detail": "Stripe billing is not configured on this server."},
+                status=status.HTTP_503_SERVICE_UNAVAILABLE,
+            )
+
+        try:
+            session = StripeAPIClient().retrieve_checkout_session(session_id)
+            if not sync_checkout_session(session, organization):
+                return Response(
+                    {"detail": "Stripe has not confirmed this payment for the current workspace."},
+                    status=status.HTTP_409_CONFLICT,
+                )
+            subscription.refresh_from_db()
+        except httpx.HTTPError:
+            logger.warning(
+                "Stripe Checkout Session verification failed",
+                extra={"organization_id": str(organization.id), "checkout_session_id": session_id},
+                exc_info=True,
+            )
+            return Response(
+                {"detail": "Stripe could not confirm this payment yet. Refresh billing in a moment."},
+                status=status.HTTP_502_BAD_GATEWAY,
+            )
+        except (KeyError, ValueError):
+            logger.warning(
+                "Stripe Checkout Session response was invalid",
+                extra={"organization_id": str(organization.id), "checkout_session_id": session_id},
+                exc_info=True,
+            )
+            return Response(
+                {"detail": "Stripe returned an incomplete payment confirmation. Refresh billing in a moment."},
+                status=status.HTTP_502_BAD_GATEWAY,
+            )
+
+        log_admin_event(
+            request,
+            AdminAuditLog.ActionEnum.BILLING_CHECKOUT,
+            f"Confirmed {subscription.get_plan_display()} checkout for {organization.name}.",
+            actor=actor,
+            target_type="organization",
+            target_id=organization.id,
+            metadata={"checkout_session_id": session_id},
+        )
+        return Response(OrganizationSubscriptionSerializer(subscription, context={"actor": actor}).data)
+
+
 class BillingPortalView(APIView):
     authentication_classes = []
     permission_classes = [HasValidSignacoreSecret]
@@ -286,7 +413,12 @@ class StripeWebhookView(APIView):
             StripeWebhookEvent.ProcessingStatusEnum.PROCESSED,
             StripeWebhookEvent.ProcessingStatusEnum.IGNORED,
         }:
+            logger.info(
+                "Ignoring duplicate Stripe webhook", extra={"stripe_event_id": event_id, "event_type": event_type}
+            )
             return Response({"received": True, "duplicate": True})
+
+        logger.info("Stripe webhook received", extra={"stripe_event_id": event_id, "event_type": event_type})
 
         try:
             handled = False
@@ -323,7 +455,16 @@ class StripeWebhookView(APIView):
             )
             webhook_event.processed_at = timezone.now()
             webhook_event.save(update_fields=["status", "processed_at"])
+            if not handled:
+                logger.warning(
+                    "Stripe webhook did not match a SignaCore workspace",
+                    extra={"stripe_event_id": event_id, "event_type": event_type},
+                )
         except Exception:
+            logger.exception(
+                "Stripe webhook processing failed",
+                extra={"stripe_event_id": event_id, "event_type": event_type},
+            )
             webhook_event.status = StripeWebhookEvent.ProcessingStatusEnum.FAILED
             webhook_event.processed_at = timezone.now()
             webhook_event.save(update_fields=["status", "processed_at"])

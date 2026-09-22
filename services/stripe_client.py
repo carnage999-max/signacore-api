@@ -55,7 +55,7 @@ class StripeAPIClient(BaseAPIClient):
                 "line_items[0][price_data][recurring][interval]": billing_interval,
                 "line_items[0][price_data][product_data][name]": f"SignaCore {plan_name}",
                 "line_items[0][quantity]": str(max(quantity, 1)),
-                "success_url": f"{app_url}/admin/billing?checkout=success",
+                "success_url": f"{app_url}/admin/billing?checkout=success&session_id={{CHECKOUT_SESSION_ID}}",
                 "cancel_url": f"{app_url}/admin/billing?checkout=cancelled",
                 "metadata[organization_id]": organization_id,
                 "metadata[plan]": plan,
@@ -87,6 +87,9 @@ class StripeAPIClient(BaseAPIClient):
 
     def retrieve_subscription(self, subscription_id: str) -> dict[str, Any]:
         return self.get(f"/subscriptions/{subscription_id}").json()
+
+    def retrieve_checkout_session(self, session_id: str) -> dict[str, Any]:
+        return self.get(f"/checkout/sessions/{session_id}").json()
 
 
 def verify_stripe_signature(

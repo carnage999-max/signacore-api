@@ -14,6 +14,7 @@ from apps.notifications.services import send_organization_invitation as send_org
 from apps.notifications.services import (
     send_otp_email_message,
     send_progress_email,
+    send_subscription_activated_email,
 )
 from apps.signing.models import SigningRequest
 
@@ -139,6 +140,12 @@ def send_account_login_alert(user_id: int, method: str) -> None:
         return None
 
     send_account_login_email(user, method)
+    return None
+
+
+@shared_task(name="tasks.notifications.send_subscription_activated_email")
+def send_subscription_activated(organization_id: str) -> None:
+    send_subscription_activated_email(organization_id)
     return None
 
 

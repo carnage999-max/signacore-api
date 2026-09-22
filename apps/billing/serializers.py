@@ -89,6 +89,10 @@ class CheckoutSessionResponseSerializer(serializers.Serializer):
     checkout_url = serializers.URLField()
 
 
+class CheckoutSessionStatusSerializer(serializers.Serializer):
+    session_id = serializers.CharField(min_length=1, max_length=255)
+
+
 class BillingPortalResponseSerializer(serializers.Serializer):
     portal_url = serializers.URLField()
 

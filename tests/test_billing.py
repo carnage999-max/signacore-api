@@ -21,6 +21,7 @@ from apps.documents.models import AdminAuditLog
     SIGNACORE_SHARED_SECRET="test-signacore-secret",
     STRIPE_SECRET_KEY="sk_test_secret",
     STRIPE_WEBHOOK_SECRET="whsec_test_secret",
+    EMAIL_BACKEND="django.core.mail.backends.locmem.EmailBackend",
 )
 class BillingApiTests(TestCase):
     def setUp(self) -> None:
@@ -153,6 +154,119 @@ class BillingApiTests(TestCase):
         self.assertFalse(response.json()["cancel_at_period_end"])
         subscription.refresh_from_db()
         self.assertEqual(subscription.status, OrganizationSubscription.StatusEnum.CANCELED)
+
+    @patch("apps.billing.views.enqueue_task")
+    @patch("apps.billing.views.StripeAPIClient")
+    def test_checkout_status_confirms_payment_and_activates_plan(self, stripe_client_class, enqueue_task) -> None:
+        stripe_client = stripe_client_class.return_value
+        stripe_client.retrieve_checkout_session.return_value = {
+            "id": "cs_test_123",
+            "status": "complete",
+            "payment_status": "paid",
+            "customer": "cus_123",
+            "subscription": "sub_123",
+            "metadata": {
+                "organization_id": str(self.organization.id),
+                "plan": "PROFESSIONAL",
+            },
+        }
+        stripe_client.retrieve_subscription.return_value = {
+            "id": "sub_123",
+            "customer": "cus_123",
+            "status": "active",
+            "current_period_end": 1_800_000_000,
+            "cancel_at_period_end": False,
+            "metadata": {
+                "organization_id": str(self.organization.id),
+                "plan": "PROFESSIONAL",
+            },
+            "items": {"data": [{"price": {"id": "price_professional"}}]},
+        }
+
+        response = self.client.post(
+            "/api/admin/billing/checkout-status/",
+            {"session_id": "cs_test_123"},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 200, response.json())
+        self.assertEqual(response.json()["status"], OrganizationSubscription.StatusEnum.ACTIVE)
+        self.assertEqual(response.json()["plan"], OrganizationSubscription.PlanEnum.PROFESSIONAL)
+        stripe_client.retrieve_checkout_session.assert_called_once_with("cs_test_123")
+        enqueue_task.assert_called_once()
+
+    @patch("apps.billing.views.StripeAPIClient")
+    def test_checkout_status_rejects_session_from_another_workspace(self, stripe_client_class) -> None:
+        stripe_client = stripe_client_class.return_value
+        stripe_client.retrieve_checkout_session.return_value = {
+            "id": "cs_test_other",
+            "status": "complete",
+            "payment_status": "paid",
+            "customer": "cus_other",
+            "subscription": "sub_other",
+            "metadata": {
+                "organization_id": "another-workspace",
+                "plan": "PROFESSIONAL",
+            },
+        }
+
+        response = self.client.post(
+            "/api/admin/billing/checkout-status/",
+            {"session_id": "cs_test_other"},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 409, response.json())
+        stripe_client.retrieve_subscription.assert_not_called()
+
+    @patch("apps.billing.views.enqueue_task")
+    @patch("apps.billing.views.StripeAPIClient")
+    def test_checkout_webhook_activates_plan_and_queues_confirmation_email(
+        self, stripe_client_class, enqueue_task
+    ) -> None:
+        stripe_client_class.return_value.retrieve_subscription.return_value = {
+            "id": "sub_checkout",
+            "customer": "cus_checkout",
+            "status": "active",
+            "current_period_end": 1_800_000_000,
+            "cancel_at_period_end": False,
+            "metadata": {
+                "organization_id": str(self.organization.id),
+                "plan": "PROFESSIONAL",
+            },
+            "items": {"data": [{"price": {"id": "price_professional"}}]},
+        }
+        payload = {
+            "id": "evt_checkout_completed",
+            "type": "checkout.session.completed",
+            "data": {
+                "object": {
+                    "id": "cs_checkout",
+                    "status": "complete",
+                    "payment_status": "paid",
+                    "customer": "cus_checkout",
+                    "subscription": "sub_checkout",
+                    "metadata": {
+                        "organization_id": str(self.organization.id),
+                        "plan": "PROFESSIONAL",
+                    },
+                }
+            },
+        }
+        raw_body = json.dumps(payload, separators=(",", ":")).encode()
+        self.client.credentials()
+
+        response = self.client.post(
+            "/api/billing/webhooks/stripe/",
+            data=raw_body,
+            content_type="application/json",
+            HTTP_STRIPE_SIGNATURE=self.sign_payload(raw_body),
+        )
+
+        self.assertEqual(response.status_code, 200, response.json())
+        subscription = OrganizationSubscription.objects.get(organization=self.organization)
+        self.assertEqual(subscription.status, OrganizationSubscription.StatusEnum.ACTIVE)
+        enqueue_task.assert_called_once()
 
     def test_inactive_plan_cannot_start_checkout(self) -> None:
         self.professional_plan.is_active = False
