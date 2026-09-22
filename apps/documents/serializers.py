@@ -1,5 +1,6 @@
 import secrets
 
+from django.conf import settings
 from django.contrib.auth import authenticate, get_user_model
 from django.contrib.auth.password_validation import validate_password
 from rest_framework import serializers
@@ -20,6 +21,9 @@ class DocumentUploadSerializer(serializers.Serializer):
         file_name = getattr(value, "name", "")
         if content_type != "application/pdf" and not file_name.lower().endswith(".pdf"):
             raise serializers.ValidationError("Only PDF uploads are allowed.")
+        if value.size > settings.SIGNACORE_MAX_DOCUMENT_UPLOAD_BYTES:
+            limit_megabytes = settings.SIGNACORE_MAX_DOCUMENT_UPLOAD_BYTES / (1024 * 1024)
+            raise serializers.ValidationError(f"PDF files must be {limit_megabytes:g} MB or smaller.")
         return value
 
 

@@ -210,6 +210,24 @@ class AdminDocumentUploadTests(TestCase):
         self.assertTrue(all(response.status_code == 400 for response in responses[:5]))
         self.assertEqual(responses[-1].status_code, 429)
 
+    def test_upload_rejects_a_pdf_over_the_configured_size_limit(self) -> None:
+        with self.settings(SIGNACORE_MAX_DOCUMENT_UPLOAD_BYTES=1024 * 1024):
+            response = self.client.post(
+                "/api/admin/documents/",
+                {
+                    "title": "Oversized PDF",
+                    "pdf_file": SimpleUploadedFile(
+                        "oversized.pdf",
+                        b"%PDF-1.4\n" + (b"0" * (1024 * 1024)),
+                        content_type="application/pdf",
+                    ),
+                },
+                format="multipart",
+            )
+
+        self.assertEqual(response.status_code, 400, response.json())
+        self.assertEqual(response.json()["pdf_file"], ["PDF files must be 1 MB or smaller."])
+
     def test_upload_pdf_creates_document_and_extracts_acroform_fields(self) -> None:
         upload = SimpleUploadedFile(
             "employment.pdf",

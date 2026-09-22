@@ -114,6 +114,17 @@ Original PDFs, completed PDFs, signature images, signer-entered values, and docu
 
 Before the first production start, set `DEBUG=False`, a unique `SECRET_KEY` of at least 50 characters, and the HTTPS hardening variables from `.env.example`. The API trusts the reverse-proxy HTTPS header, so Nginx must send `X-Forwarded-Proto https`; direct HTTP access to the Gunicorn port is expected to redirect in production.
 
+### PDF upload limits
+
+The API rejects PDF files over `SIGNACORE_MAX_DOCUMENT_UPLOAD_BYTES` (25 MiB by default) with a user-facing validation error. Set every Nginx server that can receive an admin upload slightly higher to allow multipart overhead:
+
+```nginx
+client_max_body_size 32m;
+client_body_timeout 120s;
+```
+
+Apply this in the `server` blocks for `mysignacore.com`, `staging.mysignacore.com`, `api.mysignacore.com`, and `api-staging.mysignacore.com`. The web hosts matter because the Next.js API proxy receives the browser request before it forwards it to Django.
+
 Treat `FERNET_KEY` as a permanent data-encryption key. Back it up outside the server and do not replace it during a normal deployment. Losing it makes encrypted records unrecoverable; changing it requires an explicit key-rotation migration.
 
 ### Deployment artifacts
@@ -316,6 +327,7 @@ SIGNACORE_HOST_STORAGE_ROOT=/mnt/data/media/signa-core-staging
 SIGNACORE_STORAGE_ROOT=/mnt/data/media/signa-core
 MEDIA_ROOT=/mnt/data/media/signa-core
 MEDIA_URL=/media/
+SIGNACORE_MAX_DOCUMENT_UPLOAD_BYTES=26214400
 SIGNACORE_HOST_STATIC_ROOT=/srv/apps/signacore-api-staging/staticfiles
 STATIC_ROOT=/srv/apps/signacore-api-staging/staticfiles
 
