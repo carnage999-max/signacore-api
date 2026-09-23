@@ -18,6 +18,7 @@ from rest_framework.views import APIView
 
 from apps.documents.models import Document, DocumentField
 from apps.documents.serializers import DocumentFieldSerializer
+from services.pdf_anchors import conceal_anchor_tags_on_page
 from services.pdf_engine import PDFEngine
 from tasks.notifications import notify_admin_progress, send_completion_emails, send_otp_email
 from utils.file_storage import save_encrypted_field_file, temporary_output_file, temporary_plaintext_file
@@ -184,6 +185,7 @@ class SignerPagePreviewView(APIView):
                 if page_number < 1 or page_number > pdf_document.page_count:
                     raise Http404("Page not found.")
                 page = pdf_document[page_number - 1]
+                conceal_anchor_tags_on_page(page)
                 pixmap = page.get_pixmap(matrix=fitz.Matrix(2, 2), alpha=False)
         return HttpResponse(pixmap.tobytes("png"), content_type="image/png")
 

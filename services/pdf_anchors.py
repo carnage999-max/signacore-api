@@ -107,17 +107,23 @@ def anchor_field_rect(match: AnchorMatch) -> fitz.Rect:
     return fitz.Rect(match.rect.x0, match.rect.y0, match.rect.x0 + width, match.rect.y0 + height)
 
 
-def conceal_anchor_tags(document: fitz.Document) -> None:
-    """Remove anchor tag text from a document so it never appears in the completed file."""
+def conceal_anchor_tags_on_page(page: fitz.Page) -> bool:
+    """Remove anchor tag text from one page. Returns whether anything was removed."""
+    page_text = page.get_text("text")
+    if "{{" not in page_text:
+        return False
+
     redacted = False
+    for match in ANCHOR_PATTERN.finditer(page_text):
+        for rect in page.search_for(match.group(0)):
+            page.add_redact_annot(rect, fill=(1, 1, 1))
+            redacted = True
+    if redacted:
+        page.apply_redactions(images=fitz.PDF_REDACT_IMAGE_NONE)
+    return redacted
+
+
+def conceal_anchor_tags(document: fitz.Document) -> None:
+    """Remove anchor tag text so the markup never reaches a signer or a completed file."""
     for page in document:
-        page_text = page.get_text("text")
-        if "{{" not in page_text:
-            continue
-        for match in ANCHOR_PATTERN.finditer(page_text):
-            for rect in page.search_for(match.group(0)):
-                page.add_redact_annot(rect, fill=(1, 1, 1))
-                redacted = True
-        if redacted:
-            page.apply_redactions(images=fitz.PDF_REDACT_IMAGE_NONE)
-            redacted = False
+        conceal_anchor_tags_on_page(page)

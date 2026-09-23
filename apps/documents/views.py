@@ -28,6 +28,7 @@ from apps.billing.entitlements import PlanFeatureEnum, require_feature, require_
 from apps.signing.models import SigningRequest
 from services.authored_pdf import AuthoredPDFRenderer
 from services.docx_import import DocxImporter, DocxImportError
+from services.pdf_anchors import conceal_anchor_tags_on_page
 from services.pdf_engine import PDFEngine
 from tasks.notifications import (
     send_admin_account_created,
@@ -893,6 +894,7 @@ class AdminDocumentPagePreviewView(APIView):
                     if page_number < 1 or page_number > pdf_document.page_count:
                         return Response({"detail": "Page not found."}, status=status.HTTP_404_NOT_FOUND)
                     page = pdf_document[page_number - 1]
+                    conceal_anchor_tags_on_page(page)
                     pixmap = page.get_pixmap(matrix=fitz.Matrix(2, 2), alpha=False)
         except Exception:
             logger.exception(

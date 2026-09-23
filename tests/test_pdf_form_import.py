@@ -15,6 +15,7 @@ from rest_framework.test import APIClient
 from apps.accounts.models import Organization, OrganizationMembership
 from apps.documents.models import Document, DocumentField
 from apps.signing.models import SigningRequest
+from services.pdf_anchors import conceal_anchor_tags_on_page
 from services.pdf_engine import PDFEngine
 from services.pdf_sanitizer import find_active_content
 from utils.file_storage import temporary_plaintext_file
@@ -679,3 +680,100 @@ class AnchorTagImportTests(TestCase):
         self.assertNotIn("{{", text)
         self.assertNotIn("signature}}", text)
         self.assertIn("Jane Doe", text)
+
+    def test_admin_page_preview_does_not_render_the_anchor_tag_text(self) -> None:
+        payload = self.upload(builders.build_anchor_tag_pdf())
+
+        response = self.client.get(f"/api/admin/documents/{payload['id']}/pages/1/preview/")
+
+        self.assertEqual(response.status_code, 200)
+        document = Document.objects.get(pk=payload["id"])
+        with temporary_plaintext_file(document.original_pdf, suffix=".pdf") as pdf_path:
+            with fitz.open(pdf_path) as stored:
+                # The stored original keeps the author's tags; only the render conceals them.
+                self.assertIn("{{signature}}", stored[0].get_text())
+                conceal_anchor_tags_on_page(stored[0])
+                self.assertNotIn("{{", stored[0].get_text())
+
+    def test_signer_preview_does_not_render_the_anchor_tag_text(self) -> None:
+        payload = self.upload(builders.build_anchor_tag_pdf())
+        document = Document.objects.get(pk=payload["id"])
+        document.status = Document.StatusEnum.SENT
+        document.save(update_fields=["status"])
+        signing_request = SigningRequest.objects.create(
+            document=document,
+            signer_email="jane@example.com",
+            signer_name="Jane Doe",
+            expires_at=timezone.now() + timedelta(days=7),
+        )
+
+        signer_client = APIClient()
+        with self.settings(SIGNACORE_TEST_OTP_CODE="123456"):
+            signer_client.post(f"/api/sign/{signing_request.id}/otp/send/")
+            signer_client.post(
+                f"/api/sign/{signing_request.id}/otp/verify/",
+                {"otp": "123456"},
+                format="json",
+            )
+
+        response = signer_client.get(f"/api/sign/{signing_request.id}/pages/1/preview/")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response["Content-Type"], "image/png")
+
+    def test_admin_can_edit_the_comb_settings_of_a_field(self) -> None:
+        payload = self.upload(builders.build_anchor_tag_pdf())
+        field_id = next(field["id"] for field in payload["fields"] if field["field_type"] == "TEXT")
+
+        response = self.client.patch(
+            f"/api/admin/documents/{payload['id']}/fields/{field_id}/",
+            {"max_length": 9, "is_comb": True},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 200, response.json())
+        self.assertEqual(response.json()["max_length"], 9)
+        self.assertTrue(response.json()["is_comb"])
+
+    def test_admin_can_clear_the_comb_settings_of_a_field(self) -> None:
+        payload = self.upload(builders.build_anchor_tag_pdf())
+        field_id = next(field["id"] for field in payload["fields"] if field["field_type"] == "TEXT")
+        self.client.patch(
+            f"/api/admin/documents/{payload['id']}/fields/{field_id}/",
+            {"max_length": 9, "is_comb": True},
+            format="json",
+        )
+
+        response = self.client.patch(
+            f"/api/admin/documents/{payload['id']}/fields/{field_id}/",
+            {"max_length": None, "is_comb": False},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 200, response.json())
+        self.assertIsNone(response.json()["max_length"])
+        self.assertFalse(response.json()["is_comb"])
+
+    def test_manually_added_field_can_declare_comb_cells(self) -> None:
+        payload = self.upload(builders.build_anchor_tag_pdf())
+
+        response = self.client.post(
+            f"/api/admin/documents/{payload['id']}/fields/",
+            {
+                "field_type": "TEXT",
+                "label": "Reference number",
+                "page": 1,
+                "x": 72,
+                "y": 500,
+                "width": 120,
+                "height": 20,
+                "is_required": True,
+                "order": 99,
+                "max_length": 6,
+                "is_comb": True,
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 201, response.json())
+        self.assertEqual(response.json()["max_length"], 6)
+        self.assertTrue(response.json()["is_comb"])
