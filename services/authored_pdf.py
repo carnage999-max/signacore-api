@@ -48,6 +48,9 @@ class AuthoredPDFRenderer:
     }
     max_text_length = 10000
     max_nodes = 300
+    body_font = "helv"
+    heading_font = "hebo"
+    text_color = (0.08, 0.1, 0.13)
 
     def validate(self, content: Any) -> dict[str, Any]:
         if not isinstance(content, dict):
@@ -95,20 +98,25 @@ class AuthoredPDFRenderer:
             width: float,
             font_size: float,
             line_height: float,
+            font_name: str = "",
         ) -> None:
+            """Draw each wrapped line on its own baseline.
+
+            ``insert_textbox`` writes nothing at all when the text does not fit the rectangle
+            it is given, which silently emptied whole documents. Drawing line by line also lets
+            a block continue onto the next page instead of being moved or dropped whole.
+            """
             nonlocal cursor_y
-            lines = self._wrap_text(text, font_size, width)
-            height = max(line_height, len(lines) * line_height)
-            ensure_space(height)
-            page.insert_textbox(
-                fitz.Rect(x, cursor_y, x + width, cursor_y + height),
-                "\n".join(lines),
-                fontsize=font_size,
-                fontname="helv",
-                color=(0.08, 0.1, 0.13),
-                lineheight=line_height / font_size,
-            )
-            cursor_y += height
+            for line in self._wrap_text(text, font_size, width, font_name or self.body_font):
+                ensure_space(line_height)
+                page.insert_text(
+                    fitz.Point(x, cursor_y + font_size),
+                    line,
+                    fontsize=font_size,
+                    fontname=font_name or self.body_font,
+                    color=self.text_color,
+                )
+                cursor_y += line_height
 
         for node in content.get("content", []):
             node_type = node.get("type")
@@ -120,21 +128,24 @@ class AuthoredPDFRenderer:
                 field_type = str((node.get("attrs") or {}).get("fieldType", "TEXT")).upper()
                 width, height = self.field_sizes[field_type]
                 ensure_space(height + 18)
+                field_width = min(width, page_width - (margin * 2))
                 field = AuthoredRenderField(
                     field_type=field_type,
                     label=self._field_label(node),
                     page=page_number,
                     x=margin,
-                    y=cursor_y,
-                    width=min(width, page_width - (margin * 2)),
+                    # DocumentField stores a bottom-left origin; the cursor runs from the top.
+                    y=page_height - cursor_y - height,
+                    width=field_width,
                     height=height,
                     is_required=bool((node.get("attrs") or {}).get("required", True)),
                     order=order,
                 )
                 fields.append(field)
+                rule_y = cursor_y + height - 3
                 page.draw_line(
-                    fitz.Point(field.x, field.y + field.height - 3),
-                    fitz.Point(field.x + field.width, field.y + field.height - 3),
+                    fitz.Point(field.x, rule_y),
+                    fitz.Point(field.x + field.width, rule_y),
                     color=(0.55, 0.59, 0.64),
                     width=0.7,
                 )
@@ -169,6 +180,7 @@ class AuthoredPDFRenderer:
                     page_width - (margin * 2),
                     font_size,
                     font_size * 1.25,
+                    self.heading_font,
                 )
                 cursor_y += 8
                 continue
@@ -204,7 +216,7 @@ class AuthoredPDFRenderer:
         return pdf_bytes, fields
 
     @staticmethod
-    def _wrap_text(text: str, font_size: float, width: float) -> list[str]:
+    def _wrap_text(text: str, font_size: float, width: float, font_name: str = "helv") -> list[str]:
         lines: list[str] = []
         for paragraph in str(text).splitlines() or [""]:
             current = ""
@@ -212,7 +224,7 @@ class AuthoredPDFRenderer:
                 if not word:
                     continue
                 candidate = f"{current} {word}".strip()
-                if current and fitz.get_text_length(candidate, fontname="helv", fontsize=font_size) > width:
+                if current and fitz.get_text_length(candidate, fontname=font_name, fontsize=font_size) > width:
                     lines.append(current)
                     current = word
                 else:
