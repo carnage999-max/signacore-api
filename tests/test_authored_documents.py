@@ -17,8 +17,29 @@ TEST_MEDIA_ROOT = tempfile.mkdtemp(prefix="signacore-authored-")
 migration = import_module("apps.documents.migrations.0019_convert_authored_field_origin")
 
 
-def paragraph(text: str) -> dict:
-    return {"type": "paragraph", "content": [{"type": "text", "text": text}]}
+def paragraph(text: str, *, align: str = "") -> dict:
+    node: dict = {"type": "paragraph", "content": [{"type": "text", "text": text}]}
+    if align:
+        node["attrs"] = {"textAlign": align}
+    return node
+
+
+def marked_paragraph(*runs: tuple[str, str]) -> dict:
+    content = []
+    for text, mark in runs:
+        node: dict = {"type": "text", "text": text}
+        if mark:
+            node["marks"] = [{"type": mark}]
+        content.append(node)
+    return {"type": "paragraph", "content": content}
+
+
+def table_cell(text: str, *, header: bool = False) -> dict:
+    return {"type": "tableHeader" if header else "tableCell", "content": [paragraph(text)]}
+
+
+def table(rows: list[list[dict]]) -> dict:
+    return {"type": "table", "content": [{"type": "tableRow", "content": row} for row in rows]}
 
 
 def heading(text: str, level: int = 1) -> dict:
@@ -183,3 +204,134 @@ class AuthoredFieldOriginMigrationTests(TestCase):
 
         imported.refresh_from_db()
         self.assertAlmostEqual(imported.y, 300.0, places=3)
+
+
+class AuthoredFormattingTests(SimpleTestCase):
+    """Formatting the editor offers must survive into the rendered document."""
+
+    def render(self, content: dict) -> fitz.Document:
+        pdf_bytes, _ = AuthoredPDFRenderer().render(content)
+        return fitz.open("pdf", pdf_bytes)
+
+    def test_bold_and_italic_runs_keep_their_text(self) -> None:
+        content = build_content(
+            marked_paragraph(("This agreement binds ", ""), ("ACME Holdings", "bold"), (" today.", "italic"))
+        )
+
+        document = self.render(content)
+        try:
+            self.assertIn("ACME Holdings", document[0].get_text())
+            self.assertIn("This agreement binds", document[0].get_text())
+        finally:
+            document.close()
+
+    def test_bold_text_is_drawn_in_a_bold_face(self) -> None:
+        content = build_content(marked_paragraph(("Plain ", ""), ("Emphasised", "bold")))
+
+        document = self.render(content)
+        try:
+            fonts = {
+                span["font"]
+                for block in document[0].get_text("dict")["blocks"]
+                for line in block.get("lines", [])
+                for span in line.get("spans", [])
+                if "Emphasised" in span["text"]
+            }
+        finally:
+            document.close()
+
+        self.assertTrue(fonts)
+        self.assertTrue(any("Bold" in font for font in fonts), fonts)
+
+    def test_table_cells_are_rendered(self) -> None:
+        content = build_content(
+            table(
+                [
+                    [table_cell("Milestone", header=True), table_cell("Amount", header=True)],
+                    [table_cell("Kick-off"), table_cell("$5,000")],
+                ]
+            )
+        )
+
+        document = self.render(content)
+        try:
+            text = document[0].get_text()
+            for expected in ("Milestone", "Amount", "Kick-off", "$5,000"):
+                self.assertIn(expected, text)
+        finally:
+            document.close()
+
+    def test_table_is_drawn_with_grid_lines(self) -> None:
+        content = build_content(table([[table_cell("A"), table_cell("B")]]))
+
+        document = self.render(content)
+        try:
+            self.assertTrue(document[0].get_drawings(), "a table must draw its grid")
+        finally:
+            document.close()
+
+    def test_a_table_is_accepted_by_validation(self) -> None:
+        content = build_content(table([[table_cell("A"), table_cell("B")]]))
+
+        self.assertEqual(AuthoredPDFRenderer().validate(content), content)
+
+    def test_a_table_row_beyond_the_column_limit_is_rejected(self) -> None:
+        wide_row = [table_cell(str(index)) for index in range(AuthoredPDFRenderer.max_table_columns + 1)]
+
+        with self.assertRaises(ValueError):
+            AuthoredPDFRenderer().validate(build_content(table([wide_row])))
+
+    def test_centred_text_is_not_placed_at_the_left_margin(self) -> None:
+        centred = self.render(build_content(paragraph("Consulting Agreement", align="center")))
+        left = self.render(build_content(paragraph("Consulting Agreement")))
+        try:
+            centred_x = centred[0].get_text("words")[0][0]
+            left_x = left[0].get_text("words")[0][0]
+        finally:
+            centred.close()
+            left.close()
+
+        self.assertGreater(centred_x, left_x + 20)
+
+    def test_right_aligned_text_sits_further_right_than_centred_text(self) -> None:
+        right = self.render(build_content(paragraph("Countersigned", align="right")))
+        centred = self.render(build_content(paragraph("Countersigned", align="center")))
+        try:
+            right_x = right[0].get_text("words")[0][0]
+            centred_x = centred[0].get_text("words")[0][0]
+        finally:
+            right.close()
+            centred.close()
+
+        self.assertGreater(right_x, centred_x)
+
+    def test_text_content_cannot_inject_layout_markup(self) -> None:
+        content = build_content(paragraph("Pay <b>nothing</b> under clause 4"))
+
+        document = self.render(content)
+        try:
+            self.assertIn("<b>nothing</b>", document[0].get_text())
+        finally:
+            document.close()
+
+    def test_a_field_after_a_long_body_is_reported_on_the_page_it_landed_on(self) -> None:
+        sentence = "This clause restates the obligations of each party in full. "
+        content = build_content(paragraph(sentence * 120), signature_field())
+
+        pdf_bytes, fields = AuthoredPDFRenderer().render(content)
+        document = fitz.open("pdf", pdf_bytes)
+        try:
+            self.assertGreater(document.page_count, 1)
+            self.assertEqual(len(fields), 1)
+            self.assertGreaterEqual(fields[0].page, 1)
+            self.assertLessEqual(fields[0].page, document.page_count)
+
+            page = document[fields[0].page - 1]
+            rules = [
+                drawing
+                for drawing in page.get_drawings()
+                if abs(drawing["rect"].y1 - (page.rect.height - fields[0].y)) < 6
+            ]
+            self.assertTrue(rules, "the field rule must be drawn on the page the field reports")
+        finally:
+            document.close()
