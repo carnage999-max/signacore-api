@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from contextlib import ExitStack
 from datetime import timedelta
 
@@ -18,16 +19,21 @@ from rest_framework.views import APIView
 
 from apps.documents.models import Document, DocumentField
 from apps.documents.serializers import DocumentFieldSerializer
+from services.pdf_anchors import conceal_anchor_tags_on_page
 from services.pdf_engine import PDFEngine
+from services.pdf_sanitizer import PDFSanitizationError
 from tasks.notifications import notify_admin_progress, send_completion_emails, send_otp_email
 from utils.file_storage import save_encrypted_field_file, temporary_output_file, temporary_plaintext_file
 from utils.otp import generate_otp, hash_otp, verify_otp
+from utils.pdf_preview import build_preview_matrix
 from utils.signer_session import build_signer_session_token, verify_signer_session_token
 from utils.task_dispatch import enqueue_task
 from utils.throttling import SignacoreRateThrottle
 
 from .models import FieldSubmission, SigningRequest
 from .serializers import FieldSubmissionSerializer, SignerOtpSerializer, SigningRequestSerializer
+
+logger = logging.getLogger(__name__)
 
 SIGNER_SESSION_COOKIE = "signacore_signer_session"
 SIGNER_SESSION_MAX_AGE_SECONDS = 3600
@@ -184,7 +190,9 @@ class SignerPagePreviewView(APIView):
                 if page_number < 1 or page_number > pdf_document.page_count:
                     raise Http404("Page not found.")
                 page = pdf_document[page_number - 1]
-                pixmap = page.get_pixmap(matrix=fitz.Matrix(2, 2), alpha=False)
+                conceal_anchor_tags_on_page(page)
+                matrix = build_preview_matrix(page, request.query_params.get("width"))
+                pixmap = page.get_pixmap(matrix=matrix, alpha=False)
         return HttpResponse(pixmap.tobytes("png"), content_type="image/png")
 
 
@@ -398,6 +406,9 @@ class SignerSubmitView(APIView):
                     flatten_submissions.append(
                         {
                             "page": submission.document_field.page,
+                            "field_type": submission.document_field.field_type,
+                            "max_length": submission.document_field.max_length,
+                            "is_comb": submission.document_field.is_comb,
                             "x": submission.document_field.x,
                             "y": submission.document_field.y,
                             "width": submission.document_field.width,
@@ -407,7 +418,27 @@ class SignerSubmitView(APIView):
                             "image_path": image_path,
                         }
                     )
-                PDFEngine().flatten(source_path, output_path, flatten_submissions)
+                try:
+                    PDFEngine().flatten(source_path, output_path, flatten_submissions)
+                except PDFSanitizationError:
+                    # The signature is kept; only the unsafe packaged file is withheld, and the
+                    # document stays un-completed so the sender can act on it.
+                    logger.exception(
+                        "Completed PDF failed sanitization",
+                        extra={"document_id": str(document.id)},
+                    )
+                    document.status = Document.StatusEnum.PARTIALLY_SIGNED
+                    document.save(update_fields=["status", "updated_at"])
+                    return Response(
+                        {
+                            "status": Document.StatusEnum.PARTIALLY_SIGNED,
+                            "message": (
+                                "Your signature was recorded. This document needs attention from "
+                                "the sender before the final copy can be issued."
+                            ),
+                        },
+                        status=status.HTTP_202_ACCEPTED,
+                    )
                 save_encrypted_field_file(
                     document.signed_pdf,
                     output_path,

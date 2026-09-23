@@ -287,41 +287,110 @@ input {
   display: flex;
   align-items: center;
   justify-content: center;
-  padding: 2px;
+  padding: 0;
   container-type: size;
-  border-radius: 4px;
-  border: 1px solid rgba(21, 63, 105, 0.28);
-  background: rgba(255, 255, 255, 0.18);
-  backdrop-filter: none;
-}
-
-.field-overlay-text {
-  padding: 0;
   border: 0;
-  border-radius: 0;
-  background: transparent;
-  backdrop-filter: none;
-  justify-content: stretch;
-}
-
-.field-overlay-checkbox {
-  padding: 0;
-  background: transparent;
-  backdrop-filter: none;
+  border-radius: 2px;
+  /* The printed box on the page is the boundary; the field only tints to locate itself. */
+  background: rgba(37, 99, 235, 0.1);
+  box-shadow: inset 0 -1px 0 rgba(37, 99, 235, 0.35);
+  transition: background 120ms ease, box-shadow 120ms ease;
 }
 
 .field-overlay-signature {
-  padding: 0;
-  border-color: rgba(136, 43, 43, 0.5);
-  background: rgba(255, 255, 255, 0.08);
-  backdrop-filter: none;
+  box-shadow: inset 0 -1px 0 rgba(136, 43, 43, 0.5);
 }
 
 .field-overlay-required {
-  border-color: rgba(136, 43, 43, 0.48);
+  background: rgba(37, 99, 235, 0.14);
+}
+
+.field-overlay:hover {
+  background: rgba(37, 99, 235, 0.18);
+}
+
+.field-overlay:focus-within {
+  background: rgba(37, 99, 235, 0.08);
+  box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.85);
+}
+
+/* A completed field stops advertising itself and reads as ink on the page. */
+.field-overlay.field-filled {
+  background: transparent;
+  box-shadow: none;
+}
+
+.field-overlay.field-error {
+  background: rgba(190, 40, 40, 0.16);
+  box-shadow: inset 0 -1px 0 rgba(190, 40, 40, 0.7);
+}
+
+/* "Highlight fields" off: nothing but the signer's own ink. */
+.pages-root-plain .field-overlay {
+  background: transparent;
+  box-shadow: none;
+}
+
+.pages-root-plain .field-overlay:focus-within {
+  box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.7);
 }
 
 .field-overlay input,
+.field-overlay textarea,
+.signature-field-button {
+  width: 100%;
+  height: 100%;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+
+.checkbox-input {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 100%;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+}
+
+.checkbox-input svg {
+  width: 82%;
+  height: 82%;
+  fill: none;
+  stroke: #111827;
+  stroke-width: 2.1;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  opacity: 0;
+  transition: opacity 90ms ease;
+}
+
+.checkbox-input[aria-checked="true"] svg {
+  opacity: 1;
+}
+
+.highlight-toggle {
+  display: inline-flex;
+  gap: 8px;
+  align-items: center;
+  align-self: flex-start;
+  font-size: 12px;
+  font-weight: 700;
+  color: #9cadbd;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.highlight-toggle input {
+  width: 14px;
+  height: 14px;
+  accent-color: #2563eb;
+}
+
 .signature-field-button {
   width: 100%;
   height: 100%;
@@ -331,7 +400,7 @@ input {
 }
 
 .text-field-input {
-  padding: 0 1px;
+  padding: 0 1.5px;
   border-radius: 0;
   background: transparent;
   color: #111827;
@@ -342,15 +411,34 @@ input {
   outline: none;
 }
 
+/* Labels live in the page's own print; showing one in every box would bury the form. */
 .text-field-input::placeholder {
-  color: rgba(17, 24, 39, 0.45);
+  color: transparent;
 }
 
-.checkbox-input {
+.text-field-input:focus::placeholder {
+  color: rgba(17, 24, 39, 0.35);
+}
+
+/* Comb fields: one glyph per printed cell.
+   The parent sets container-type: size, so 100cqw is the field width. A monospace face makes
+   1ch the exact glyph advance, so advance + letter-spacing lands each character on the cell
+   pitch, and the indent centres the first one. */
+.comb-field-input {
+  --comb-cell: calc(100cqw / var(--comb-cells, 1));
+  font-family: "Courier New", Courier, monospace;
+  letter-spacing: calc(var(--comb-cell) - 1ch);
+  text-indent: calc((var(--comb-cell) - 1ch) / 2);
+  padding: 0;
+}
+
+.multiline-field-input {
   width: 100%;
   height: 100%;
-  margin: 0;
-  accent-color: #07111d;
+  border: 0;
+  resize: none;
+  line-height: 1.25;
+  font-size: clamp(7px, 18cqh, var(--field-font-size, 11px));
 }
 
 .signature-field-button {
@@ -504,5 +592,123 @@ input {
 
   .modal {
     padding: 12px;
+  }
+}
+
+.document-body {
+  display: grid;
+  grid-template-columns: 168px minmax(0, 1fr);
+  gap: 18px;
+  align-items: start;
+}
+
+.page-rail {
+  position: sticky;
+  top: 18px;
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid rgba(218, 232, 248, 0.12);
+  border-radius: 14px;
+  background: rgba(248, 250, 252, 0.04);
+}
+
+.page-rail-head {
+  display: grid;
+  gap: 8px;
+}
+
+.page-counter {
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  color: #cbd7e3;
+}
+
+.page-rail-nav {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 4px;
+}
+
+.rail-button {
+  min-height: 28px;
+  padding: 0;
+  border: 1px solid rgba(218, 232, 248, 0.16);
+  border-radius: 8px;
+  background: rgba(248, 250, 252, 0.06);
+  color: #f8fafc;
+  cursor: pointer;
+}
+
+.rail-button:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+
+.page-thumbs {
+  display: grid;
+  gap: 8px;
+  max-height: 58vh;
+  overflow-y: auto;
+  padding-right: 4px;
+}
+
+.page-thumb {
+  position: relative;
+  display: block;
+  padding: 0;
+  border: 2px solid transparent;
+  border-radius: 8px;
+  background: transparent;
+  cursor: pointer;
+  line-height: 0;
+}
+
+.page-thumb img {
+  width: 100%;
+  height: auto;
+  border-radius: 6px;
+  background: #fff;
+}
+
+.page-thumb-number {
+  position: absolute;
+  top: 4px;
+  left: 4px;
+  min-width: 18px;
+  padding: 1px 5px;
+  border-radius: 5px;
+  background: rgba(7, 17, 29, 0.78);
+  color: #f8fafc;
+  font-size: 10px;
+  font-weight: 800;
+  line-height: 1.5;
+}
+
+.page-thumb-current {
+  border-color: #2563eb;
+}
+
+.page-rail .secondary-button {
+  min-height: 36px;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+@media (max-width: 900px) {
+  .document-body {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .page-rail {
+    position: static;
+  }
+
+  .page-thumbs {
+    grid-auto-flow: column;
+    grid-auto-columns: 96px;
+    max-height: none;
+    overflow-x: auto;
   }
 }

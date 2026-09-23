@@ -5,6 +5,7 @@ import logging
 import uuid
 from datetime import timedelta
 from pathlib import Path
+from typing import Any
 
 import fitz
 from django.conf import settings
@@ -27,6 +28,7 @@ from apps.billing.entitlements import PlanFeatureEnum, require_feature, require_
 from apps.signing.models import SigningRequest
 from services.authored_pdf import AuthoredPDFRenderer
 from services.docx_import import DocxImporter, DocxImportError
+from services.pdf_anchors import conceal_anchor_tags_on_page
 from services.pdf_engine import PDFEngine
 from tasks.notifications import (
     send_admin_account_created,
@@ -35,6 +37,7 @@ from tasks.notifications import (
 )
 from utils.file_storage import temporary_plaintext_file
 from utils.identity import email_digest
+from utils.pdf_preview import build_preview_matrix
 from utils.task_dispatch import enqueue_task
 from utils.throttling import SignacoreRateThrottle
 
@@ -148,11 +151,22 @@ def build_document_page_payload(document: Document) -> list[dict[str, float | in
     return pages
 
 
-def build_document_detection_summary(document: Document) -> dict[str, str | int]:
+def build_document_detection_summary(document: Document) -> dict[str, Any]:
+    """Keep the original ``source``/``field_count`` contract and extend it with the import report."""
+    report = document.import_report or {}
     first_field = document.fields.order_by("page", "order").first()
+    field_count = document.fields.count()
+    if first_field is not None:
+        source = first_field.detection_source
+    else:
+        source = report.get("source") or DocumentField.DetectionSourceEnum.HEURISTIC
     return {
-        "source": first_field.detection_source if first_field else DocumentField.DetectionSourceEnum.HEURISTIC,
-        "field_count": document.fields.count(),
+        "source": source,
+        "field_count": field_count,
+        "native_widget_count": report.get("native_widget_count", 0),
+        "imported_field_count": report.get("imported_field_count", field_count),
+        "ignored_widget_count": report.get("ignored_widget_count", 0),
+        "warning_codes": report.get("warning_codes", []),
     }
 
 
@@ -429,7 +443,10 @@ class AdminDocumentsView(APIView):
                 organization=organization,
             )
             with temporary_plaintext_file(document.original_pdf, suffix=".pdf") as pdf_path:
-                detected_fields = engine.analyse(pdf_path)
+                import_result = engine.analyse(pdf_path)
+            detected_fields = import_result.fields
+            document.import_report = import_result.report.as_dict()
+            document.save(update_fields=["import_report", "updated_at"])
             DocumentField.objects.bulk_create(
                 [
                     DocumentField(
@@ -444,6 +461,8 @@ class AdminDocumentsView(APIView):
                         is_required=field.is_required,
                         detection_source=field.detection_source,
                         order=field.order,
+                        max_length=field.max_length,
+                        is_comb=field.is_comb,
                     )
                     for field in detected_fields
                 ]
@@ -455,18 +474,15 @@ class AdminDocumentsView(APIView):
                 actor=actor,
                 target_type="document",
                 target_id=document.id,
-                metadata={"field_count": len(detected_fields)},
+                metadata={
+                    "field_count": len(detected_fields),
+                    "ignored_widget_count": import_result.report.ignored_widget_count,
+                },
             )
 
         document = Document.objects.prefetch_related("fields", "signing_requests").get(pk=document.pk)
         payload = serialize_document_detail(document)
         payload["page_count"] = page_count
-        payload["detection_summary"] = {
-            "source": (
-                detected_fields[0].detection_source if detected_fields else DocumentField.DetectionSourceEnum.HEURISTIC
-            ),
-            "field_count": len(detected_fields),
-        }
         return Response(payload, status=status.HTTP_201_CREATED)
 
 
@@ -879,7 +895,9 @@ class AdminDocumentPagePreviewView(APIView):
                     if page_number < 1 or page_number > pdf_document.page_count:
                         return Response({"detail": "Page not found."}, status=status.HTTP_404_NOT_FOUND)
                     page = pdf_document[page_number - 1]
-                    pixmap = page.get_pixmap(matrix=fitz.Matrix(2, 2), alpha=False)
+                    conceal_anchor_tags_on_page(page)
+                    matrix = build_preview_matrix(page, request.query_params.get("width"))
+                    pixmap = page.get_pixmap(matrix=matrix, alpha=False)
         except Exception:
             logger.exception(
                 "Admin document page preview failed",

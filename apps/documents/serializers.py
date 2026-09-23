@@ -64,6 +64,8 @@ class DocumentFieldSerializer(serializers.ModelSerializer):
             "is_required",
             "detection_source",
             "order",
+            "max_length",
+            "is_comb",
         )
         read_only_fields = ("id", "detection_source")
 
@@ -81,6 +83,8 @@ class ManualDocumentFieldCreateSerializer(serializers.ModelSerializer):
             "height",
             "is_required",
             "order",
+            "max_length",
+            "is_comb",
         )
 
 
@@ -97,6 +101,8 @@ class DocumentFieldUpdateSerializer(serializers.ModelSerializer):
             "height",
             "is_required",
             "order",
+            "max_length",
+            "is_comb",
         )
         extra_kwargs = {
             "field_type": {"required": False},
@@ -108,6 +114,8 @@ class DocumentFieldUpdateSerializer(serializers.ModelSerializer):
             "height": {"required": False},
             "is_required": {"required": False},
             "order": {"required": False},
+            "max_length": {"required": False, "allow_null": True},
+            "is_comb": {"required": False},
         }
 
 

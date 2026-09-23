@@ -8,6 +8,20 @@ from typing import Any
 import fitz
 
 from apps.documents.models import DocumentField
+from services.pdf_anchors import anchor_field_rect, conceal_anchor_tags, find_anchor_tags
+from services.pdf_form_import import (
+    ImportReport,
+    ImportWarningEnum,
+    classify_widget,
+    collect_text_lines,
+    is_comb_widget,
+    is_widget_required,
+    resolve_label,
+    widget_max_length,
+)
+from services.pdf_sanitizer import assert_sanitized, sanitize_document
+
+MIN_TEXT_LAYER_CHARS = 24
 
 
 @dataclass
@@ -22,6 +36,14 @@ class DetectedField:
     is_required: bool
     detection_source: str
     order: int
+    max_length: int | None = None
+    is_comb: bool = False
+
+
+@dataclass
+class ImportResult:
+    fields: list[DetectedField]
+    report: ImportReport
 
 
 class PDFEngine:
@@ -31,40 +53,172 @@ class PDFEngine:
     max_label_length = 255
     checkbox_chars = ("☐", "□")
     underscore_pattern = re.compile(r"_{3,}")
+    flatten_fontname = "helv"
+    max_flatten_font_size = 12.0
+    min_flatten_font_size = 4.5
+    text_left_padding = 1.5
+    text_cap_height_ratio = 0.72
 
-    def analyse(self, pdf_path: str | Path) -> list[DetectedField]:
+    def analyse(self, pdf_path: str | Path) -> ImportResult:
         document = fitz.open(pdf_path)
         try:
-            fields = self._extract_acroform_fields(document)
-            if fields:
-                return fields
-            return self.detect_heuristic(document)
+            anchor_fields, unplaced_tags = self._import_anchor_tags(document)
+            if anchor_fields:
+                report = ImportReport(
+                    source=DocumentField.DetectionSourceEnum.ANCHOR,
+                    imported_field_count=len(anchor_fields),
+                )
+                if unplaced_tags:
+                    report.warning_codes.append(ImportWarningEnum.ANCHOR_TAG_NOT_PLACED)
+                return ImportResult(fields=anchor_fields, report=report)
+
+            native_result = self._import_native_widgets(document)
+            if native_result.report.native_widget_count:
+                return native_result
+
+            heuristic_fields = self.detect_heuristic(document)
+            report = ImportReport(
+                source=DocumentField.DetectionSourceEnum.HEURISTIC,
+                imported_field_count=len(heuristic_fields),
+            )
+            if unplaced_tags:
+                report.warning_codes.append(ImportWarningEnum.ANCHOR_TAG_NOT_PLACED)
+            if not heuristic_fields:
+                report.warning_codes.append(
+                    ImportWarningEnum.SCANNED_DOCUMENT_NO_TEXT_LAYER
+                    if self._looks_scanned(document)
+                    else ImportWarningEnum.NO_FIELDS_DETECTED
+                )
+            return ImportResult(fields=heuristic_fields, report=report)
         finally:
             document.close()
 
-    def _extract_acroform_fields(self, document: fitz.Document) -> list[DetectedField]:
+    @staticmethod
+    def _looks_scanned(document: fitz.Document) -> bool:
+        """A page-sized image with no extractable text is a scan, not a form we can read.
+
+        Heuristic detection needs a text layer or vector rules, so these documents yield
+        nothing and the administrator has to be told why rather than shown an empty result.
+        """
+        has_text = False
+        has_images = False
+        for page in document:
+            if len(page.get_text("text").strip()) >= MIN_TEXT_LAYER_CHARS:
+                has_text = True
+                break
+            if page.get_images(full=True):
+                has_images = True
+        return has_images and not has_text
+
+    def _import_anchor_tags(self, document: fitz.Document) -> tuple[list[DetectedField], int]:
+        """Turn each anchor tag into a field at the tag's own position.
+
+        Anchor tags are explicit author intent, so they take precedence over native widgets and
+        suppress heuristics entirely.
+        """
+        scan = find_anchor_tags(document)
         detected_fields: list[DetectedField] = []
+        for order, match in enumerate(scan.matches, start=1):
+            rect = anchor_field_rect(match)
+            page_height = document[match.page - 1].rect.height
+            detected_fields.append(
+                DetectedField(
+                    field_type=match.field_type,
+                    label=self._normalize_label(match.label),
+                    page=match.page,
+                    x=rect.x0,
+                    y=page_height - rect.y1,
+                    width=rect.width,
+                    height=rect.height,
+                    is_required=match.is_required,
+                    detection_source=DocumentField.DetectionSourceEnum.ANCHOR,
+                    order=order,
+                )
+            )
+        return detected_fields, scan.unplaced_tag_count
+
+    def _import_native_widgets(self, document: fitz.Document) -> ImportResult:
+        """Import only widgets SignaCore can represent faithfully, reporting everything skipped.
+
+        A PDF that has native widgets never falls back to heuristics, even when every widget is
+        skipped, so unsupported controls are not recreated from their visual outlines.
+        """
+        detected_fields: list[DetectedField] = []
+        report = ImportReport(source=DocumentField.DetectionSourceEnum.ACROFORM)
         order = 1
+
         for page_index, page in enumerate(document, start=1):
             widgets = list(page.widgets() or [])
+            if not widgets:
+                continue
+            text_lines = collect_text_lines(page)
+            page_height = page.rect.height
+            page_field_index = 1
+            label_counts: dict[str, int] = {}
+            row_labels: list[tuple[float, str]] = []
+
             for widget in widgets:
+                report.native_widget_count += 1
+                label, is_confident = resolve_label(widget, text_lines, page_index, page_field_index)
+                field_type, warning_code = classify_widget(document, widget, label)
+                if field_type is None:
+                    report.ignored_widget_count += 1
+                    report.warning_codes.append(warning_code)
+                    continue
+
+                row_centre = (widget.rect.y0 + widget.rect.y1) / 2
+                if not is_confident:
+                    inherited = self._label_from_same_row(row_centre, row_labels)
+                    if inherited:
+                        label = inherited
+                        is_confident = True
+                if is_confident:
+                    row_labels.append((row_centre, label))
+
+                label_counts[label] = label_counts.get(label, 0) + 1
+                if label_counts[label] > 1:
+                    label = f"{label} ({label_counts[label]})"
+
+                max_length = widget_max_length(document, widget)
                 rect = widget.rect
                 detected_fields.append(
                     DetectedField(
-                        field_type=self._map_widget_type(widget),
-                        label=self._normalize_label(widget.field_label or widget.field_name or f"Field {order}"),
+                        max_length=max_length,
+                        is_comb=is_comb_widget(document, widget, max_length),
+                        field_type=field_type,
+                        label=self._normalize_label(label),
                         page=page_index,
                         x=rect.x0,
-                        y=rect.y0,
+                        y=page_height - rect.y1,
                         width=rect.width,
                         height=rect.height,
-                        is_required=self._is_widget_required(widget),
+                        is_required=is_widget_required(widget),
                         detection_source=DocumentField.DetectionSourceEnum.ACROFORM,
                         order=order,
                     )
                 )
                 order += 1
-        return detected_fields
+                page_field_index += 1
+
+        report.imported_field_count = len(detected_fields)
+        if report.native_widget_count:
+            if not detected_fields:
+                report.warning_codes.append(ImportWarningEnum.NO_SUPPORTED_FIELDS_IMPORTED)
+            if not any(field.field_type == DocumentField.FieldTypeEnum.SIGNATURE for field in detected_fields):
+                report.warning_codes.append(ImportWarningEnum.SIGNATURE_FIELD_NOT_DETECTED)
+        return ImportResult(fields=detected_fields, report=report)
+
+    @staticmethod
+    def _label_from_same_row(row_centre: float, row_labels: list[tuple[float, str]]) -> str:
+        """Reuse a neighbour's caption for a widget that has none of its own.
+
+        Split fields - a comb SSN broken into area, group and serial boxes - share one printed
+        caption, so the boxes after the first would otherwise fall back to a positional name.
+        """
+        for centre, label in reversed(row_labels):
+            if abs(centre - row_centre) <= 6.0:
+                return label
+        return ""
 
     def detect_heuristic(self, document: fitz.Document) -> list[DetectedField]:
         detected_fields: list[DetectedField] = []
@@ -132,6 +286,9 @@ class PDFEngine:
     def flatten(self, source_pdf: str | Path, output_pdf: str | Path, submissions: list[dict[str, Any]]) -> None:
         document = fitz.open(source_pdf)
         try:
+            # Tags are removed before values are drawn, because redaction clears whatever
+            # already occupies the area it is clearing.
+            conceal_anchor_tags(document)
             for submission in submissions:
                 page = document[submission["page"] - 1]
                 page_height = page.rect.height
@@ -142,47 +299,104 @@ class PDFEngine:
                     page_height - submission["y"],
                 )
                 if submission["value_type"] == "TEXT":
-                    font_size = self._field_text_font_size(rect)
-                    page.insert_textbox(rect, submission["text_value"], fontsize=font_size)
+                    if submission.get("field_type") == DocumentField.FieldTypeEnum.MULTILINE:
+                        self._draw_wrapped_text(page, rect, submission["text_value"])
+                    elif submission.get("is_comb") and submission.get("max_length"):
+                        self._draw_comb_text(page, rect, submission["text_value"], int(submission["max_length"]))
+                    else:
+                        self._draw_single_line_text(page, rect, submission["text_value"])
                 elif submission["value_type"] == "CHECKBOX":
                     if str(submission["text_value"]).lower() in {"true", "1", "yes", "on"}:
-                        page.insert_textbox(
-                            rect,
-                            "X",
-                            fontsize=max(12, min(rect.width, rect.height) * 0.95),
-                            align=1,
-                        )
+                        self._draw_check_mark(page, rect)
                 else:
                     page.insert_image(rect, filename=submission["image_path"])
 
-            for page in document:
-                widgets = list(page.widgets() or [])
-                for widget in widgets:
-                    page.delete_widget(widget)
-
-            document.save(output_pdf)
+            sanitize_document(document)
+            document.save(output_pdf, garbage=4, clean=True, deflate=True)
         finally:
             document.close()
+        assert_sanitized(output_pdf)
 
     @staticmethod
     def _field_text_font_size(rect: fitz.Rect) -> float:
         return max(7.0, min(12.0, rect.height * 0.72, rect.width * 0.16))
 
-    def _map_widget_type(self, widget: fitz.Widget) -> str:
-        field_type = str(getattr(widget, "field_type_string", "") or "").lower()
-        field_name = str(getattr(widget, "field_name", "") or "").lower()
-        candidate = f"{field_type} {field_name}"
-        if "check" in candidate:
-            return DocumentField.FieldTypeEnum.CHECKBOX
-        if "sig" in candidate:
-            return DocumentField.FieldTypeEnum.SIGNATURE
-        if "initial" in candidate:
-            return DocumentField.FieldTypeEnum.INITIALS
-        return DocumentField.FieldTypeEnum.TEXT
+    @staticmethod
+    def _multiline_text_font_size(rect: fitz.Rect) -> float:
+        """Multiline boxes wrap, so size by line height rather than by the whole rectangle."""
+        return max(7.0, min(11.0, rect.width * 0.16))
 
-    def _is_widget_required(self, widget: fitz.Widget) -> bool:
-        flags = int(getattr(widget, "field_flags", 0) or 0)
-        return bool(flags & (1 << 1))
+    def _draw_single_line_text(self, page: fitz.Page, rect: fitz.Rect, value: str) -> None:
+        """Draw one line on its baseline.
+
+        ``insert_textbox`` silently discards text whose line box does not fit, which blanks
+        every realistically sized form field, so single-line values are placed directly.
+        """
+        text = str(value or "").strip()
+        if not text:
+            return
+        font_size = self._fitted_font_size(text, rect)
+        baseline = rect.y0 + (rect.height + font_size * self.text_cap_height_ratio) / 2
+        page.insert_text(
+            fitz.Point(rect.x0 + self.text_left_padding, baseline),
+            text,
+            fontname=self.flatten_fontname,
+            fontsize=font_size,
+        )
+
+    def _draw_comb_text(self, page: fitz.Page, rect: fitz.Rect, value: str, max_length: int) -> None:
+        """Place one character per comb cell so digits line up with the printed dividers."""
+        text = str(value or "").strip()
+        if not text or max_length < 1:
+            return
+        cell_width = rect.width / max_length
+        font_size = min(self.max_flatten_font_size, rect.height * 0.62, cell_width * 1.35)
+        font_size = max(self.min_flatten_font_size, font_size)
+        baseline = rect.y0 + (rect.height + font_size * self.text_cap_height_ratio) / 2
+
+        for index, character in enumerate(text[:max_length]):
+            glyph_width = fitz.get_text_length(character, fontname=self.flatten_fontname, fontsize=font_size)
+            centre = rect.x0 + (cell_width * index) + (cell_width / 2)
+            page.insert_text(
+                fitz.Point(centre - (glyph_width / 2), baseline),
+                character,
+                fontname=self.flatten_fontname,
+                fontsize=font_size,
+            )
+
+    def _fitted_font_size(self, text: str, rect: fitz.Rect) -> float:
+        usable_width = max(rect.width - (2 * self.text_left_padding), 1.0)
+        font_size = min(self.max_flatten_font_size, rect.height * 0.82)
+        while font_size > self.min_flatten_font_size:
+            width = fitz.get_text_length(text, fontname=self.flatten_fontname, fontsize=font_size)
+            if width <= usable_width:
+                return font_size
+            font_size -= 0.25
+        return self.min_flatten_font_size
+
+    def _draw_wrapped_text(self, page: fitz.Page, rect: fitz.Rect, value: str) -> None:
+        """Wrap into the box, shrinking until the whole value fits rather than dropping it."""
+        text = str(value or "").strip()
+        if not text:
+            return
+        font_size = self._multiline_text_font_size(rect)
+        while font_size > self.min_flatten_font_size:
+            if page.insert_textbox(rect, text, fontname=self.flatten_fontname, fontsize=font_size) >= 0:
+                return
+            font_size -= 0.5
+        page.insert_textbox(rect, text, fontname=self.flatten_fontname, fontsize=self.min_flatten_font_size)
+
+    @staticmethod
+    def _draw_check_mark(page: fitz.Page, rect: fitz.Rect) -> None:
+        """Draw a vector tick, which scales to any box instead of needing a font to fit."""
+        inset = min(rect.width, rect.height) * 0.2
+        box = fitz.Rect(rect.x0 + inset, rect.y0 + inset, rect.x1 - inset, rect.y1 - inset)
+        elbow = fitz.Point(box.x0 + box.width * 0.38, box.y1)
+        shape = page.new_shape()
+        shape.draw_line(fitz.Point(box.x0, box.y0 + box.height * 0.5), elbow)
+        shape.draw_line(elbow, fitz.Point(box.x1, box.y0))
+        shape.finish(color=(0, 0, 0), width=max(0.6, min(rect.width, rect.height) * 0.14))
+        shape.commit()
 
     def _heuristic_type_for_text(self, text: str) -> str | None:
         normalized = str(text or "").lower()

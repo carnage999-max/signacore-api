@@ -32,6 +32,7 @@ class Document(models.Model):
         blank=True,
     )
     status = models.CharField(max_length=32, choices=StatusEnum.choices, default=StatusEnum.DRAFT)
+    import_report = models.JSONField(default=dict, blank=True)
     created_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         on_delete=models.PROTECT,
@@ -59,10 +60,12 @@ class DocumentField(models.Model):
         SIGNATURE = "SIGNATURE", "Signature"
         INITIALS = "INITIALS", "Initials"
         TEXT = "TEXT", "Text"
+        MULTILINE = "MULTILINE", "Multiline text"
         CHECKBOX = "CHECKBOX", "Checkbox"
 
     class DetectionSourceEnum(models.TextChoices):
         ACROFORM = "ACROFORM", "AcroForm"
+        ANCHOR = "ANCHOR", "Anchor tag"
         HEURISTIC = "HEURISTIC", "Heuristic"
         MANUAL = "MANUAL", "Manual"
         AUTHORED = "AUTHORED", "Authored document"
@@ -79,6 +82,8 @@ class DocumentField(models.Model):
     is_required = models.BooleanField(default=True)
     detection_source = models.CharField(max_length=32, choices=DetectionSourceEnum.choices)
     order = models.PositiveIntegerField()
+    max_length = models.PositiveIntegerField(null=True, blank=True)
+    is_comb = models.BooleanField(default=False)
 
     class Meta:
         ordering = ("page", "order")

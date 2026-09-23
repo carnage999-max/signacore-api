@@ -12,7 +12,12 @@
     typedSignature: "",
     resendTimerId: 0,
     submitted: false,
+    currentPage: 1,
   };
+
+  const pageCardNodes = new Map();
+  const fieldInputNodes = new Map();
+  const THUMBNAIL_WIDTH = 150;
 
   const nodes = {
     notice: document.getElementById("notice"),
@@ -30,6 +35,15 @@
     fieldList: document.getElementById("field-list"),
     submitButton: document.getElementById("submit-button"),
     pagesRoot: document.getElementById("pages-root"),
+    highlightFieldsToggle: document.getElementById("highlight-fields-toggle"),
+    documentMeta: document.getElementById("document-meta"),
+    pageThumbs: document.getElementById("page-thumbs"),
+    pageCounter: document.getElementById("page-counter"),
+    pageFirst: document.getElementById("page-first"),
+    pagePrev: document.getElementById("page-prev"),
+    pageNext: document.getElementById("page-next"),
+    pageLast: document.getElementById("page-last"),
+    nextRequiredButton: document.getElementById("next-required-button"),
     documentPanel: document.getElementById("document-panel"),
     signatureModal: document.getElementById("signature-modal"),
     closeModalButton: document.getElementById("close-modal-button"),
@@ -119,7 +133,9 @@
   function fieldIsComplete(field) {
     const value = getFieldValue(field.id);
     if (!value) return false;
-    if (field.field_type === "TEXT") return Boolean(value.textValue && value.textValue.trim());
+    if (field.field_type === "TEXT" || field.field_type === "MULTILINE") {
+      return Boolean(value.textValue && value.textValue.trim());
+    }
     if (field.field_type === "CHECKBOX") {
       if (field.is_required) return Boolean(value.checked);
       return typeof value.checked === "boolean";
@@ -155,6 +171,14 @@
       item.append(label, fieldStatus);
       nodes.fieldList.appendChild(item);
     });
+    updateDocumentMeta();
+  }
+
+  function markFieldFilled(node, isFilled) {
+    const overlay = node.closest(".field-overlay");
+    if (overlay) {
+      overlay.classList.toggle("field-filled", Boolean(isFilled));
+    }
   }
 
   function buildTextField(field) {
@@ -163,34 +187,70 @@
     input.className = "text-field-input";
     input.placeholder = field.label;
     input.value = getFieldValue(field.id)?.textValue || "";
+    if (field.max_length) {
+      input.maxLength = field.max_length;
+    }
+    if (field.is_comb && field.max_length) {
+      // One character per printed cell: centre each glyph on the cell pitch.
+      input.classList.add("comb-field-input");
+      input.style.setProperty("--comb-cells", String(field.max_length));
+    }
     input.addEventListener("input", () => {
       state.values[field.id] = {
         type: "TEXT",
         textValue: input.value,
       };
       delete state.fieldErrors[field.id];
+      markFieldFilled(input, input.value.trim());
       renderFieldList();
       updateSubmitState();
     });
     return input;
   }
 
-  function buildCheckboxField(field) {
-    const input = document.createElement("input");
-    input.type = "checkbox";
-    input.checked = Boolean(getFieldValue(field.id)?.checked);
-    input.className = "checkbox-input";
-    input.setAttribute("aria-label", field.label);
-    input.addEventListener("change", () => {
+  function buildMultilineField(field) {
+    const textarea = document.createElement("textarea");
+    textarea.className = "text-field-input multiline-field-input";
+    textarea.placeholder = field.label;
+    textarea.value = getFieldValue(field.id)?.textValue || "";
+    textarea.addEventListener("input", () => {
       state.values[field.id] = {
-        type: "CHECKBOX",
-        checked: input.checked,
+        type: "TEXT",
+        textValue: textarea.value,
       };
       delete state.fieldErrors[field.id];
+      markFieldFilled(textarea, textarea.value.trim());
       renderFieldList();
       updateSubmitState();
     });
-    return input;
+    return textarea;
+  }
+
+  function buildCheckboxField(field) {
+    const checked = Boolean(getFieldValue(field.id)?.checked);
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "checkbox-input";
+    button.setAttribute("role", "checkbox");
+    button.setAttribute("aria-checked", checked ? "true" : "false");
+    button.setAttribute("aria-label", field.label);
+    button.innerHTML =
+      '<svg viewBox="0 0 16 16" aria-hidden="true" focusable="false">' +
+      '<path d="M2.5 8.5 L6.2 12.2 L13.5 3.8" />' +
+      "</svg>";
+    button.addEventListener("click", () => {
+      const next = button.getAttribute("aria-checked") !== "true";
+      button.setAttribute("aria-checked", next ? "true" : "false");
+      state.values[field.id] = {
+        type: "CHECKBOX",
+        checked: next,
+      };
+      delete state.fieldErrors[field.id];
+      markFieldFilled(button, next);
+      renderFieldList();
+      updateSubmitState();
+    });
+    return button;
   }
 
   function getReusableSignatureTargets(activeField) {
@@ -260,6 +320,8 @@
   function renderPages() {
     if (!state.context) return;
     nodes.pagesRoot.innerHTML = "";
+    pageCardNodes.clear();
+    fieldInputNodes.clear();
 
     state.context.pages.forEach((pageData) => {
       const pageCard = document.createElement("article");
@@ -281,22 +343,17 @@
           const left = (field.x / pageData.width) * 100;
           const width = (field.width / pageData.width) * 100;
           const height = (field.height / pageData.height) * 100;
-          const typeClassName =
-            field.field_type === "TEXT"
-              ? "field-overlay-text"
-              : field.field_type === "CHECKBOX"
-                ? "field-overlay-checkbox"
-                : "field-overlay-signature";
-          const minHeightPercent =
-            field.field_type === "TEXT"
-              ? 1.15
-              : field.field_type === "CHECKBOX"
-                ? 1.2
-                : 1.8;
+          const isTextual = field.field_type === "TEXT" || field.field_type === "MULTILINE";
+          const typeClassName = isTextual
+            ? "field-overlay-text"
+            : field.field_type === "CHECKBOX"
+              ? "field-overlay-checkbox"
+              : "field-overlay-signature";
+          const minHeightPercent = isTextual ? 1.15 : field.field_type === "CHECKBOX" ? 1.2 : 1.8;
 
           fieldNode.className = `field-overlay ${typeClassName} ${field.is_required ? "field-overlay-required" : ""} ${
             state.fieldErrors[field.id] ? "field-error" : ""
-          }`;
+          } ${fieldIsComplete(field) ? "field-filled" : ""}`;
           fieldNode.style.top = `${top}%`;
           fieldNode.style.left = `${left}%`;
           fieldNode.style.width = `${width}%`;
@@ -308,19 +365,146 @@
           let fieldContent;
           if (field.field_type === "TEXT") {
             fieldContent = buildTextField(field);
+          } else if (field.field_type === "MULTILINE") {
+            fieldContent = buildMultilineField(field);
           } else if (field.field_type === "CHECKBOX") {
             fieldContent = buildCheckboxField(field);
           } else {
             fieldContent = buildSignatureField(field);
           }
+          fieldInputNodes.set(field.id, fieldContent);
           fieldNode.appendChild(fieldContent);
           overlay.appendChild(fieldNode);
         });
 
       pageCard.appendChild(pageImage);
       pageCard.appendChild(overlay);
+      pageCardNodes.set(pageData.number, pageCard);
       nodes.pagesRoot.appendChild(pageCard);
     });
+    applyFieldHighlighting();
+    renderPageRail();
+    observePageVisibility();
+  }
+
+  function renderPageRail() {
+    if (!nodes.pageThumbs || !state.context) return;
+    nodes.pageThumbs.innerHTML = "";
+
+    state.context.pages.forEach((pageData) => {
+      const thumb = document.createElement("button");
+      thumb.type = "button";
+      thumb.className = "page-thumb";
+      thumb.dataset.page = String(pageData.number);
+      thumb.setAttribute("aria-label", `Go to page ${pageData.number}`);
+
+      const image = document.createElement("img");
+      image.loading = "lazy";
+      image.alt = "";
+      image.src = `${pageData.preview_url}?width=${THUMBNAIL_WIDTH}`;
+
+      const badge = document.createElement("span");
+      badge.className = "page-thumb-number";
+      badge.textContent = String(pageData.number);
+
+      thumb.append(badge, image);
+      thumb.addEventListener("click", () => goToPage(pageData.number));
+      nodes.pageThumbs.appendChild(thumb);
+    });
+
+    setCurrentPage(1, { scrollRail: false });
+  }
+
+  function setCurrentPage(pageNumber, options) {
+    const total = state.context?.pages.length || 0;
+    if (!total) return;
+    const bounded = Math.min(Math.max(pageNumber, 1), total);
+    state.currentPage = bounded;
+
+    if (nodes.pageCounter) {
+      nodes.pageCounter.textContent = `Page ${bounded} of ${total}`;
+    }
+    if (nodes.pageFirst) nodes.pageFirst.disabled = bounded <= 1;
+    if (nodes.pagePrev) nodes.pagePrev.disabled = bounded <= 1;
+    if (nodes.pageNext) nodes.pageNext.disabled = bounded >= total;
+    if (nodes.pageLast) nodes.pageLast.disabled = bounded >= total;
+
+    nodes.pageThumbs?.querySelectorAll(".page-thumb").forEach((thumb) => {
+      const isCurrent = Number(thumb.dataset.page) === bounded;
+      thumb.classList.toggle("page-thumb-current", isCurrent);
+      if (isCurrent && options?.scrollRail !== false) {
+        thumb.scrollIntoView({ block: "nearest" });
+      }
+    });
+  }
+
+  function goToPage(pageNumber) {
+    const card = pageCardNodes.get(pageNumber);
+    if (!card) return;
+    card.scrollIntoView({ behavior: "smooth", block: "start" });
+    setCurrentPage(pageNumber);
+  }
+
+  function observePageVisibility() {
+    if (typeof IntersectionObserver === "undefined") return;
+    if (state.pageObserver) state.pageObserver.disconnect();
+
+    state.pageObserver = new IntersectionObserver(
+      (entries) => {
+        const visible = entries
+          .filter((entry) => entry.isIntersecting)
+          .sort((first, second) => second.intersectionRatio - first.intersectionRatio)[0];
+        if (visible) {
+          setCurrentPage(Number(visible.target.dataset.page));
+        }
+      },
+      { threshold: [0.25, 0.5, 0.75] },
+    );
+    pageCardNodes.forEach((card, pageNumber) => {
+      card.dataset.page = String(pageNumber);
+      state.pageObserver.observe(card);
+    });
+  }
+
+  function focusNextRequiredField() {
+    if (!state.context) return;
+    const outstanding = state.context.fields
+      .filter((field) => field.is_required && !fieldIsComplete(field))
+      .sort((first, second) => first.page - second.page || first.order - second.order);
+    const target = outstanding.find((field) => field.page >= state.currentPage) || outstanding[0];
+    if (!target) return;
+
+    const input = fieldInputNodes.get(target.id);
+    if (!input) {
+      goToPage(target.page);
+      return;
+    }
+    input.scrollIntoView({ behavior: "smooth", block: "center" });
+    setCurrentPage(target.page);
+    window.setTimeout(() => input.focus({ preventScroll: true }), 320);
+  }
+
+  function updateDocumentMeta() {
+    if (!nodes.documentMeta || !state.context) return;
+    const pageCount = state.context.pages.length;
+    const requiredFields = state.context.fields.filter((field) => field.is_required);
+    const outstanding = requiredFields.filter((field) => !fieldIsComplete(field)).length;
+    const pageLabel = `${pageCount} page${pageCount === 1 ? "" : "s"}`;
+    if (!requiredFields.length) {
+      nodes.documentMeta.textContent = `${pageLabel} · no required fields`;
+    } else if (outstanding) {
+      nodes.documentMeta.textContent = `${pageLabel} · ${outstanding} required field${outstanding === 1 ? "" : "s"} left`;
+    } else {
+      nodes.documentMeta.textContent = `${pageLabel} · all required fields complete`;
+    }
+    if (nodes.nextRequiredButton) {
+      nodes.nextRequiredButton.disabled = outstanding === 0;
+    }
+  }
+
+  function applyFieldHighlighting() {
+    const enabled = !nodes.highlightFieldsToggle || nodes.highlightFieldsToggle.checked;
+    nodes.pagesRoot.classList.toggle("pages-root-plain", !enabled);
   }
 
   async function loadContext() {
@@ -616,6 +800,16 @@
       nodes.verifyOtpButton.disabled = false;
     }
   });
+
+  if (nodes.highlightFieldsToggle) {
+    nodes.highlightFieldsToggle.addEventListener("change", applyFieldHighlighting);
+  }
+
+  nodes.pageFirst?.addEventListener("click", () => goToPage(1));
+  nodes.pagePrev?.addEventListener("click", () => goToPage(state.currentPage - 1));
+  nodes.pageNext?.addEventListener("click", () => goToPage(state.currentPage + 1));
+  nodes.pageLast?.addEventListener("click", () => goToPage(state.context?.pages.length || 1));
+  nodes.nextRequiredButton?.addEventListener("click", focusNextRequiredField);
 
   nodes.submitButton.addEventListener("click", () => {
     void submitDocument();
