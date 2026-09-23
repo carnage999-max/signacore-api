@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from contextlib import ExitStack
 from datetime import timedelta
 
@@ -20,6 +21,7 @@ from apps.documents.models import Document, DocumentField
 from apps.documents.serializers import DocumentFieldSerializer
 from services.pdf_anchors import conceal_anchor_tags_on_page
 from services.pdf_engine import PDFEngine
+from services.pdf_sanitizer import PDFSanitizationError
 from tasks.notifications import notify_admin_progress, send_completion_emails, send_otp_email
 from utils.file_storage import save_encrypted_field_file, temporary_output_file, temporary_plaintext_file
 from utils.otp import generate_otp, hash_otp, verify_otp
@@ -30,6 +32,8 @@ from utils.throttling import SignacoreRateThrottle
 
 from .models import FieldSubmission, SigningRequest
 from .serializers import FieldSubmissionSerializer, SignerOtpSerializer, SigningRequestSerializer
+
+logger = logging.getLogger(__name__)
 
 SIGNER_SESSION_COOKIE = "signacore_signer_session"
 SIGNER_SESSION_MAX_AGE_SECONDS = 3600
@@ -414,7 +418,27 @@ class SignerSubmitView(APIView):
                             "image_path": image_path,
                         }
                     )
-                PDFEngine().flatten(source_path, output_path, flatten_submissions)
+                try:
+                    PDFEngine().flatten(source_path, output_path, flatten_submissions)
+                except PDFSanitizationError:
+                    # The signature is kept; only the unsafe packaged file is withheld, and the
+                    # document stays un-completed so the sender can act on it.
+                    logger.exception(
+                        "Completed PDF failed sanitization",
+                        extra={"document_id": str(document.id)},
+                    )
+                    document.status = Document.StatusEnum.PARTIALLY_SIGNED
+                    document.save(update_fields=["status", "updated_at"])
+                    return Response(
+                        {
+                            "status": Document.StatusEnum.PARTIALLY_SIGNED,
+                            "message": (
+                                "Your signature was recorded. This document needs attention from "
+                                "the sender before the final copy can be issued."
+                            ),
+                        },
+                        status=status.HTTP_202_ACCEPTED,
+                    )
                 save_encrypted_field_file(
                     document.signed_pdf,
                     output_path,

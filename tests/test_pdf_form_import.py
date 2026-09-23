@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import tempfile
 from datetime import timedelta
+from unittest.mock import patch
 
 import fitz
 from django.conf import settings
@@ -17,7 +18,7 @@ from apps.documents.models import Document, DocumentField
 from apps.signing.models import SigningRequest
 from services.pdf_anchors import conceal_anchor_tags_on_page
 from services.pdf_engine import PDFEngine
-from services.pdf_sanitizer import find_active_content
+from services.pdf_sanitizer import PDFSanitizationError, find_active_content
 from utils.file_storage import temporary_plaintext_file
 from utils.pdf_preview import build_preview_matrix
 
@@ -809,3 +810,173 @@ class PreviewMatrixTests(TestCase):
 
         self.assertAlmostEqual(tiny.a, 60 / 612, places=6)
         self.assertAlmostEqual(huge.a, 1600 / 612, places=6)
+
+
+@override_settings(
+    MEDIA_ROOT=TEST_MEDIA_ROOT,
+    SIGNACORE_SHARED_SECRET="test-signacore-secret",
+    SIGNACORE_SERVICE_USERNAME="signacore-service",
+    SIGNACORE_APP_URL="https://mysignacore.com",
+    EMAIL_BACKEND="django.core.mail.backends.locmem.EmailBackend",
+    CELERY_TASK_ALWAYS_EAGER=True,
+    CELERY_TASK_EAGER_PROPAGATES=True,
+)
+class UndetectableDocumentTests(TestCase):
+    """A document we cannot read must say so rather than presenting an empty result."""
+
+    def setUp(self) -> None:
+        cache.clear()
+        self.client = APIClient()
+        self.user = get_user_model().objects.create_user(
+            username="admin", email="admin@mysignacore.com", password="password123", is_staff=True
+        )
+        self.organization = Organization.objects.create(name="Scan Company", created_by=self.user)
+        OrganizationMembership.objects.create(
+            organization=self.organization, user=self.user, role=OrganizationMembership.RoleEnum.ADMIN
+        )
+        self.client.credentials(
+            HTTP_X_SIGNACORE_SECRET=settings.SIGNACORE_SHARED_SECRET,
+            HTTP_X_SIGNACORE_ADMIN_ID=str(self.user.id),
+            HTTP_X_SIGNACORE_ORGANIZATION_ID=str(self.organization.id),
+        )
+
+    def upload(self, pdf_bytes: bytes) -> dict:
+        response = self.client.post(
+            "/api/admin/documents/",
+            {"title": "Scan", "pdf_file": SimpleUploadedFile("scan.pdf", pdf_bytes, content_type="application/pdf")},
+            format="multipart",
+        )
+        self.assertEqual(response.status_code, 201, response.json())
+        return response.json()
+
+    def test_scanned_upload_is_reported_as_having_no_text_layer(self) -> None:
+        payload = self.upload(builders.build_scanned_page_pdf())
+
+        self.assertEqual(payload["fields"], [])
+        self.assertIn("SCANNED_DOCUMENT_NO_TEXT_LAYER", payload["detection_summary"]["warning_codes"])
+
+    def test_scanned_upload_is_still_usable_as_a_document(self) -> None:
+        payload = self.upload(builders.build_scanned_page_pdf())
+
+        detail = self.client.get(f"/api/admin/documents/{payload['id']}/")
+        self.assertEqual(detail.status_code, 200)
+        self.assertEqual(detail.json()["page_count"], 1)
+        self.assertIn(
+            "SCANNED_DOCUMENT_NO_TEXT_LAYER",
+            detail.json()["detection_summary"]["warning_codes"],
+        )
+
+        created = self.client.post(
+            f"/api/admin/documents/{payload['id']}/fields/",
+            {
+                "field_type": "SIGNATURE",
+                "label": "Signature",
+                "page": 1,
+                "x": 72,
+                "y": 200,
+                "width": 180,
+                "height": 36,
+                "is_required": True,
+                "order": 1,
+            },
+            format="json",
+        )
+        self.assertEqual(created.status_code, 201, created.json())
+
+    def test_digital_document_with_nothing_to_detect_is_reported_separately(self) -> None:
+        payload = self.upload(builders.build_blank_digital_pdf())
+
+        warnings = payload["detection_summary"]["warning_codes"]
+        self.assertIn("NO_FIELDS_DETECTED", warnings)
+        self.assertNotIn("SCANNED_DOCUMENT_NO_TEXT_LAYER", warnings)
+
+    def test_a_readable_flat_pdf_is_not_reported_as_undetectable(self) -> None:
+        payload = self.upload(builders.build_flat_pdf())
+
+        warnings = payload["detection_summary"]["warning_codes"]
+        self.assertNotIn("NO_FIELDS_DETECTED", warnings)
+        self.assertNotIn("SCANNED_DOCUMENT_NO_TEXT_LAYER", warnings)
+        self.assertGreaterEqual(len(payload["fields"]), 2)
+
+
+@override_settings(
+    MEDIA_ROOT=TEST_MEDIA_ROOT,
+    EMAIL_BACKEND="django.core.mail.backends.locmem.EmailBackend",
+    CELERY_TASK_ALWAYS_EAGER=True,
+    CELERY_TASK_EAGER_PROPAGATES=True,
+)
+class SanitizationFailureTests(TestCase):
+    """If the packaged file cannot be proven clean, withhold the file, not the signature."""
+
+    def setUp(self) -> None:
+        cache.clear()
+        self.client = APIClient()
+        self.user = get_user_model().objects.create_user(username="admin", password="password123")
+        self.organization = Organization.objects.create(name="Failure Company", created_by=self.user)
+        self.document = Document.objects.create(
+            title="Unsanitisable",
+            original_pdf=SimpleUploadedFile(
+                "active.pdf", builders.build_active_content_pdf(), content_type="application/pdf"
+            ),
+            created_by=self.user,
+            organization=self.organization,
+            status=Document.StatusEnum.SENT,
+        )
+        self.field = DocumentField.objects.create(
+            document=self.document,
+            field_type=DocumentField.FieldTypeEnum.TEXT,
+            label="Signer name",
+            page=1,
+            x=72,
+            y=620,
+            width=180,
+            height=24,
+            is_required=True,
+            detection_source=DocumentField.DetectionSourceEnum.MANUAL,
+            order=1,
+        )
+        self.signing_request = SigningRequest.objects.create(
+            document=self.document,
+            signer_email="jane@example.com",
+            signer_name="Jane Doe",
+            expires_at=timezone.now() + timedelta(days=7),
+        )
+
+    def submit(self) -> "object":
+        with self.settings(SIGNACORE_TEST_OTP_CODE="123456"):
+            self.client.post(f"/api/sign/{self.signing_request.id}/otp/send/")
+            verify_response = self.client.post(
+                f"/api/sign/{self.signing_request.id}/otp/verify/",
+                {"otp": "123456"},
+                format="json",
+            )
+        session_token = verify_response.json()["session_token"]
+        with self.captureOnCommitCallbacks(execute=True):
+            return self.client.post(
+                f"/api/sign/{self.signing_request.id}/submit/",
+                {
+                    "session_token": session_token,
+                    f"field_{self.field.id}_type": "TEXT",
+                    f"field_{self.field.id}_value": "Jane Doe",
+                },
+                format="multipart",
+            )
+
+    @patch("apps.signing.views.PDFEngine.flatten", side_effect=PDFSanitizationError("still contains /JS"))
+    def test_signature_is_kept_and_no_unsafe_file_is_issued(self, _flatten) -> None:
+        response = self.submit()
+
+        self.assertEqual(response.status_code, 202, response.json())
+        self.document.refresh_from_db()
+        self.signing_request.refresh_from_db()
+
+        self.assertNotEqual(self.document.status, Document.StatusEnum.COMPLETED)
+        self.assertFalse(self.document.signed_pdf)
+        self.assertEqual(self.signing_request.status, SigningRequest.StatusEnum.SIGNED)
+        self.assertTrue(self.signing_request.submissions.exists())
+
+    @patch("apps.signing.views.PDFEngine.flatten", side_effect=PDFSanitizationError("still contains /JS"))
+    def test_signer_is_told_the_sender_must_act(self, _flatten) -> None:
+        response = self.submit()
+
+        self.assertIn("sender", response.json()["message"].lower())

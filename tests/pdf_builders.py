@@ -334,3 +334,20 @@ def build_anchor_tag_over_widgets_pdf() -> bytes:
     page.insert_text((72, 200), "Sign: {{signature:Authorised signatory}}", fontsize=10)
     page.add_widget(_text_widget(name="legacy_widget", rect=fitz.Rect(72, 400, 300, 424)))
     return _to_bytes(document)
+
+
+def build_scanned_page_pdf() -> bytes:
+    """A page whose only content is an image, as a scan or photograph produces."""
+    document, page = _new_document()
+    pixmap = fitz.Pixmap(fitz.csRGB, fitz.IRect(0, 0, 620, 800), False)
+    pixmap.clear_with(235)
+    page.insert_image(page.rect, pixmap=pixmap)
+    return _to_bytes(document)
+
+
+def build_blank_digital_pdf() -> bytes:
+    """A digital page with prose but nothing that reads as a field."""
+    document, page = _new_document()
+    page.insert_text((72, 120), "This memorandum records the parties' shared understanding.", fontsize=11)
+    page.insert_text((72, 150), "It creates no obligations and requires no response.", fontsize=11)
+    return _to_bytes(document)

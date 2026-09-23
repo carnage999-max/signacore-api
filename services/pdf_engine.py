@@ -21,6 +21,8 @@ from services.pdf_form_import import (
 )
 from services.pdf_sanitizer import assert_sanitized, sanitize_document
 
+MIN_TEXT_LAYER_CHARS = 24
+
 
 @dataclass
 class DetectedField:
@@ -60,37 +62,63 @@ class PDFEngine:
     def analyse(self, pdf_path: str | Path) -> ImportResult:
         document = fitz.open(pdf_path)
         try:
-            anchor_fields = self._import_anchor_tags(document)
+            anchor_fields, unplaced_tags = self._import_anchor_tags(document)
             if anchor_fields:
-                return ImportResult(
-                    fields=anchor_fields,
-                    report=ImportReport(
-                        source=DocumentField.DetectionSourceEnum.ANCHOR,
-                        imported_field_count=len(anchor_fields),
-                    ),
+                report = ImportReport(
+                    source=DocumentField.DetectionSourceEnum.ANCHOR,
+                    imported_field_count=len(anchor_fields),
                 )
+                if unplaced_tags:
+                    report.warning_codes.append(ImportWarningEnum.ANCHOR_TAG_NOT_PLACED)
+                return ImportResult(fields=anchor_fields, report=report)
+
             native_result = self._import_native_widgets(document)
             if native_result.report.native_widget_count:
                 return native_result
+
             heuristic_fields = self.detect_heuristic(document)
-            return ImportResult(
-                fields=heuristic_fields,
-                report=ImportReport(
-                    source=DocumentField.DetectionSourceEnum.HEURISTIC,
-                    imported_field_count=len(heuristic_fields),
-                ),
+            report = ImportReport(
+                source=DocumentField.DetectionSourceEnum.HEURISTIC,
+                imported_field_count=len(heuristic_fields),
             )
+            if unplaced_tags:
+                report.warning_codes.append(ImportWarningEnum.ANCHOR_TAG_NOT_PLACED)
+            if not heuristic_fields:
+                report.warning_codes.append(
+                    ImportWarningEnum.SCANNED_DOCUMENT_NO_TEXT_LAYER
+                    if self._looks_scanned(document)
+                    else ImportWarningEnum.NO_FIELDS_DETECTED
+                )
+            return ImportResult(fields=heuristic_fields, report=report)
         finally:
             document.close()
 
-    def _import_anchor_tags(self, document: fitz.Document) -> list[DetectedField]:
+    @staticmethod
+    def _looks_scanned(document: fitz.Document) -> bool:
+        """A page-sized image with no extractable text is a scan, not a form we can read.
+
+        Heuristic detection needs a text layer or vector rules, so these documents yield
+        nothing and the administrator has to be told why rather than shown an empty result.
+        """
+        has_text = False
+        has_images = False
+        for page in document:
+            if len(page.get_text("text").strip()) >= MIN_TEXT_LAYER_CHARS:
+                has_text = True
+                break
+            if page.get_images(full=True):
+                has_images = True
+        return has_images and not has_text
+
+    def _import_anchor_tags(self, document: fitz.Document) -> tuple[list[DetectedField], int]:
         """Turn each anchor tag into a field at the tag's own position.
 
         Anchor tags are explicit author intent, so they take precedence over native widgets and
         suppress heuristics entirely.
         """
+        scan = find_anchor_tags(document)
         detected_fields: list[DetectedField] = []
-        for order, match in enumerate(find_anchor_tags(document), start=1):
+        for order, match in enumerate(scan.matches, start=1):
             rect = anchor_field_rect(match)
             page_height = document[match.page - 1].rect.height
             detected_fields.append(
@@ -107,7 +135,7 @@ class PDFEngine:
                     order=order,
                 )
             )
-        return detected_fields
+        return detected_fields, scan.unplaced_tag_count
 
     def _import_native_widgets(self, document: fitz.Document) -> ImportResult:
         """Import only widgets SignaCore can represent faithfully, reporting everything skipped.

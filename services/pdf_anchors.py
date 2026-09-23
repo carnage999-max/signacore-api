@@ -51,6 +51,12 @@ DEFAULT_LABELS = {
 
 
 @dataclass
+class AnchorScan:
+    matches: list["AnchorMatch"]
+    unplaced_tag_count: int
+
+
+@dataclass
 class AnchorMatch:
     page: int
     field_type: str
@@ -60,9 +66,14 @@ class AnchorMatch:
     tag_text: str
 
 
-def find_anchor_tags(document: fitz.Document) -> list[AnchorMatch]:
-    """Locate every anchor tag in the document, in reading order per page."""
+def find_anchor_tags(document: fitz.Document) -> AnchorScan:
+    """Locate every anchor tag in the document, in reading order per page.
+
+    A tag broken across text spans by kerning or a font change will not be found by the text
+    search, so those are counted rather than dropped silently.
+    """
     matches: list[AnchorMatch] = []
+    unplaced = 0
 
     for page_index, page in enumerate(document, start=1):
         page_text = page.get_text("text")
@@ -77,7 +88,12 @@ def find_anchor_tags(document: fitz.Document) -> list[AnchorMatch]:
             is_required = match.group(3) is None
             field_type = TAG_FIELD_TYPES[keyword]
 
-            for rect in page.search_for(tag_text):
+            located = page.search_for(tag_text)
+            if not located:
+                unplaced += 1
+                continue
+
+            for rect in located:
                 key = (round(rect.x0), round(rect.y0))
                 if key in seen_rects:
                     continue
@@ -94,7 +110,7 @@ def find_anchor_tags(document: fitz.Document) -> list[AnchorMatch]:
                 )
 
     matches.sort(key=lambda item: (item.page, round(item.rect.y0, 1), round(item.rect.x0, 1)))
-    return matches
+    return AnchorScan(matches=matches, unplaced_tag_count=unplaced)
 
 
 def anchor_field_rect(match: AnchorMatch) -> fitz.Rect:
