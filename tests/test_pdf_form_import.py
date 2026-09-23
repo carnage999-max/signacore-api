@@ -15,6 +15,7 @@ from rest_framework.test import APIClient
 from apps.accounts.models import Organization, OrganizationMembership
 from apps.documents.models import Document, DocumentField
 from apps.signing.models import SigningRequest
+from services.pdf_engine import PDFEngine
 from services.pdf_sanitizer import find_active_content
 from utils.file_storage import temporary_plaintext_file
 
@@ -329,3 +330,98 @@ class CompletedPDFSanitizationTests(TestCase):
             with fitz.open(signed_path) as signed:
                 self.assertFalse(signed.is_form_pdf)
                 self.assertIn("Jane Doe", signed[0].get_text())
+
+
+class FlattenedValueRenderingTests(TestCase):
+    """Realistic form fields are short; values must survive flattening at those sizes."""
+
+    def flatten_one(self, rect: fitz.Rect, *, field_type: str, value: str) -> str:
+        document = fitz.open()
+        document.new_page(width=612, height=792)
+        with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as source_file:
+            source_file.write(document.tobytes())
+            source_path = source_file.name
+        document.close()
+
+        output_path = source_path.replace(".pdf", "-flat.pdf")
+        page_height = 792.0
+        PDFEngine().flatten(
+            source_path,
+            output_path,
+            [
+                {
+                    "page": 1,
+                    "field_type": field_type,
+                    "x": rect.x0,
+                    "y": page_height - rect.y1,
+                    "width": rect.width,
+                    "height": rect.height,
+                    "value_type": "CHECKBOX" if field_type == "CHECKBOX" else "TEXT",
+                    "text_value": value,
+                    "image_path": "",
+                }
+            ],
+        )
+        with fitz.open(output_path) as flattened:
+            return flattened[0].get_text()
+
+    def test_value_renders_in_a_w9_sized_text_field(self) -> None:
+        text = self.flatten_one(fitz.Rect(58.6, 118.0, 576.0, 132.0), field_type="TEXT", value="ACME Holdings LLC")
+
+        self.assertIn("ACME Holdings LLC", text)
+
+    def test_value_renders_in_a_narrow_short_text_field(self) -> None:
+        text = self.flatten_one(fitz.Rect(543.6, 192.0, 576.0, 204.0), field_type="TEXT", value="C")
+
+        self.assertIn("C", text)
+
+    def test_long_value_shrinks_instead_of_being_dropped(self) -> None:
+        text = self.flatten_one(
+            fitz.Rect(417.6, 372.0, 460.8, 396.0),
+            field_type="TEXT",
+            value="Constantinople Trading",
+        )
+
+        self.assertIn("Constantinople Trading", text)
+
+    def test_multiline_value_wraps_instead_of_being_dropped(self) -> None:
+        text = self.flatten_one(
+            fitz.Rect(389.8, 286.0, 576.0, 324.0),
+            field_type="MULTILINE",
+            value="Requester Co\n1 Market Street\nLagos, Nigeria",
+        )
+
+        self.assertIn("Market Street", text)
+
+    def test_checkbox_draws_a_mark_inside_a_small_box(self) -> None:
+        document = fitz.open()
+        document.new_page(width=612, height=792)
+        with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as source_file:
+            source_file.write(document.tobytes())
+            source_path = source_file.name
+        document.close()
+
+        output_path = source_path.replace(".pdf", "-check.pdf")
+        rect = fitz.Rect(73.0, 180.2, 81.0, 188.2)
+        PDFEngine().flatten(
+            source_path,
+            output_path,
+            [
+                {
+                    "page": 1,
+                    "field_type": "CHECKBOX",
+                    "x": rect.x0,
+                    "y": 792.0 - rect.y1,
+                    "width": rect.width,
+                    "height": rect.height,
+                    "value_type": "CHECKBOX",
+                    "text_value": "true",
+                    "image_path": "",
+                }
+            ],
+        )
+
+        with fitz.open(output_path) as flattened:
+            drawings = flattened[0].get_drawings()
+        marks = [drawing for drawing in drawings if drawing["rect"].intersects(rect)]
+        self.assertTrue(marks, "expected a vector check mark inside the checkbox rectangle")

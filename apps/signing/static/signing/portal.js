@@ -30,6 +30,7 @@
     fieldList: document.getElementById("field-list"),
     submitButton: document.getElementById("submit-button"),
     pagesRoot: document.getElementById("pages-root"),
+    highlightFieldsToggle: document.getElementById("highlight-fields-toggle"),
     documentPanel: document.getElementById("document-panel"),
     signatureModal: document.getElementById("signature-modal"),
     closeModalButton: document.getElementById("close-modal-button"),
@@ -159,6 +160,13 @@
     });
   }
 
+  function markFieldFilled(node, isFilled) {
+    const overlay = node.closest(".field-overlay");
+    if (overlay) {
+      overlay.classList.toggle("field-filled", Boolean(isFilled));
+    }
+  }
+
   function buildTextField(field) {
     const input = document.createElement("input");
     input.type = "text";
@@ -171,6 +179,7 @@
         textValue: input.value,
       };
       delete state.fieldErrors[field.id];
+      markFieldFilled(input, input.value.trim());
       renderFieldList();
       updateSubmitState();
     });
@@ -188,6 +197,7 @@
         textValue: textarea.value,
       };
       delete state.fieldErrors[field.id];
+      markFieldFilled(textarea, textarea.value.trim());
       renderFieldList();
       updateSubmitState();
     });
@@ -195,21 +205,30 @@
   }
 
   function buildCheckboxField(field) {
-    const input = document.createElement("input");
-    input.type = "checkbox";
-    input.checked = Boolean(getFieldValue(field.id)?.checked);
-    input.className = "checkbox-input";
-    input.setAttribute("aria-label", field.label);
-    input.addEventListener("change", () => {
+    const checked = Boolean(getFieldValue(field.id)?.checked);
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "checkbox-input";
+    button.setAttribute("role", "checkbox");
+    button.setAttribute("aria-checked", checked ? "true" : "false");
+    button.setAttribute("aria-label", field.label);
+    button.innerHTML =
+      '<svg viewBox="0 0 16 16" aria-hidden="true" focusable="false">' +
+      '<path d="M2.5 8.5 L6.2 12.2 L13.5 3.8" />' +
+      "</svg>";
+    button.addEventListener("click", () => {
+      const next = button.getAttribute("aria-checked") !== "true";
+      button.setAttribute("aria-checked", next ? "true" : "false");
       state.values[field.id] = {
         type: "CHECKBOX",
-        checked: input.checked,
+        checked: next,
       };
       delete state.fieldErrors[field.id];
+      markFieldFilled(button, next);
       renderFieldList();
       updateSubmitState();
     });
-    return input;
+    return button;
   }
 
   function getReusableSignatureTargets(activeField) {
@@ -310,7 +329,7 @@
 
           fieldNode.className = `field-overlay ${typeClassName} ${field.is_required ? "field-overlay-required" : ""} ${
             state.fieldErrors[field.id] ? "field-error" : ""
-          }`;
+          } ${fieldIsComplete(field) ? "field-filled" : ""}`;
           fieldNode.style.top = `${top}%`;
           fieldNode.style.left = `${left}%`;
           fieldNode.style.width = `${width}%`;
@@ -337,6 +356,12 @@
       pageCard.appendChild(overlay);
       nodes.pagesRoot.appendChild(pageCard);
     });
+    applyFieldHighlighting();
+  }
+
+  function applyFieldHighlighting() {
+    const enabled = !nodes.highlightFieldsToggle || nodes.highlightFieldsToggle.checked;
+    nodes.pagesRoot.classList.toggle("pages-root-plain", !enabled);
   }
 
   async function loadContext() {
@@ -632,6 +657,10 @@
       nodes.verifyOtpButton.disabled = false;
     }
   });
+
+  if (nodes.highlightFieldsToggle) {
+    nodes.highlightFieldsToggle.addEventListener("change", applyFieldHighlighting);
+  }
 
   nodes.submitButton.addEventListener("click", () => {
     void submitDocument();

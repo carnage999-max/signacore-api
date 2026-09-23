@@ -46,6 +46,11 @@ class PDFEngine:
     max_label_length = 255
     checkbox_chars = ("☐", "□")
     underscore_pattern = re.compile(r"_{3,}")
+    flatten_fontname = "helv"
+    max_flatten_font_size = 12.0
+    min_flatten_font_size = 4.5
+    text_left_padding = 1.5
+    text_cap_height_ratio = 0.72
 
     def analyse(self, pdf_path: str | Path) -> ImportResult:
         document = fitz.open(pdf_path)
@@ -199,18 +204,12 @@ class PDFEngine:
                 )
                 if submission["value_type"] == "TEXT":
                     if submission.get("field_type") == DocumentField.FieldTypeEnum.MULTILINE:
-                        font_size = self._multiline_text_font_size(rect)
+                        self._draw_wrapped_text(page, rect, submission["text_value"])
                     else:
-                        font_size = self._field_text_font_size(rect)
-                    page.insert_textbox(rect, submission["text_value"], fontsize=font_size)
+                        self._draw_single_line_text(page, rect, submission["text_value"])
                 elif submission["value_type"] == "CHECKBOX":
                     if str(submission["text_value"]).lower() in {"true", "1", "yes", "on"}:
-                        page.insert_textbox(
-                            rect,
-                            "X",
-                            fontsize=max(12, min(rect.width, rect.height) * 0.95),
-                            align=1,
-                        )
+                        self._draw_check_mark(page, rect)
                 else:
                     page.insert_image(rect, filename=submission["image_path"])
 
@@ -228,6 +227,58 @@ class PDFEngine:
     def _multiline_text_font_size(rect: fitz.Rect) -> float:
         """Multiline boxes wrap, so size by line height rather than by the whole rectangle."""
         return max(7.0, min(11.0, rect.width * 0.16))
+
+    def _draw_single_line_text(self, page: fitz.Page, rect: fitz.Rect, value: str) -> None:
+        """Draw one line on its baseline.
+
+        ``insert_textbox`` silently discards text whose line box does not fit, which blanks
+        every realistically sized form field, so single-line values are placed directly.
+        """
+        text = str(value or "").strip()
+        if not text:
+            return
+        font_size = self._fitted_font_size(text, rect)
+        baseline = rect.y0 + (rect.height + font_size * self.text_cap_height_ratio) / 2
+        page.insert_text(
+            fitz.Point(rect.x0 + self.text_left_padding, baseline),
+            text,
+            fontname=self.flatten_fontname,
+            fontsize=font_size,
+        )
+
+    def _fitted_font_size(self, text: str, rect: fitz.Rect) -> float:
+        usable_width = max(rect.width - (2 * self.text_left_padding), 1.0)
+        font_size = min(self.max_flatten_font_size, rect.height * 0.82)
+        while font_size > self.min_flatten_font_size:
+            width = fitz.get_text_length(text, fontname=self.flatten_fontname, fontsize=font_size)
+            if width <= usable_width:
+                return font_size
+            font_size -= 0.25
+        return self.min_flatten_font_size
+
+    def _draw_wrapped_text(self, page: fitz.Page, rect: fitz.Rect, value: str) -> None:
+        """Wrap into the box, shrinking until the whole value fits rather than dropping it."""
+        text = str(value or "").strip()
+        if not text:
+            return
+        font_size = self._multiline_text_font_size(rect)
+        while font_size > self.min_flatten_font_size:
+            if page.insert_textbox(rect, text, fontname=self.flatten_fontname, fontsize=font_size) >= 0:
+                return
+            font_size -= 0.5
+        page.insert_textbox(rect, text, fontname=self.flatten_fontname, fontsize=self.min_flatten_font_size)
+
+    @staticmethod
+    def _draw_check_mark(page: fitz.Page, rect: fitz.Rect) -> None:
+        """Draw a vector tick, which scales to any box instead of needing a font to fit."""
+        inset = min(rect.width, rect.height) * 0.2
+        box = fitz.Rect(rect.x0 + inset, rect.y0 + inset, rect.x1 - inset, rect.y1 - inset)
+        elbow = fitz.Point(box.x0 + box.width * 0.38, box.y1)
+        shape = page.new_shape()
+        shape.draw_line(fitz.Point(box.x0, box.y0 + box.height * 0.5), elbow)
+        shape.draw_line(elbow, fitz.Point(box.x1, box.y0))
+        shape.finish(color=(0, 0, 0), width=max(0.6, min(rect.width, rect.height) * 0.14))
+        shape.commit()
 
     def _heuristic_type_for_text(self, text: str) -> str | None:
         normalized = str(text or "").lower()
