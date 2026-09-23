@@ -173,6 +173,14 @@
     input.className = "text-field-input";
     input.placeholder = field.label;
     input.value = getFieldValue(field.id)?.textValue || "";
+    if (field.max_length) {
+      input.maxLength = field.max_length;
+    }
+    if (field.is_comb && field.max_length) {
+      // One character per printed cell: centre each glyph on the cell pitch.
+      input.classList.add("comb-field-input");
+      input.style.setProperty("--comb-cells", String(field.max_length));
+    }
     input.addEventListener("input", () => {
       state.values[field.id] = {
         type: "TEXT",

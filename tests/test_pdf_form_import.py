@@ -425,3 +425,257 @@ class FlattenedValueRenderingTests(TestCase):
             drawings = flattened[0].get_drawings()
         marks = [drawing for drawing in drawings if drawing["rect"].intersects(rect)]
         self.assertTrue(marks, "expected a vector check mark inside the checkbox rectangle")
+
+
+@override_settings(
+    MEDIA_ROOT=TEST_MEDIA_ROOT,
+    SIGNACORE_SHARED_SECRET="test-signacore-secret",
+    SIGNACORE_SERVICE_USERNAME="signacore-service",
+    SIGNACORE_APP_URL="https://mysignacore.com",
+    EMAIL_BACKEND="django.core.mail.backends.locmem.EmailBackend",
+    CELERY_TASK_ALWAYS_EAGER=True,
+    CELERY_TASK_EAGER_PROPAGATES=True,
+)
+class CombFieldImportTests(TestCase):
+    def setUp(self) -> None:
+        cache.clear()
+        self.client = APIClient()
+        self.user = get_user_model().objects.create_user(
+            username="admin", email="admin@mysignacore.com", password="password123", is_staff=True
+        )
+        self.organization = Organization.objects.create(name="Comb Company", created_by=self.user)
+        OrganizationMembership.objects.create(
+            organization=self.organization, user=self.user, role=OrganizationMembership.RoleEnum.ADMIN
+        )
+        self.client.credentials(
+            HTTP_X_SIGNACORE_SECRET=settings.SIGNACORE_SHARED_SECRET,
+            HTTP_X_SIGNACORE_ADMIN_ID=str(self.user.id),
+            HTTP_X_SIGNACORE_ORGANIZATION_ID=str(self.organization.id),
+        )
+
+    def upload(self, pdf_bytes: bytes) -> dict:
+        response = self.client.post(
+            "/api/admin/documents/",
+            {
+                "title": "Comb form",
+                "pdf_file": SimpleUploadedFile("comb.pdf", pdf_bytes, content_type="application/pdf"),
+            },
+            format="multipart",
+        )
+        self.assertEqual(response.status_code, 201, response.json())
+        return response.json()
+
+    def test_comb_widgets_import_their_cell_count(self) -> None:
+        payload = self.upload(builders.build_comb_field_pdf())
+        fields = payload["fields"]
+
+        self.assertEqual([field["max_length"] for field in fields], [3, 2, 4])
+        self.assertTrue(all(field["is_comb"] for field in fields))
+
+    def test_split_row_reuses_the_printed_caption_instead_of_a_positional_name(self) -> None:
+        payload = self.upload(builders.build_comb_field_pdf())
+
+        labels = [field["label"] for field in payload["fields"]]
+        self.assertEqual(
+            labels,
+            ["Social security number", "Social security number (2)", "Social security number (3)"],
+        )
+        for label in labels:
+            self.assertNotIn("Page 1 field", label)
+
+    def test_max_length_and_comb_flag_are_inherited_from_the_parent_field(self) -> None:
+        payload = self.upload(builders.build_inherited_maxlen_pdf())
+
+        self.assertEqual(payload["fields"][0]["max_length"], 6)
+        self.assertTrue(payload["fields"][0]["is_comb"])
+
+    def test_comb_value_is_drawn_one_character_per_cell(self) -> None:
+        rect = fitz.Rect(417.6, 372.0, 460.8, 396.0)
+        cells = 3
+        document = fitz.open()
+        document.new_page(width=612, height=792)
+        with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as source_file:
+            source_file.write(document.tobytes())
+            source_path = source_file.name
+        document.close()
+
+        output_path = source_path.replace(".pdf", "-comb.pdf")
+        PDFEngine().flatten(
+            source_path,
+            output_path,
+            [
+                {
+                    "page": 1,
+                    "field_type": "TEXT",
+                    "max_length": cells,
+                    "is_comb": True,
+                    "x": rect.x0,
+                    "y": 792.0 - rect.y1,
+                    "width": rect.width,
+                    "height": rect.height,
+                    "value_type": "TEXT",
+                    "text_value": "123",
+                    "image_path": "",
+                }
+            ],
+        )
+
+        with fitz.open(output_path) as flattened:
+            # Separately placed glyphs extract with synthetic spacing between them.
+            characters = [
+                (span_char["c"], (span_char["bbox"][0] + span_char["bbox"][2]) / 2)
+                for block in flattened[0].get_text("rawdict")["blocks"]
+                for line in block.get("lines", [])
+                for span in line.get("spans", [])
+                for span_char in span.get("chars", [])
+                if span_char["c"].strip()
+            ]
+
+        self.assertEqual([character for character, _ in characters], ["1", "2", "3"])
+        cell_width = rect.width / cells
+        for index, (_, centre) in enumerate(characters):
+            cell_start = rect.x0 + (cell_width * index)
+            self.assertGreaterEqual(centre, cell_start)
+            self.assertLessEqual(centre, cell_start + cell_width)
+
+    def test_comb_value_longer_than_the_cell_count_is_truncated(self) -> None:
+        rect = fitz.Rect(417.6, 372.0, 460.8, 396.0)
+        document = fitz.open()
+        document.new_page(width=612, height=792)
+        with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as source_file:
+            source_file.write(document.tobytes())
+            source_path = source_file.name
+        document.close()
+
+        output_path = source_path.replace(".pdf", "-long.pdf")
+        PDFEngine().flatten(
+            source_path,
+            output_path,
+            [
+                {
+                    "page": 1,
+                    "field_type": "TEXT",
+                    "max_length": 3,
+                    "is_comb": True,
+                    "x": rect.x0,
+                    "y": 792.0 - rect.y1,
+                    "width": rect.width,
+                    "height": rect.height,
+                    "value_type": "TEXT",
+                    "text_value": "78888888",
+                    "image_path": "",
+                }
+            ],
+        )
+
+        with fitz.open(output_path) as flattened:
+            text = flattened[0].get_text().strip().replace(" ", "").replace("\n", "")
+
+        self.assertEqual(text, "788")
+
+
+@override_settings(
+    MEDIA_ROOT=TEST_MEDIA_ROOT,
+    SIGNACORE_SHARED_SECRET="test-signacore-secret",
+    SIGNACORE_SERVICE_USERNAME="signacore-service",
+    SIGNACORE_APP_URL="https://mysignacore.com",
+    EMAIL_BACKEND="django.core.mail.backends.locmem.EmailBackend",
+    CELERY_TASK_ALWAYS_EAGER=True,
+    CELERY_TASK_EAGER_PROPAGATES=True,
+)
+class AnchorTagImportTests(TestCase):
+    def setUp(self) -> None:
+        cache.clear()
+        self.client = APIClient()
+        self.user = get_user_model().objects.create_user(
+            username="admin", email="admin@mysignacore.com", password="password123", is_staff=True
+        )
+        self.organization = Organization.objects.create(name="Anchor Company", created_by=self.user)
+        OrganizationMembership.objects.create(
+            organization=self.organization, user=self.user, role=OrganizationMembership.RoleEnum.ADMIN
+        )
+        self.client.credentials(
+            HTTP_X_SIGNACORE_SECRET=settings.SIGNACORE_SHARED_SECRET,
+            HTTP_X_SIGNACORE_ADMIN_ID=str(self.user.id),
+            HTTP_X_SIGNACORE_ORGANIZATION_ID=str(self.organization.id),
+        )
+
+    def upload(self, pdf_bytes: bytes) -> dict:
+        response = self.client.post(
+            "/api/admin/documents/",
+            {
+                "title": "Anchored agreement",
+                "pdf_file": SimpleUploadedFile("anchored.pdf", pdf_bytes, content_type="application/pdf"),
+            },
+            format="multipart",
+        )
+        self.assertEqual(response.status_code, 201, response.json())
+        return response.json()
+
+    def test_anchor_tags_create_typed_and_labelled_fields(self) -> None:
+        payload = self.upload(builders.build_anchor_tag_pdf())
+        fields = payload["fields"]
+
+        self.assertEqual(payload["detection_summary"]["source"], "ANCHOR")
+        self.assertEqual(
+            [(field["field_type"], field["label"]) for field in fields],
+            [
+                ("TEXT", "Employee name"),
+                ("SIGNATURE", "Signature"),
+                ("INITIALS", "Initials"),
+                ("CHECKBOX", "Accept terms"),
+            ],
+        )
+
+    def test_optional_marker_makes_a_tag_field_optional(self) -> None:
+        payload = self.upload(builders.build_anchor_tag_pdf())
+
+        by_label = {field["label"]: field for field in payload["fields"]}
+        self.assertFalse(by_label["Initials"]["is_required"])
+        self.assertTrue(by_label["Employee name"]["is_required"])
+
+    def test_a_checkbox_tag_does_not_inherit_the_tag_text_width(self) -> None:
+        payload = self.upload(builders.build_anchor_tag_pdf())
+
+        checkbox = next(field for field in payload["fields"] if field["field_type"] == "CHECKBOX")
+        self.assertLessEqual(checkbox["width"], 20)
+
+    def test_anchor_tags_take_precedence_over_native_widgets(self) -> None:
+        payload = self.upload(builders.build_anchor_tag_over_widgets_pdf())
+
+        self.assertEqual(payload["detection_summary"]["source"], "ANCHOR")
+        self.assertEqual([field["label"] for field in payload["fields"]], ["Authorised signatory"])
+
+    def test_completed_pdf_does_not_contain_the_anchor_tag_text(self) -> None:
+        source_bytes = builders.build_anchor_tag_pdf()
+        with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as source_file:
+            source_file.write(source_bytes)
+            source_path = source_file.name
+
+        with fitz.open(source_path) as source:
+            self.assertIn("{{signature}}", source[0].get_text())
+
+        output_path = source_path.replace(".pdf", "-signed.pdf")
+        PDFEngine().flatten(
+            source_path,
+            output_path,
+            [
+                {
+                    "page": 1,
+                    "field_type": "TEXT",
+                    "x": 121.5,
+                    "y": 584.8,
+                    "width": 190.0,
+                    "height": 18.0,
+                    "value_type": "TEXT",
+                    "text_value": "Jane Doe",
+                    "image_path": "",
+                }
+            ],
+        )
+
+        with fitz.open(output_path) as flattened:
+            text = flattened[0].get_text()
+        self.assertNotIn("{{", text)
+        self.assertNotIn("signature}}", text)
+        self.assertIn("Jane Doe", text)

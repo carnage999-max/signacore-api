@@ -64,6 +64,8 @@ class DocumentFieldSerializer(serializers.ModelSerializer):
             "is_required",
             "detection_source",
             "order",
+            "max_length",
+            "is_comb",
         )
         read_only_fields = ("id", "detection_source")
 

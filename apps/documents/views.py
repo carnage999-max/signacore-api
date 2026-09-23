@@ -459,6 +459,8 @@ class AdminDocumentsView(APIView):
                         is_required=field.is_required,
                         detection_source=field.detection_source,
                         order=field.order,
+                        max_length=field.max_length,
+                        is_comb=field.is_comb,
                     )
                     for field in detected_fields
                 ]

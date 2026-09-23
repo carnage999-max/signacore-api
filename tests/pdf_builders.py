@@ -16,6 +16,7 @@ FLAG_MULTILINE = 1 << 12
 FLAG_RADIO = 1 << 15
 FLAG_PUSHBUTTON = 1 << 16
 FLAG_COMBO = 1 << 17
+FLAG_COMB = 1 << 24
 
 
 def _new_document() -> tuple[fitz.Document, fitz.Page]:
@@ -278,4 +279,58 @@ def build_active_content_pdf() -> bytes:
     action_xref = document.get_new_xref()
     document.update_object(action_xref, "<</S/JavaScript/JS(app.alert\\('hello'\\);)>>")
     document.xref_set_key(document.pdf_catalog(), "OpenAction", f"{action_xref} 0 R")
+    return _to_bytes(document)
+
+
+def build_comb_field_pdf() -> bytes:
+    """A W-9-style split SSN row: three comb widgets with 3, 2 and 4 character cells."""
+    document, page = _new_document()
+    page.insert_text((417, 366), "Social security number", fontsize=9)
+
+    for name, rect, cells in (
+        ("ssn_area", fitz.Rect(417.6, 372.0, 460.8, 396.0), 3),
+        ("ssn_group", fitz.Rect(475.2, 372.0, 504.0, 396.0), 2),
+        ("ssn_serial", fitz.Rect(518.4, 372.0, 576.0, 396.0), 4),
+    ):
+        page.add_widget(_text_widget(name=name, rect=rect))
+        xref = list(page.widgets())[-1].xref
+        document.xref_set_key(xref, "Ff", str(FLAG_COMB))
+        document.xref_set_key(xref, "MaxLen", str(cells))
+
+    return _to_bytes(document)
+
+
+def build_inherited_maxlen_pdf() -> bytes:
+    """A comb widget whose /MaxLen and /Ff live on its parent field dictionary."""
+    document, page = _new_document()
+    page.add_widget(_text_widget(name="account", rect=fitz.Rect(72, 144, 240, 168)))
+    widget_xref = list(page.widgets())[-1].xref
+
+    parent_xref = document.get_new_xref()
+    document.update_object(parent_xref, f"<</T(account_parent)/FT/Tx/Ff {FLAG_COMB}/MaxLen 6>>")
+    document.xref_set_key(widget_xref, "Parent", f"{parent_xref} 0 R")
+    # A kid widget that declares no flags of its own must inherit them from the parent field.
+    document.xref_set_key(widget_xref, "Ff", "null")
+    return _to_bytes(document)
+
+
+def build_anchor_tag_pdf() -> bytes:
+    """A flat document whose author placed SignaCore anchor tags in the text."""
+    document, page = _new_document()
+    page.insert_text((72, 120), "Consulting Agreement", fontsize=14)
+    page.insert_text((72, 200), "Full name: {{text:Employee name}}", fontsize=10)
+    page.insert_text((72, 240), "Sign here: {{signature}}", fontsize=10)
+    page.insert_text((72, 300), "Initials: {{initials|optional}}", fontsize=10)
+    page.insert_text((72, 360), "Agree: {{checkbox:Accept terms}}", fontsize=10)
+    return _to_bytes(document)
+
+
+def build_anchor_tag_over_widgets_pdf() -> bytes:
+    """Anchor tags in a document that also has a native widget.
+
+    The author's tags are explicit intent and must win over native widget detection.
+    """
+    document, page = _new_document()
+    page.insert_text((72, 200), "Sign: {{signature:Authorised signatory}}", fontsize=10)
+    page.add_widget(_text_widget(name="legacy_widget", rect=fitz.Rect(72, 400, 300, 424)))
     return _to_bytes(document)

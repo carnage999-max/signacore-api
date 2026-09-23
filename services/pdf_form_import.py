@@ -36,6 +36,7 @@ FLAG_RADIO = 1 << 15
 FLAG_PUSHBUTTON = 1 << 16
 FLAG_COMBO = 1 << 17
 FLAG_FILE_SELECT = 1 << 20
+FLAG_COMB = 1 << 24
 FLAG_RICH_TEXT = 1 << 25
 
 # PDF 32000-1 table 165: annotation flags.
@@ -117,6 +118,43 @@ def widget_field_flags(widget: fitz.Widget) -> int:
 
 def is_widget_required(widget: fitz.Widget) -> bool:
     return bool(widget_field_flags(widget) & FLAG_REQUIRED)
+
+
+def widget_max_length(document: fitz.Document, widget: fitz.Widget) -> int | None:
+    """Read ``/MaxLen``, which like ``/Ff`` may be inherited from a parent field dictionary."""
+    own = int(getattr(widget, "text_maxlen", 0) or 0)
+    if own > 0:
+        return own
+    inherited = _inherited_int(document, widget.xref, "MaxLen")
+    return inherited if inherited > 0 else None
+
+
+def _inherited_int(document: fitz.Document, xref: int, key: str) -> int:
+    """Read an integer key from a widget or the first ancestor field that declares it."""
+    for _ in range(PARENT_CHAIN_LIMIT):
+        try:
+            entry = document.xref_get_key(xref, key)
+        except Exception:
+            return 0
+        if entry[0] == "int":
+            try:
+                return int(entry[1])
+            except ValueError:
+                return 0
+        parent = document.xref_get_key(xref, "Parent")
+        if parent[0] != "xref":
+            return 0
+        xref = int(parent[1].split()[0])
+    return 0
+
+
+def is_comb_widget(document: fitz.Document, widget: fitz.Widget, max_length: int | None) -> bool:
+    """A comb field spreads its value one character per cell, so it needs ``/MaxLen``."""
+    if not max_length:
+        return False
+    if widget_field_flags(widget) & FLAG_COMB:
+        return True
+    return bool(_inherited_int(document, widget.xref, "Ff") & FLAG_COMB)
 
 
 def is_widget_hidden(document: fitz.Document, widget: fitz.Widget) -> bool:
@@ -207,23 +245,27 @@ def resolve_label(
     text_lines: list[TextLine],
     page_index: int,
     field_index: int,
-) -> str:
-    """Build a customer-facing label, never exposing an internal AcroForm/XFA field path."""
+) -> tuple[str, bool]:
+    """Build a customer-facing label, never exposing an internal AcroForm/XFA field path.
+
+    Returns the label and whether it came from the document itself, so a caller can fall back
+    to a neighbouring field's caption instead of a positional placeholder.
+    """
     tooltip = _clean(str(getattr(widget, "field_label", "") or ""))
     if tooltip and not _is_internal_path(tooltip):
-        return tooltip[:MAX_LABEL_LENGTH]
+        return tooltip[:MAX_LABEL_LENGTH], True
 
     is_checkbox = int(getattr(widget, "field_type", -1)) == fitz.PDF_WIDGET_TYPE_CHECKBOX
     for candidate in _label_candidates(widget.rect, text_lines, prefer_right=is_checkbox):
         shortened = _shorten(candidate)
         if _is_confident_label(shortened):
-            return shortened
+            return shortened, True
 
     field_name = _clean(str(getattr(widget, "field_name", "") or "").replace("_", " "))
     if field_name and not _is_internal_path(field_name) and len(field_name) <= MAX_DERIVED_LABEL_LENGTH:
-        return field_name[:1].upper() + field_name[1:]
+        return field_name[:1].upper() + field_name[1:], False
 
-    return f"Page {page_index} field {field_index}"
+    return f"Page {page_index} field {field_index}", False
 
 
 def _label_candidates(rect: fitz.Rect, text_lines: list[TextLine], *, prefer_right: bool) -> list[str]:

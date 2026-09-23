@@ -420,6 +420,18 @@ input {
   color: rgba(17, 24, 39, 0.35);
 }
 
+/* Comb fields: one glyph per printed cell.
+   The parent sets container-type: size, so 100cqw is the field width. A monospace face makes
+   1ch the exact glyph advance, so advance + letter-spacing lands each character on the cell
+   pitch, and the indent centres the first one. */
+.comb-field-input {
+  --comb-cell: calc(100cqw / var(--comb-cells, 1));
+  font-family: "Courier New", Courier, monospace;
+  letter-spacing: calc(var(--comb-cell) - 1ch);
+  text-indent: calc((var(--comb-cell) - 1ch) / 2);
+  padding: 0;
+}
+
 .multiline-field-input {
   width: 100%;
   height: 100%;

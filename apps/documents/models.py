@@ -65,6 +65,7 @@ class DocumentField(models.Model):
 
     class DetectionSourceEnum(models.TextChoices):
         ACROFORM = "ACROFORM", "AcroForm"
+        ANCHOR = "ANCHOR", "Anchor tag"
         HEURISTIC = "HEURISTIC", "Heuristic"
         MANUAL = "MANUAL", "Manual"
         AUTHORED = "AUTHORED", "Authored document"
@@ -81,6 +82,8 @@ class DocumentField(models.Model):
     is_required = models.BooleanField(default=True)
     detection_source = models.CharField(max_length=32, choices=DetectionSourceEnum.choices)
     order = models.PositiveIntegerField()
+    max_length = models.PositiveIntegerField(null=True, blank=True)
+    is_comb = models.BooleanField(default=False)
 
     class Meta:
         ordering = ("page", "order")

@@ -399,6 +399,8 @@ class SignerSubmitView(APIView):
                         {
                             "page": submission.document_field.page,
                             "field_type": submission.document_field.field_type,
+                            "max_length": submission.document_field.max_length,
+                            "is_comb": submission.document_field.is_comb,
                             "x": submission.document_field.x,
                             "y": submission.document_field.y,
                             "width": submission.document_field.width,

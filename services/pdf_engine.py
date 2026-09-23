@@ -8,13 +8,16 @@ from typing import Any
 import fitz
 
 from apps.documents.models import DocumentField
+from services.pdf_anchors import anchor_field_rect, conceal_anchor_tags, find_anchor_tags
 from services.pdf_form_import import (
     ImportReport,
     ImportWarningEnum,
     classify_widget,
     collect_text_lines,
+    is_comb_widget,
     is_widget_required,
     resolve_label,
+    widget_max_length,
 )
 from services.pdf_sanitizer import assert_sanitized, sanitize_document
 
@@ -31,6 +34,8 @@ class DetectedField:
     is_required: bool
     detection_source: str
     order: int
+    max_length: int | None = None
+    is_comb: bool = False
 
 
 @dataclass
@@ -55,6 +60,15 @@ class PDFEngine:
     def analyse(self, pdf_path: str | Path) -> ImportResult:
         document = fitz.open(pdf_path)
         try:
+            anchor_fields = self._import_anchor_tags(document)
+            if anchor_fields:
+                return ImportResult(
+                    fields=anchor_fields,
+                    report=ImportReport(
+                        source=DocumentField.DetectionSourceEnum.ANCHOR,
+                        imported_field_count=len(anchor_fields),
+                    ),
+                )
             native_result = self._import_native_widgets(document)
             if native_result.report.native_widget_count:
                 return native_result
@@ -68,6 +82,32 @@ class PDFEngine:
             )
         finally:
             document.close()
+
+    def _import_anchor_tags(self, document: fitz.Document) -> list[DetectedField]:
+        """Turn each anchor tag into a field at the tag's own position.
+
+        Anchor tags are explicit author intent, so they take precedence over native widgets and
+        suppress heuristics entirely.
+        """
+        detected_fields: list[DetectedField] = []
+        for order, match in enumerate(find_anchor_tags(document), start=1):
+            rect = anchor_field_rect(match)
+            page_height = document[match.page - 1].rect.height
+            detected_fields.append(
+                DetectedField(
+                    field_type=match.field_type,
+                    label=self._normalize_label(match.label),
+                    page=match.page,
+                    x=rect.x0,
+                    y=page_height - rect.y1,
+                    width=rect.width,
+                    height=rect.height,
+                    is_required=match.is_required,
+                    detection_source=DocumentField.DetectionSourceEnum.ANCHOR,
+                    order=order,
+                )
+            )
+        return detected_fields
 
     def _import_native_widgets(self, document: fitz.Document) -> ImportResult:
         """Import only widgets SignaCore can represent faithfully, reporting everything skipped.
@@ -87,23 +127,36 @@ class PDFEngine:
             page_height = page.rect.height
             page_field_index = 1
             label_counts: dict[str, int] = {}
+            row_labels: list[tuple[float, str]] = []
 
             for widget in widgets:
                 report.native_widget_count += 1
-                label = resolve_label(widget, text_lines, page_index, page_field_index)
+                label, is_confident = resolve_label(widget, text_lines, page_index, page_field_index)
                 field_type, warning_code = classify_widget(document, widget, label)
                 if field_type is None:
                     report.ignored_widget_count += 1
                     report.warning_codes.append(warning_code)
                     continue
 
+                row_centre = (widget.rect.y0 + widget.rect.y1) / 2
+                if not is_confident:
+                    inherited = self._label_from_same_row(row_centre, row_labels)
+                    if inherited:
+                        label = inherited
+                        is_confident = True
+                if is_confident:
+                    row_labels.append((row_centre, label))
+
                 label_counts[label] = label_counts.get(label, 0) + 1
                 if label_counts[label] > 1:
                     label = f"{label} ({label_counts[label]})"
 
+                max_length = widget_max_length(document, widget)
                 rect = widget.rect
                 detected_fields.append(
                     DetectedField(
+                        max_length=max_length,
+                        is_comb=is_comb_widget(document, widget, max_length),
                         field_type=field_type,
                         label=self._normalize_label(label),
                         page=page_index,
@@ -126,6 +179,18 @@ class PDFEngine:
             if not any(field.field_type == DocumentField.FieldTypeEnum.SIGNATURE for field in detected_fields):
                 report.warning_codes.append(ImportWarningEnum.SIGNATURE_FIELD_NOT_DETECTED)
         return ImportResult(fields=detected_fields, report=report)
+
+    @staticmethod
+    def _label_from_same_row(row_centre: float, row_labels: list[tuple[float, str]]) -> str:
+        """Reuse a neighbour's caption for a widget that has none of its own.
+
+        Split fields - a comb SSN broken into area, group and serial boxes - share one printed
+        caption, so the boxes after the first would otherwise fall back to a positional name.
+        """
+        for centre, label in reversed(row_labels):
+            if abs(centre - row_centre) <= 6.0:
+                return label
+        return ""
 
     def detect_heuristic(self, document: fitz.Document) -> list[DetectedField]:
         detected_fields: list[DetectedField] = []
@@ -193,6 +258,9 @@ class PDFEngine:
     def flatten(self, source_pdf: str | Path, output_pdf: str | Path, submissions: list[dict[str, Any]]) -> None:
         document = fitz.open(source_pdf)
         try:
+            # Tags are removed before values are drawn, because redaction clears whatever
+            # already occupies the area it is clearing.
+            conceal_anchor_tags(document)
             for submission in submissions:
                 page = document[submission["page"] - 1]
                 page_height = page.rect.height
@@ -205,6 +273,8 @@ class PDFEngine:
                 if submission["value_type"] == "TEXT":
                     if submission.get("field_type") == DocumentField.FieldTypeEnum.MULTILINE:
                         self._draw_wrapped_text(page, rect, submission["text_value"])
+                    elif submission.get("is_comb") and submission.get("max_length"):
+                        self._draw_comb_text(page, rect, submission["text_value"], int(submission["max_length"]))
                     else:
                         self._draw_single_line_text(page, rect, submission["text_value"])
                 elif submission["value_type"] == "CHECKBOX":
@@ -245,6 +315,26 @@ class PDFEngine:
             fontname=self.flatten_fontname,
             fontsize=font_size,
         )
+
+    def _draw_comb_text(self, page: fitz.Page, rect: fitz.Rect, value: str, max_length: int) -> None:
+        """Place one character per comb cell so digits line up with the printed dividers."""
+        text = str(value or "").strip()
+        if not text or max_length < 1:
+            return
+        cell_width = rect.width / max_length
+        font_size = min(self.max_flatten_font_size, rect.height * 0.62, cell_width * 1.35)
+        font_size = max(self.min_flatten_font_size, font_size)
+        baseline = rect.y0 + (rect.height + font_size * self.text_cap_height_ratio) / 2
+
+        for index, character in enumerate(text[:max_length]):
+            glyph_width = fitz.get_text_length(character, fontname=self.flatten_fontname, fontsize=font_size)
+            centre = rect.x0 + (cell_width * index) + (cell_width / 2)
+            page.insert_text(
+                fitz.Point(centre - (glyph_width / 2), baseline),
+                character,
+                fontname=self.flatten_fontname,
+                fontsize=font_size,
+            )
 
     def _fitted_font_size(self, text: str, rect: fitz.Rect) -> float:
         usable_width = max(rect.width - (2 * self.text_left_padding), 1.0)
