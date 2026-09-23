@@ -980,3 +980,149 @@ class SanitizationFailureTests(TestCase):
         response = self.submit()
 
         self.assertIn("sender", response.json()["message"].lower())
+
+
+@override_settings(
+    MEDIA_ROOT=TEST_MEDIA_ROOT,
+    SIGNACORE_SHARED_SECRET="test-signacore-secret",
+    SIGNACORE_SERVICE_USERNAME="signacore-service",
+    SIGNACORE_APP_URL="https://mysignacore.com",
+    EMAIL_BACKEND="django.core.mail.backends.locmem.EmailBackend",
+    CELERY_TASK_ALWAYS_EAGER=True,
+    CELERY_TASK_EAGER_PROPAGATES=True,
+)
+class ScriptedFieldClassificationTests(TestCase):
+    """A script only disqualifies a field when it decides the value.
+
+    Form generators attach a date mask or a grey-placeholder script to every field. Treating any
+    script as disqualifying made a real 21-field form import 2 fields.
+    """
+
+    def setUp(self) -> None:
+        cache.clear()
+        self.client = APIClient()
+        self.user = get_user_model().objects.create_user(
+            username="admin", email="admin@mysignacore.com", password="password123", is_staff=True
+        )
+        self.organization = Organization.objects.create(name="Scripted Company", created_by=self.user)
+        OrganizationMembership.objects.create(
+            organization=self.organization, user=self.user, role=OrganizationMembership.RoleEnum.ADMIN
+        )
+        self.client.credentials(
+            HTTP_X_SIGNACORE_SECRET=settings.SIGNACORE_SHARED_SECRET,
+            HTTP_X_SIGNACORE_ADMIN_ID=str(self.user.id),
+            HTTP_X_SIGNACORE_ORGANIZATION_ID=str(self.organization.id),
+        )
+
+    def upload(self, pdf_bytes: bytes) -> dict:
+        response = self.client.post(
+            "/api/admin/documents/",
+            {"title": "Scripted", "pdf_file": SimpleUploadedFile("s.pdf", pdf_bytes, content_type="application/pdf")},
+            format="multipart",
+        )
+        self.assertEqual(response.status_code, 201, response.json())
+        return response.json()
+
+    def test_a_date_mask_does_not_stop_the_field_importing(self) -> None:
+        payload = self.upload(builders.build_formatted_text_field_pdf())
+
+        self.assertEqual([field["field_type"] for field in payload["fields"]], ["TEXT"])
+        self.assertIn("FIELD_FORMATTING_NOT_APPLIED", payload["detection_summary"]["warning_codes"])
+
+    def test_a_placeholder_script_does_not_stop_the_field_importing(self) -> None:
+        payload = self.upload(builders.build_placeholder_script_pdf())
+
+        self.assertEqual([field["field_type"] for field in payload["fields"]], ["TEXT"])
+        self.assertEqual(payload["detection_summary"]["ignored_widget_count"], 0)
+
+    def test_a_field_imported_with_dropped_formatting_is_not_counted_as_ignored(self) -> None:
+        payload = self.upload(builders.build_formatted_text_field_pdf())
+
+        self.assertEqual(payload["detection_summary"]["imported_field_count"], 1)
+        self.assertEqual(payload["detection_summary"]["ignored_widget_count"], 0)
+
+    def test_a_validation_rule_still_skips_the_field(self) -> None:
+        payload = self.upload(builders.build_validated_text_field_pdf())
+
+        self.assertEqual(payload["fields"], [])
+        self.assertIn("UNSUPPORTED_PDF_JAVASCRIPT", payload["detection_summary"]["warning_codes"])
+
+    def test_a_calculation_still_skips_the_field(self) -> None:
+        payload = self.upload(builders.build_javascript_calculation_pdf())
+
+        self.assertEqual(payload["fields"], [])
+        self.assertIn("UNSUPPORTED_PDF_JAVASCRIPT", payload["detection_summary"]["warning_codes"])
+
+    def test_no_script_text_is_ever_persisted(self) -> None:
+        payload = self.upload(builders.build_formatted_text_field_pdf())
+
+        document = Document.objects.get(pk=payload["id"])
+        self.assertNotIn("AFDate", str(document.import_report))
+        for field in document.fields.all():
+            self.assertNotIn("AFDate", field.label)
+
+
+@override_settings(
+    MEDIA_ROOT=TEST_MEDIA_ROOT,
+    SIGNACORE_SHARED_SECRET="test-signacore-secret",
+    SIGNACORE_SERVICE_USERNAME="signacore-service",
+    SIGNACORE_APP_URL="https://mysignacore.com",
+    EMAIL_BACKEND="django.core.mail.backends.locmem.EmailBackend",
+    CELERY_TASK_ALWAYS_EAGER=True,
+    CELERY_TASK_EAGER_PROPAGATES=True,
+)
+class ImageButtonSignatureTests(TestCase):
+    """Acrobat builds a signature placeholder as a push button that imports an image."""
+
+    def setUp(self) -> None:
+        cache.clear()
+        self.client = APIClient()
+        self.user = get_user_model().objects.create_user(
+            username="admin", email="admin@mysignacore.com", password="password123", is_staff=True
+        )
+        self.organization = Organization.objects.create(name="Image Button Co", created_by=self.user)
+        OrganizationMembership.objects.create(
+            organization=self.organization, user=self.user, role=OrganizationMembership.RoleEnum.ADMIN
+        )
+        self.client.credentials(
+            HTTP_X_SIGNACORE_SECRET=settings.SIGNACORE_SHARED_SECRET,
+            HTTP_X_SIGNACORE_ADMIN_ID=str(self.user.id),
+            HTTP_X_SIGNACORE_ORGANIZATION_ID=str(self.organization.id),
+        )
+
+    def upload(self, pdf_bytes: bytes) -> dict:
+        response = self.client.post(
+            "/api/admin/documents/",
+            {"title": "Buttons", "pdf_file": SimpleUploadedFile("b.pdf", pdf_bytes, content_type="application/pdf")},
+            format="multipart",
+        )
+        self.assertEqual(response.status_code, 201, response.json())
+        return response.json()
+
+    def test_an_image_button_on_a_signature_line_becomes_a_signature_field(self) -> None:
+        payload = self.upload(builders.build_image_button_signature_pdf())
+
+        self.assertEqual(len(payload["fields"]), 1)
+        self.assertEqual(payload["fields"][0]["field_type"], "SIGNATURE")
+        self.assertIn("Signature", payload["fields"][0]["label"])
+
+    def test_an_image_button_that_is_not_a_signature_line_is_still_skipped(self) -> None:
+        payload = self.upload(builders.build_image_button_logo_pdf())
+
+        self.assertEqual(payload["fields"], [])
+        self.assertIn("UNSUPPORTED_ACTION_BUTTON", payload["detection_summary"]["warning_codes"])
+
+    def test_a_wrapped_two_line_label_is_read_in_full(self) -> None:
+        payload = self.upload(builders.build_wrapped_label_pdf())
+
+        self.assertEqual(len(payload["fields"]), 1)
+        self.assertEqual(payload["fields"][0]["field_type"], "SIGNATURE")
+        self.assertEqual(payload["fields"][0]["label"], "Signature of Principal or Authorized Official")
+
+    def test_a_signature_button_action_is_never_persisted(self) -> None:
+        payload = self.upload(builders.build_image_button_signature_pdf())
+
+        document = Document.objects.get(pk=payload["id"])
+        self.assertNotIn("buttonImportIcon", str(document.import_report))
+        for field in document.fields.all():
+            self.assertNotIn("buttonImportIcon", field.label)

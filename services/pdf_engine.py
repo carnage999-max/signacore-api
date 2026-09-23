@@ -161,9 +161,12 @@ class PDFEngine:
                 report.native_widget_count += 1
                 label, is_confident = resolve_label(widget, text_lines, page_index, page_field_index)
                 field_type, warning_code = classify_widget(document, widget, label)
-                if field_type is None:
-                    report.ignored_widget_count += 1
+                if warning_code:
                     report.warning_codes.append(warning_code)
+                if field_type is None:
+                    # A warning without a type means the widget was skipped; with a type it is
+                    # advisory, and the field is still imported.
+                    report.ignored_widget_count += 1
                     continue
 
                 row_centre = (widget.rect.y0 + widget.rect.y1) / 2
