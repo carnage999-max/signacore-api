@@ -19,6 +19,7 @@ from services.pdf_anchors import conceal_anchor_tags_on_page
 from services.pdf_engine import PDFEngine
 from services.pdf_sanitizer import find_active_content
 from utils.file_storage import temporary_plaintext_file
+from utils.pdf_preview import build_preview_matrix
 
 from . import pdf_builders as builders
 
@@ -777,3 +778,34 @@ class AnchorTagImportTests(TestCase):
         self.assertEqual(response.status_code, 201, response.json())
         self.assertEqual(response.json()["max_length"], 6)
         self.assertTrue(response.json()["is_comb"])
+
+
+class PreviewMatrixTests(TestCase):
+    """Page rails request small thumbnails; everything else keeps the full preview render."""
+
+    def page(self) -> fitz.Page:
+        document = fitz.open()
+        return document.new_page(width=612, height=792)
+
+    def test_default_render_is_unchanged_when_no_width_is_requested(self) -> None:
+        matrix = build_preview_matrix(self.page(), None)
+
+        self.assertEqual((matrix.a, matrix.d), (2.0, 2.0))
+
+    def test_unparseable_width_falls_back_to_the_default_render(self) -> None:
+        matrix = build_preview_matrix(self.page(), "not-a-number")
+
+        self.assertEqual((matrix.a, matrix.d), (2.0, 2.0))
+
+    def test_requested_width_sets_the_zoom(self) -> None:
+        matrix = build_preview_matrix(self.page(), "153")
+
+        self.assertAlmostEqual(matrix.a, 153 / 612, places=6)
+        self.assertAlmostEqual(matrix.d, 153 / 612, places=6)
+
+    def test_width_is_clamped_to_a_safe_range(self) -> None:
+        tiny = build_preview_matrix(self.page(), "1")
+        huge = build_preview_matrix(self.page(), "100000")
+
+        self.assertAlmostEqual(tiny.a, 60 / 612, places=6)
+        self.assertAlmostEqual(huge.a, 1600 / 612, places=6)

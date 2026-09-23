@@ -12,7 +12,12 @@
     typedSignature: "",
     resendTimerId: 0,
     submitted: false,
+    currentPage: 1,
   };
+
+  const pageCardNodes = new Map();
+  const fieldInputNodes = new Map();
+  const THUMBNAIL_WIDTH = 150;
 
   const nodes = {
     notice: document.getElementById("notice"),
@@ -31,6 +36,14 @@
     submitButton: document.getElementById("submit-button"),
     pagesRoot: document.getElementById("pages-root"),
     highlightFieldsToggle: document.getElementById("highlight-fields-toggle"),
+    documentMeta: document.getElementById("document-meta"),
+    pageThumbs: document.getElementById("page-thumbs"),
+    pageCounter: document.getElementById("page-counter"),
+    pageFirst: document.getElementById("page-first"),
+    pagePrev: document.getElementById("page-prev"),
+    pageNext: document.getElementById("page-next"),
+    pageLast: document.getElementById("page-last"),
+    nextRequiredButton: document.getElementById("next-required-button"),
     documentPanel: document.getElementById("document-panel"),
     signatureModal: document.getElementById("signature-modal"),
     closeModalButton: document.getElementById("close-modal-button"),
@@ -158,6 +171,7 @@
       item.append(label, fieldStatus);
       nodes.fieldList.appendChild(item);
     });
+    updateDocumentMeta();
   }
 
   function markFieldFilled(node, isFilled) {
@@ -306,6 +320,8 @@
   function renderPages() {
     if (!state.context) return;
     nodes.pagesRoot.innerHTML = "";
+    pageCardNodes.clear();
+    fieldInputNodes.clear();
 
     state.context.pages.forEach((pageData) => {
       const pageCard = document.createElement("article");
@@ -356,15 +372,134 @@
           } else {
             fieldContent = buildSignatureField(field);
           }
+          fieldInputNodes.set(field.id, fieldContent);
           fieldNode.appendChild(fieldContent);
           overlay.appendChild(fieldNode);
         });
 
       pageCard.appendChild(pageImage);
       pageCard.appendChild(overlay);
+      pageCardNodes.set(pageData.number, pageCard);
       nodes.pagesRoot.appendChild(pageCard);
     });
     applyFieldHighlighting();
+    renderPageRail();
+    observePageVisibility();
+  }
+
+  function renderPageRail() {
+    if (!nodes.pageThumbs || !state.context) return;
+    nodes.pageThumbs.innerHTML = "";
+
+    state.context.pages.forEach((pageData) => {
+      const thumb = document.createElement("button");
+      thumb.type = "button";
+      thumb.className = "page-thumb";
+      thumb.dataset.page = String(pageData.number);
+      thumb.setAttribute("aria-label", `Go to page ${pageData.number}`);
+
+      const image = document.createElement("img");
+      image.loading = "lazy";
+      image.alt = "";
+      image.src = `${pageData.preview_url}?width=${THUMBNAIL_WIDTH}`;
+
+      const badge = document.createElement("span");
+      badge.className = "page-thumb-number";
+      badge.textContent = String(pageData.number);
+
+      thumb.append(badge, image);
+      thumb.addEventListener("click", () => goToPage(pageData.number));
+      nodes.pageThumbs.appendChild(thumb);
+    });
+
+    setCurrentPage(1, { scrollRail: false });
+  }
+
+  function setCurrentPage(pageNumber, options) {
+    const total = state.context?.pages.length || 0;
+    if (!total) return;
+    const bounded = Math.min(Math.max(pageNumber, 1), total);
+    state.currentPage = bounded;
+
+    if (nodes.pageCounter) {
+      nodes.pageCounter.textContent = `Page ${bounded} of ${total}`;
+    }
+    if (nodes.pageFirst) nodes.pageFirst.disabled = bounded <= 1;
+    if (nodes.pagePrev) nodes.pagePrev.disabled = bounded <= 1;
+    if (nodes.pageNext) nodes.pageNext.disabled = bounded >= total;
+    if (nodes.pageLast) nodes.pageLast.disabled = bounded >= total;
+
+    nodes.pageThumbs?.querySelectorAll(".page-thumb").forEach((thumb) => {
+      const isCurrent = Number(thumb.dataset.page) === bounded;
+      thumb.classList.toggle("page-thumb-current", isCurrent);
+      if (isCurrent && options?.scrollRail !== false) {
+        thumb.scrollIntoView({ block: "nearest" });
+      }
+    });
+  }
+
+  function goToPage(pageNumber) {
+    const card = pageCardNodes.get(pageNumber);
+    if (!card) return;
+    card.scrollIntoView({ behavior: "smooth", block: "start" });
+    setCurrentPage(pageNumber);
+  }
+
+  function observePageVisibility() {
+    if (typeof IntersectionObserver === "undefined") return;
+    if (state.pageObserver) state.pageObserver.disconnect();
+
+    state.pageObserver = new IntersectionObserver(
+      (entries) => {
+        const visible = entries
+          .filter((entry) => entry.isIntersecting)
+          .sort((first, second) => second.intersectionRatio - first.intersectionRatio)[0];
+        if (visible) {
+          setCurrentPage(Number(visible.target.dataset.page));
+        }
+      },
+      { threshold: [0.25, 0.5, 0.75] },
+    );
+    pageCardNodes.forEach((card, pageNumber) => {
+      card.dataset.page = String(pageNumber);
+      state.pageObserver.observe(card);
+    });
+  }
+
+  function focusNextRequiredField() {
+    if (!state.context) return;
+    const outstanding = state.context.fields
+      .filter((field) => field.is_required && !fieldIsComplete(field))
+      .sort((first, second) => first.page - second.page || first.order - second.order);
+    const target = outstanding.find((field) => field.page >= state.currentPage) || outstanding[0];
+    if (!target) return;
+
+    const input = fieldInputNodes.get(target.id);
+    if (!input) {
+      goToPage(target.page);
+      return;
+    }
+    input.scrollIntoView({ behavior: "smooth", block: "center" });
+    setCurrentPage(target.page);
+    window.setTimeout(() => input.focus({ preventScroll: true }), 320);
+  }
+
+  function updateDocumentMeta() {
+    if (!nodes.documentMeta || !state.context) return;
+    const pageCount = state.context.pages.length;
+    const requiredFields = state.context.fields.filter((field) => field.is_required);
+    const outstanding = requiredFields.filter((field) => !fieldIsComplete(field)).length;
+    const pageLabel = `${pageCount} page${pageCount === 1 ? "" : "s"}`;
+    if (!requiredFields.length) {
+      nodes.documentMeta.textContent = `${pageLabel} · no required fields`;
+    } else if (outstanding) {
+      nodes.documentMeta.textContent = `${pageLabel} · ${outstanding} required field${outstanding === 1 ? "" : "s"} left`;
+    } else {
+      nodes.documentMeta.textContent = `${pageLabel} · all required fields complete`;
+    }
+    if (nodes.nextRequiredButton) {
+      nodes.nextRequiredButton.disabled = outstanding === 0;
+    }
   }
 
   function applyFieldHighlighting() {
@@ -669,6 +804,12 @@
   if (nodes.highlightFieldsToggle) {
     nodes.highlightFieldsToggle.addEventListener("change", applyFieldHighlighting);
   }
+
+  nodes.pageFirst?.addEventListener("click", () => goToPage(1));
+  nodes.pagePrev?.addEventListener("click", () => goToPage(state.currentPage - 1));
+  nodes.pageNext?.addEventListener("click", () => goToPage(state.currentPage + 1));
+  nodes.pageLast?.addEventListener("click", () => goToPage(state.context?.pages.length || 1));
+  nodes.nextRequiredButton?.addEventListener("click", focusNextRequiredField);
 
   nodes.submitButton.addEventListener("click", () => {
     void submitDocument();

@@ -80,14 +80,29 @@
             <div class="document-header">
               <div>
                 <h2 id="document-title">Loading document…</h2>
-                <p class="panel-copy">Complete the highlighted fields on each page before submitting the document.</p>
+                <p class="panel-copy" id="document-meta">Complete the highlighted fields on each page before submitting the document.</p>
               </div>
               <label class="highlight-toggle">
                 <input id="highlight-fields-toggle" type="checkbox" checked>
                 <span>Highlight fields</span>
               </label>
             </div>
-            <div id="pages-root" class="pages-root"></div>
+            <div class="document-body">
+              <aside class="page-rail" aria-label="Document pages">
+                <div class="page-rail-head">
+                  <span id="page-counter" class="page-counter">Page 1 of 1</span>
+                  <div class="page-rail-nav">
+                    <button id="page-first" class="rail-button" type="button" aria-label="First page">«</button>
+                    <button id="page-prev" class="rail-button" type="button" aria-label="Previous page">‹</button>
+                    <button id="page-next" class="rail-button" type="button" aria-label="Next page">›</button>
+                    <button id="page-last" class="rail-button" type="button" aria-label="Last page">»</button>
+                  </div>
+                </div>
+                <div id="page-thumbs" class="page-thumbs"></div>
+                <button id="next-required-button" class="secondary-button" type="button">Next required field</button>
+              </aside>
+              <div id="pages-root" class="pages-root"></div>
+            </div>
           </div>
         </section>
       </section>

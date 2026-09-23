@@ -37,6 +37,7 @@ from tasks.notifications import (
 )
 from utils.file_storage import temporary_plaintext_file
 from utils.identity import email_digest
+from utils.pdf_preview import build_preview_matrix
 from utils.task_dispatch import enqueue_task
 from utils.throttling import SignacoreRateThrottle
 
@@ -895,7 +896,8 @@ class AdminDocumentPagePreviewView(APIView):
                         return Response({"detail": "Page not found."}, status=status.HTTP_404_NOT_FOUND)
                     page = pdf_document[page_number - 1]
                     conceal_anchor_tags_on_page(page)
-                    pixmap = page.get_pixmap(matrix=fitz.Matrix(2, 2), alpha=False)
+                    matrix = build_preview_matrix(page, request.query_params.get("width"))
+                    pixmap = page.get_pixmap(matrix=matrix, alpha=False)
         except Exception:
             logger.exception(
                 "Admin document page preview failed",
