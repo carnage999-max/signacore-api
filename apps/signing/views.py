@@ -19,13 +19,12 @@ from rest_framework.views import APIView
 
 from apps.documents.models import Document, DocumentField
 from apps.documents.serializers import DocumentFieldSerializer
-from services.pdf_anchors import conceal_anchor_tags_on_page
 from services.pdf_engine import PDFEngine
 from services.pdf_sanitizer import PDFSanitizationError
 from tasks.notifications import notify_admin_progress, send_completion_emails, send_otp_email
 from utils.file_storage import save_encrypted_field_file, temporary_output_file, temporary_plaintext_file
 from utils.otp import generate_otp, hash_otp, verify_otp
-from utils.pdf_preview import build_preview_matrix
+from utils.pdf_preview import build_preview_matrix, prepare_page_for_preview
 from utils.signer_session import build_signer_session_token, verify_signer_session_token
 from utils.task_dispatch import enqueue_task
 from utils.throttling import SignacoreRateThrottle
@@ -190,7 +189,7 @@ class SignerPagePreviewView(APIView):
                 if page_number < 1 or page_number > pdf_document.page_count:
                     raise Http404("Page not found.")
                 page = pdf_document[page_number - 1]
-                conceal_anchor_tags_on_page(page)
+                prepare_page_for_preview(page)
                 matrix = build_preview_matrix(page, request.query_params.get("width"))
                 pixmap = page.get_pixmap(matrix=matrix, alpha=False)
         return HttpResponse(pixmap.tobytes("png"), content_type="image/png")

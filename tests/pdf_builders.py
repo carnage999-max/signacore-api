@@ -429,3 +429,17 @@ def build_wrapped_label_pdf() -> bytes:
     action_xref = _js_action(document, "event.target.buttonImportIcon\\(\\);")
     document.xref_set_key(xref, "A", f"{action_xref} 0 R")
     return _to_bytes(document)
+
+
+def build_placeholder_appearance_pdf() -> bytes:
+    """A form whose widget carries grey placeholder text in its own appearance.
+
+    Generators commonly do this. Rendering the page with widgets intact bakes the placeholder
+    into the preview image, so a signer ends up typing over the top of it.
+    """
+    document, page = _new_document()
+    page.insert_text((72, 120), "Full Legal Name of Minor:", fontsize=10)
+    widget = _text_widget(name="minorFullName", rect=fitz.Rect(220, 106, 470, 126))
+    widget.field_value = "[Minor full legal name]"
+    page.add_widget(widget)
+    return _to_bytes(document)

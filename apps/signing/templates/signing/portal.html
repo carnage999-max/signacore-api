@@ -68,10 +68,15 @@
             <button id="verify-otp-button" class="secondary-button" type="button">Verify code</button>
           </div>
 
-          <div id="field-progress-panel" class="panel" hidden>
-            <h2>Field progress</h2>
+          <div id="field-progress-panel" class="panel progress-panel" hidden>
+            <div class="progress-header">
+              <h2>Field progress</h2>
+              <p id="progress-summary" class="progress-summary"></p>
+            </div>
             <div id="field-list" class="field-list"></div>
-            <button id="submit-button" class="primary-button" type="button" disabled>Submit signed document</button>
+            <div class="progress-footer">
+              <button id="submit-button" class="primary-button" type="button">Submit signed document</button>
+            </div>
           </div>
         </aside>
 
@@ -107,6 +112,25 @@
         </section>
       </section>
     </main>
+
+    <div id="submit-modal" class="modal" hidden>
+      <div class="modal-backdrop" data-close-submit-modal="true"></div>
+      <div class="modal-card modal-card-narrow" role="dialog" aria-modal="true" aria-labelledby="submit-modal-title">
+        <div class="modal-header">
+          <div>
+            <p class="eyebrow">Before you submit</p>
+            <h2 id="submit-modal-title">Check your document</h2>
+          </div>
+          <button id="close-submit-modal-button" class="icon-button" type="button" aria-label="Close">×</button>
+        </div>
+        <p id="submit-modal-copy" class="panel-copy"></p>
+        <div id="submit-modal-list" class="submit-issue-list"></div>
+        <div class="modal-actions">
+          <button id="cancel-submit-button" class="secondary-button" type="button">Keep editing</button>
+          <button id="confirm-submit-button" class="primary-button" type="button">Submit document</button>
+        </div>
+      </div>
+    </div>
 
     <div id="signature-modal" class="modal" hidden>
       <div class="modal-backdrop" data-close-modal="true"></div>

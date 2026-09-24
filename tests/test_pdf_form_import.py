@@ -9,7 +9,7 @@ from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.core.cache import cache
 from django.core.files.uploadedfile import SimpleUploadedFile
-from django.test import TestCase, override_settings
+from django.test import SimpleTestCase, TestCase, override_settings
 from django.utils import timezone
 from rest_framework.test import APIClient
 
@@ -20,7 +20,7 @@ from services.pdf_anchors import conceal_anchor_tags_on_page
 from services.pdf_engine import PDFEngine
 from services.pdf_sanitizer import PDFSanitizationError, find_active_content
 from utils.file_storage import temporary_plaintext_file
-from utils.pdf_preview import build_preview_matrix
+from utils.pdf_preview import build_preview_matrix, prepare_page_for_preview
 
 from . import pdf_builders as builders
 
@@ -1126,3 +1126,38 @@ class ImageButtonSignatureTests(TestCase):
         self.assertNotIn("buttonImportIcon", str(document.import_report))
         for field in document.fields.all():
             self.assertNotIn("buttonImportIcon", field.label)
+
+
+class PreviewPagePreparationTests(SimpleTestCase):
+    """A preview must not show the PDF's own placeholder text under SignaCore's field."""
+
+    def test_widget_placeholder_text_is_removed_before_rendering(self) -> None:
+        pdf_bytes = builders.build_placeholder_appearance_pdf()
+
+        with fitz.open("pdf", pdf_bytes) as document:
+            self.assertIn("[Minor full legal name]", document[0].get_text())
+
+        with fitz.open("pdf", pdf_bytes) as document:
+            page = document[0]
+            prepare_page_for_preview(page)
+
+            self.assertNotIn("[Minor full legal name]", page.get_text())
+            self.assertEqual(list(page.widgets() or []), [])
+
+    def test_printed_page_content_survives_preparation(self) -> None:
+        pdf_bytes = builders.build_placeholder_appearance_pdf()
+
+        with fitz.open("pdf", pdf_bytes) as document:
+            page = document[0]
+            prepare_page_for_preview(page)
+
+            self.assertIn("Full Legal Name of Minor", page.get_text())
+
+    def test_preparation_leaves_the_stored_document_untouched(self) -> None:
+        pdf_bytes = builders.build_placeholder_appearance_pdf()
+
+        with fitz.open("pdf", pdf_bytes) as document:
+            prepare_page_for_preview(document[0])
+
+        with fitz.open("pdf", pdf_bytes) as reopened:
+            self.assertIn("[Minor full legal name]", reopened[0].get_text())
