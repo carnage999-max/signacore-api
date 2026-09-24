@@ -351,3 +351,81 @@ def build_blank_digital_pdf() -> bytes:
     page.insert_text((72, 120), "This memorandum records the parties' shared understanding.", fontsize=11)
     page.insert_text((72, 150), "It creates no obligations and requires no response.", fontsize=11)
     return _to_bytes(document)
+
+
+def _js_action(document: fitz.Document, script: str) -> int:
+    xref = document.get_new_xref()
+    document.update_object(xref, f"<</Type/Action/S/JavaScript/JS({script})>>")
+    return xref
+
+
+def build_formatted_text_field_pdf() -> bytes:
+    """A date field carrying Adobe's format and keystroke built-ins.
+
+    These only change how a value is displayed while it is typed, so the field is still one a
+    signer fills in.
+    """
+    document, page = _new_document()
+    page.insert_text((72, 138), "Date of birth:", fontsize=10)
+    page.add_widget(_text_widget(name="dateOfBirth", rect=fitz.Rect(160, 128, 320, 146)))
+    widget_xref = list(page.widgets())[-1].xref
+    format_xref = _js_action(document, 'AFDate_FormatEx\\("mm/dd/yyyy"\\);')
+    keystroke_xref = _js_action(document, 'AFDate_KeystrokeEx\\("mm/dd/yyyy"\\);')
+    document.xref_set_key(widget_xref, "AA", f"<</F {format_xref} 0 R/K {keystroke_xref} 0 R>>")
+    return _to_bytes(document)
+
+
+def build_placeholder_script_pdf() -> bytes:
+    """A text field whose focus and blur scripts only manage grey placeholder text."""
+    document, page = _new_document()
+    page.insert_text((72, 138), "Employer name:", fontsize=10)
+    page.add_widget(_text_widget(name="employerName", rect=fitz.Rect(170, 128, 380, 146)))
+    widget_xref = list(page.widgets())[-1].xref
+    blur_xref = _js_action(document, 'event.target.value = "\\[Employer\\]";')
+    focus_xref = _js_action(document, 'event.target.value = "";')
+    document.xref_set_key(widget_xref, "AA", f"<</Bl {blur_xref} 0 R/Fo {focus_xref} 0 R>>")
+    return _to_bytes(document)
+
+
+def build_validated_text_field_pdf() -> bytes:
+    """A text field with a validation rule, which decides whether a value is acceptable."""
+    document, page = _new_document()
+    page.add_widget(_text_widget(name="email", rect=fitz.Rect(72, 128, 320, 146)))
+    widget_xref = list(page.widgets())[-1].xref
+    validate_xref = _js_action(document, "if \\(!/@/.test\\(event.value\\)\\) event.rc = false;")
+    document.xref_set_key(widget_xref, "AA", f"<</V {validate_xref} 0 R>>")
+    return _to_bytes(document)
+
+
+def build_image_button_signature_pdf() -> bytes:
+    """Acrobat's signature placeholder: a push button whose action imports an image."""
+    document, page = _new_document()
+    page.insert_text((72, 200), "Minor's Signature:", fontsize=10)
+    page.add_widget(_text_widget(name="minorSignature_af_image", rect=fitz.Rect(180, 186, 380, 216)))
+    xref = _retype_last_widget(document, page, field_type="/Btn", flags=FLAG_PUSHBUTTON)
+    action_xref = _js_action(document, "event.target.buttonImportIcon\\(\\);")
+    document.xref_set_key(xref, "A", f"{action_xref} 0 R")
+    return _to_bytes(document)
+
+
+def build_image_button_logo_pdf() -> bytes:
+    """The same image placeholder on a line that is not a signature line."""
+    document, page = _new_document()
+    page.insert_text((72, 200), "Company logo:", fontsize=10)
+    page.add_widget(_text_widget(name="companyLogo_af_image", rect=fitz.Rect(160, 186, 360, 216)))
+    xref = _retype_last_widget(document, page, field_type="/Btn", flags=FLAG_PUSHBUTTON)
+    action_xref = _js_action(document, "event.target.buttonImportIcon\\(\\);")
+    document.xref_set_key(xref, "A", f"{action_xref} 0 R")
+    return _to_bytes(document)
+
+
+def build_wrapped_label_pdf() -> bytes:
+    """A signature box whose label wraps onto two lines inside a table cell."""
+    document, page = _new_document()
+    page.insert_text((72, 196), "Signature of Principal or", fontsize=10)
+    page.insert_text((72, 210), "Authorized Official:", fontsize=10)
+    page.add_widget(_text_widget(name="principalSignature_af_image", rect=fitz.Rect(230, 186, 420, 218)))
+    xref = _retype_last_widget(document, page, field_type="/Btn", flags=FLAG_PUSHBUTTON)
+    action_xref = _js_action(document, "event.target.buttonImportIcon\\(\\);")
+    document.xref_set_key(xref, "A", f"{action_xref} 0 R")
+    return _to_bytes(document)

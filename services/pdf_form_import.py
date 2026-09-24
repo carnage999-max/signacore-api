@@ -17,6 +17,7 @@ from apps.documents.models import DocumentField
 
 class ImportWarningEnum:
     ANCHOR_TAG_NOT_PLACED = "ANCHOR_TAG_NOT_PLACED"
+    FIELD_FORMATTING_NOT_APPLIED = "FIELD_FORMATTING_NOT_APPLIED"
     HIDDEN_FIELD_IGNORED = "HIDDEN_FIELD_IGNORED"
     NO_FIELDS_DETECTED = "NO_FIELDS_DETECTED"
     NO_SUPPORTED_FIELDS_IMPORTED = "NO_SUPPORTED_FIELDS_IMPORTED"
@@ -46,7 +47,11 @@ FLAG_RICH_TEXT = 1 << 25
 ANNOT_FLAG_HIDDEN = 1 << 1
 ANNOT_FLAG_NO_VIEW = 1 << 5
 
-ACTION_KEYS = ("A", "AA")
+# PDF 32000-1 table 197: additional-action slots.
+# A slot either changes the value the field holds, or only how it is shown while typing.
+VALUE_AFFECTING_SLOTS = ("C", "V")
+PRESENTATIONAL_SLOTS = ("F", "K", "Fo", "Bl")
+IMAGE_BUTTON_ACTION = "buttonimporticon"
 PARENT_CHAIN_LIMIT = 8
 MAX_LABEL_LENGTH = 255
 MAX_DERIVED_LABEL_LENGTH = 60
@@ -56,6 +61,7 @@ LABEL_START_PATTERN = re.compile(r"^[A-Za-z0-9(]")
 ITEM_NUMBER_PATTERN = re.compile(r"^(\d+[a-z]?)\s*[.)]?\s+(?=\S)")
 SENTENCE_SPLIT_PATTERN = re.compile(r"(?<=\.)\s+(?=[A-Z])")
 INITIALS_PATTERN = re.compile(r"\binitials?\b", re.IGNORECASE)
+SIGNATURE_LABEL_PATTERN = re.compile(r"\b(signature|sign here|signed by)\b", re.IGNORECASE)
 INSTRUCTION_PATTERN = re.compile(
     r"^(note|see|if|for|caution|example|check|enter|complete|do not|you must)\b",
     re.IGNORECASE,
@@ -65,6 +71,8 @@ SIDE_LABEL_GAP = 110.0
 SIDE_LABEL_BAND = 6.0
 CAPTION_SEARCH_GAP = 44.0
 CAPTION_CANDIDATE_LIMIT = 4
+WRAPPED_LABEL_LINE_LIMIT = 3
+WRAPPED_LABEL_TOLERANCE = 26.0
 WIDE_FIELD_WIDTH = 120.0
 
 
@@ -166,55 +174,143 @@ def is_widget_hidden(document: fitz.Document, widget: fitz.Widget) -> bool:
     return bool(_annotation_flags(document, widget.xref) & (ANNOT_FLAG_HIDDEN | ANNOT_FLAG_NO_VIEW))
 
 
-def has_active_behavior(document: fitz.Document, widget: fitz.Widget) -> bool:
-    """Detect actions or scripts on the widget or anywhere up its inherited field chain.
+@dataclass
+class WidgetScripts:
+    """What a widget asks a viewer to run, split by whether it can change the value.
 
-    PyMuPDF's ``script*`` properties read only the widget's own dictionary, so a validation
-    script declared on a parent field dictionary - which is how kid widgets normally carry
-    one - would otherwise go unnoticed.
+    Nothing here is executed. Scripts are read so a widget can be classified: a date mask or a
+    grey-placeholder script does not change what a signer enters, while a calculation or a
+    validation rule does.
     """
-    for attribute in (
-        "script",
-        "script_stroke",
-        "script_format",
-        "script_change",
-        "script_calc",
-        "script_blur",
-        "script_focus",
-    ):
-        if getattr(widget, attribute, None):
-            return True
+
+    action: str = ""
+    value_affecting_slots: tuple[str, ...] = ()
+    presentational_slots: tuple[str, ...] = ()
+
+    @property
+    def has_value_affecting_script(self) -> bool:
+        return bool(self.value_affecting_slots)
+
+    @property
+    def has_presentational_script(self) -> bool:
+        return bool(self.presentational_slots)
+
+    @property
+    def is_image_button(self) -> bool:
+        return IMAGE_BUTTON_ACTION in self.action.lower()
+
+
+def collect_widget_scripts(document: fitz.Document, widget: fitz.Widget) -> WidgetScripts:
+    """Gather a widget's scripts, including any inherited from a parent field dictionary.
+
+    PyMuPDF's ``script*`` properties read only the widget's own dictionary, so a script declared
+    on a parent - which is how kid widgets normally carry one - would otherwise go unnoticed.
+    """
+    value_slots: list[str] = []
+    presentational: list[str] = []
+    action = _action_script(document, widget.xref)
+
+    own_slots = {
+        "C": getattr(widget, "script_calc", None),
+        "V": getattr(widget, "script_change", None),
+        "F": getattr(widget, "script_format", None),
+        "K": getattr(widget, "script_stroke", None),
+        "Bl": getattr(widget, "script_blur", None),
+        "Fo": getattr(widget, "script_focus", None),
+    }
+    for slot, script in own_slots.items():
+        if not script:
+            continue
+        (value_slots if slot in VALUE_AFFECTING_SLOTS else presentational).append(slot)
 
     xref = widget.xref
     for _ in range(PARENT_CHAIN_LIMIT):
-        keys = _xref_keys(document, xref)
-        if not keys:
-            return False
-        if any(key in keys for key in ACTION_KEYS):
-            return True
+        for slot in _additional_action_slots(document, xref):
+            if slot in VALUE_AFFECTING_SLOTS and slot not in value_slots:
+                value_slots.append(slot)
+            elif slot in PRESENTATIONAL_SLOTS and slot not in presentational:
+                presentational.append(slot)
+        if not action:
+            action = _action_script(document, xref)
         parent = document.xref_get_key(xref, "Parent")
         if parent[0] != "xref":
-            return False
+            break
         xref = int(parent[1].split()[0])
-    return False
+
+    return WidgetScripts(
+        action=action,
+        value_affecting_slots=tuple(value_slots),
+        presentational_slots=tuple(presentational),
+    )
+
+
+def _additional_action_slots(document: fitz.Document, xref: int) -> list[str]:
+    entry = _xref_key(document, xref, "AA")
+    if entry[0] != "dict":
+        return []
+    return re.findall(r"/([A-Za-z]+)\s", entry[1])
+
+
+def _action_script(document: fitz.Document, xref: int) -> str:
+    entry = _xref_key(document, xref, "A")
+    if entry[0] == "xref":
+        try:
+            return _javascript_text(document.xref_object(int(entry[1].split()[0]), compressed=True))
+        except Exception:  # pragma: no cover - unreadable action carries no usable text
+            return ""
+    if entry[0] == "dict":
+        return _javascript_text(entry[1])
+    return ""
+
+
+def _javascript_text(obj: str) -> str:
+    """Extract a ``/JS`` payload as text. Reading is not running."""
+    match = re.search(r"/JS\s*(<[0-9A-Fa-f]*>|\([^)]*\))", obj)
+    if not match:
+        return obj
+    raw = match.group(1)
+    if raw.startswith("("):
+        return raw[1:-1]
+    try:
+        data = bytes.fromhex(raw[1:-1])
+    except ValueError:
+        return ""
+    if data[:2] == b"\xfe\xff":
+        return data[2:].decode("utf-16-be", "replace")
+    return data.decode("latin-1", "replace")
+
+
+def _xref_key(document: fitz.Document, xref: int, key: str):
+    try:
+        return document.xref_get_key(xref, key)
+    except Exception:  # pragma: no cover - unreadable object has no keys
+        return ("null", "null")
 
 
 def classify_widget(document: fitz.Document, widget: fitz.Widget, label: str) -> tuple[str | None, str | None]:
-    """Return ``(field_type, warning_code)``; exactly one of the pair is ever set."""
+    """Return ``(field_type, warning_code)``.
+
+    A warning without a type means the widget was skipped. A type *with* a warning means the
+    field was imported but something about it could not be carried over.
+    """
     flags = widget_field_flags(widget)
     widget_type = int(getattr(widget, "field_type", -1))
     is_pushbutton = widget_type == fitz.PDF_WIDGET_TYPE_BUTTON or bool(flags & FLAG_PUSHBUTTON)
+    scripts = collect_widget_scripts(document, widget)
 
     if is_widget_hidden(document, widget):
         return None, ImportWarningEnum.HIDDEN_FIELD_IGNORED
 
-    if has_active_behavior(document, widget):
-        if is_pushbutton:
-            return None, ImportWarningEnum.UNSUPPORTED_ACTION_BUTTON
+    if is_pushbutton:
+        return _classify_button(scripts, label)
+
+    if scripts.action or scripts.has_value_affecting_script:
+        # A calculation or a validation rule decides the value; a plain action is untrusted.
         return None, ImportWarningEnum.UNSUPPORTED_PDF_JAVASCRIPT
 
-    if is_pushbutton:
-        return None, ImportWarningEnum.UNSUPPORTED_ACTION_BUTTON
+    # Formatting, keystroke, focus and blur scripts only affect how a value is shown while it is
+    # being typed, so the field is imported and the lost formatting is reported instead.
+    formatting_warning = ImportWarningEnum.FIELD_FORMATTING_NOT_APPLIED if scripts.has_presentational_script else None
 
     if widget_type == fitz.PDF_WIDGET_TYPE_RADIOBUTTON or flags & FLAG_RADIO:
         return None, ImportWarningEnum.UNSUPPORTED_RADIO_GROUP
@@ -226,21 +322,37 @@ def classify_widget(document: fitz.Document, widget: fitz.Widget, label: str) ->
         return None, ImportWarningEnum.UNSUPPORTED_READ_ONLY_FIELD
 
     if widget_type == fitz.PDF_WIDGET_TYPE_CHECKBOX:
-        return DocumentField.FieldTypeEnum.CHECKBOX, None
+        return DocumentField.FieldTypeEnum.CHECKBOX, formatting_warning
 
     if widget_type == fitz.PDF_WIDGET_TYPE_SIGNATURE:
-        return DocumentField.FieldTypeEnum.SIGNATURE, None
+        return DocumentField.FieldTypeEnum.SIGNATURE, formatting_warning
 
     if widget_type == fitz.PDF_WIDGET_TYPE_TEXT:
         if flags & (FLAG_PASSWORD | FLAG_FILE_SELECT | FLAG_RICH_TEXT):
             return None, ImportWarningEnum.UNSUPPORTED_WIDGET_TYPE
         if flags & FLAG_MULTILINE:
-            return DocumentField.FieldTypeEnum.MULTILINE, None
+            return DocumentField.FieldTypeEnum.MULTILINE, formatting_warning
         if INITIALS_PATTERN.search(label):
-            return DocumentField.FieldTypeEnum.INITIALS, None
-        return DocumentField.FieldTypeEnum.TEXT, None
+            return DocumentField.FieldTypeEnum.INITIALS, formatting_warning
+        return DocumentField.FieldTypeEnum.TEXT, formatting_warning
 
     return None, ImportWarningEnum.UNSUPPORTED_WIDGET_TYPE
+
+
+def _classify_button(scripts: WidgetScripts, label: str) -> tuple[str | None, str | None]:
+    """An image-import button on a signature line is where a signature belongs.
+
+    Acrobat builds a signature placeholder as a push button whose action imports an icon. Its
+    action is never run; SignaCore collects its own signature at the same rectangle. The label
+    has to agree, so a logo placeholder is not turned into a signature field.
+    """
+    if not scripts.is_image_button:
+        return None, ImportWarningEnum.UNSUPPORTED_ACTION_BUTTON
+    if INITIALS_PATTERN.search(label):
+        return DocumentField.FieldTypeEnum.INITIALS, None
+    if SIGNATURE_LABEL_PATTERN.search(label):
+        return DocumentField.FieldTypeEnum.SIGNATURE, None
+    return None, ImportWarningEnum.UNSUPPORTED_ACTION_BUTTON
 
 
 def resolve_label(
@@ -258,8 +370,12 @@ def resolve_label(
     if tooltip and not _is_internal_path(tooltip):
         return tooltip[:MAX_LABEL_LENGTH], True
 
-    is_checkbox = int(getattr(widget, "field_type", -1)) == fitz.PDF_WIDGET_TYPE_CHECKBOX
-    for candidate in _label_candidates(widget.rect, text_lines, prefer_right=is_checkbox):
+    for candidate in _label_candidates(
+        widget.rect,
+        text_lines,
+        prefer_right=_prefers_following_label(widget),
+        prefer_side=_prefers_side_label(widget),
+    ):
         shortened = _shorten(candidate)
         if _is_confident_label(shortened):
             return shortened, True
@@ -271,19 +387,41 @@ def resolve_label(
     return f"Page {page_index} field {field_index}", False
 
 
-def _label_candidates(rect: fitz.Rect, text_lines: list[TextLine], *, prefer_right: bool) -> list[str]:
+def _prefers_following_label(widget: fitz.Widget) -> bool:
+    """Check boxes are labelled by the text that follows them."""
+    return int(getattr(widget, "field_type", -1)) == fitz.PDF_WIDGET_TYPE_CHECKBOX
+
+
+def _prefers_side_label(widget: fitz.Widget) -> bool:
+    """Signature boxes are labelled beside them, however wide they are.
+
+    A signature box in a table row is wide enough to trigger the caption-above preference, which
+    then reads whatever heading happens to sit above the table.
+    """
+    widget_type = int(getattr(widget, "field_type", -1))
+    if widget_type in (fitz.PDF_WIDGET_TYPE_SIGNATURE, fitz.PDF_WIDGET_TYPE_BUTTON):
+        return True
+    return bool(widget_field_flags(widget) & FLAG_PUSHBUTTON)
+
+
+def _label_candidates(
+    rect: fitz.Rect,
+    text_lines: list[TextLine],
+    *,
+    prefer_right: bool,
+    prefer_side: bool = False,
+) -> list[str]:
     """Ordered label guesses.
 
-    Check boxes are labelled by the text that follows them. Wide entry boxes are captioned on
-    the line above, while narrow ones are labelled by the text beside them - reading a wide
-    box's neighbour picks up whatever body copy happens to sit alongside it.
+    Wide entry boxes are captioned on the line above, while narrow ones are labelled by the text
+    beside them - reading a wide box's neighbour picks up whatever body copy sits alongside it.
     """
     right = _adjacent_line(rect, text_lines, to_right=True)
     left = _adjacent_line(rect, text_lines, to_right=False)
     beside = [right, left] if prefer_right else [left, right]
     above = _caption_lines_above(rect, text_lines)
 
-    if not prefer_right and rect.width >= WIDE_FIELD_WIDTH:
+    if not prefer_right and not prefer_side and rect.width >= WIDE_FIELD_WIDTH:
         ordered = [*above, *beside]
     else:
         ordered = [*beside, *above]
@@ -291,17 +429,34 @@ def _label_candidates(rect: fitz.Rect, text_lines: list[TextLine], *, prefer_rig
 
 
 def _adjacent_line(rect: fitz.Rect, text_lines: list[TextLine], *, to_right: bool) -> TextLine | None:
+    """The text beside a field, joined when the label wraps onto more than one line.
+
+    A label in a table cell often wraps - "Signature of Principal or / Authorized Official:" -
+    and reading only the nearest line loses half of it.
+    """
     center_y = (rect.y0 + rect.y1) / 2
-    matches = []
+    band_top = min(rect.y0, center_y - SIDE_LABEL_BAND)
+    band_bottom = max(rect.y1, center_y + SIDE_LABEL_BAND)
+
+    matches: list[tuple[float, TextLine]] = []
     for line in text_lines:
-        if abs((line.y0 + line.y1) / 2 - center_y) > SIDE_LABEL_BAND:
+        line_center = (line.y0 + line.y1) / 2
+        if not band_top <= line_center <= band_bottom:
             continue
         gap = line.x0 - rect.x1 if to_right else rect.x0 - line.x1
         if 0 <= gap < SIDE_LABEL_GAP:
             matches.append((gap, line))
     if not matches:
         return None
-    return min(matches, key=lambda item: item[0])[1]
+
+    nearest_gap = min(gap for gap, _ in matches)
+    wrapped = [line for gap, line in matches if gap - nearest_gap < WRAPPED_LABEL_TOLERANCE]
+    wrapped.sort(key=lambda line: line.y0)
+    wrapped = wrapped[:WRAPPED_LABEL_LINE_LIMIT]
+
+    joined = " ".join(line.text.strip() for line in wrapped if line.text.strip())
+    first = wrapped[0]
+    return TextLine(x0=first.x0, y0=first.y0, x1=max(line.x1 for line in wrapped), y1=wrapped[-1].y1, text=joined)
 
 
 def _caption_lines_above(rect: fitz.Rect, text_lines: list[TextLine]) -> list[TextLine]:
