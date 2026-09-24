@@ -44,6 +44,14 @@
     pageNext: document.getElementById("page-next"),
     pageLast: document.getElementById("page-last"),
     nextRequiredButton: document.getElementById("next-required-button"),
+    progressSummary: document.getElementById("progress-summary"),
+    submitModal: document.getElementById("submit-modal"),
+    submitModalCopy: document.getElementById("submit-modal-copy"),
+    submitModalList: document.getElementById("submit-modal-list"),
+    submitModalTitle: document.getElementById("submit-modal-title"),
+    closeSubmitModalButton: document.getElementById("close-submit-modal-button"),
+    cancelSubmitButton: document.getElementById("cancel-submit-button"),
+    confirmSubmitButton: document.getElementById("confirm-submit-button"),
     documentPanel: document.getElementById("document-panel"),
     signatureModal: document.getElementById("signature-modal"),
     closeModalButton: document.getElementById("close-modal-button"),
@@ -149,10 +157,83 @@
       return;
     }
 
-    const hasMissingRequiredField = state.context.fields.some(
-      (field) => field.is_required && !fieldIsComplete(field),
-    );
-    nodes.submitButton.disabled = hasMissingRequiredField;
+    // The button stays enabled so pressing it can explain what is still missing, rather than
+    // leaving a signer with a dead control and no reason for it.
+    nodes.submitButton.disabled = false;
+    updateProgressSummary();
+  }
+
+  function outstandingRequiredFields() {
+    if (!state.context) return [];
+    return state.context.fields
+      .filter((field) => field.is_required && !fieldIsComplete(field))
+      .sort((first, second) => first.page - second.page || first.order - second.order);
+  }
+
+  function updateProgressSummary() {
+    if (!nodes.progressSummary || !state.context) return;
+    const total = state.context.fields.filter((field) => field.is_required).length;
+    const outstanding = outstandingRequiredFields().length;
+    if (!total) {
+      nodes.progressSummary.textContent = `${state.context.fields.length} field${state.context.fields.length === 1 ? "" : "s"} to review`;
+      return;
+    }
+    nodes.progressSummary.textContent =
+      outstanding === 0
+        ? `All ${total} required field${total === 1 ? "" : "s"} complete`
+        : `${total - outstanding} of ${total} required fields complete`;
+  }
+
+  function openSubmitModal() {
+    const outstanding = outstandingRequiredFields();
+    nodes.submitModalList.innerHTML = "";
+
+    if (outstanding.length) {
+      nodes.submitModalTitle.textContent = "Some required fields are empty";
+      nodes.submitModalCopy.textContent =
+        `You still have ${outstanding.length} required field${outstanding.length === 1 ? "" : "s"} to complete. ` +
+        "Choose one to jump to it.";
+      outstanding.forEach((field) => {
+        const item = document.createElement("button");
+        item.type = "button";
+        item.className = "submit-issue";
+        item.innerHTML = `<strong></strong><span></span>`;
+        item.querySelector("strong").textContent = field.label;
+        item.querySelector("span").textContent = `${field.field_type} · page ${field.page}`;
+        item.addEventListener("click", () => {
+          closeSubmitModal();
+          focusField(field);
+        });
+        nodes.submitModalList.appendChild(item);
+      });
+      nodes.confirmSubmitButton.hidden = true;
+      nodes.cancelSubmitButton.textContent = "Keep editing";
+    } else {
+      const completed = state.context.fields.filter((field) => fieldIsComplete(field)).length;
+      nodes.submitModalTitle.textContent = "Submit this document?";
+      nodes.submitModalCopy.textContent =
+        `You are about to submit ${completed} completed field${completed === 1 ? "" : "s"}. ` +
+        "Once submitted you cannot change your answers.";
+      nodes.confirmSubmitButton.hidden = false;
+      nodes.cancelSubmitButton.textContent = "Cancel";
+    }
+
+    nodes.submitModal.hidden = false;
+  }
+
+  function closeSubmitModal() {
+    nodes.submitModal.hidden = true;
+  }
+
+  function focusField(field) {
+    const input = fieldInputNodes.get(field.id);
+    if (!input) {
+      goToPage(field.page);
+      return;
+    }
+    input.scrollIntoView({ behavior: "smooth", block: "center" });
+    setCurrentPage(field.page);
+    window.setTimeout(() => input.focus({ preventScroll: true }), 320);
   }
 
   function renderFieldList() {
@@ -472,16 +553,7 @@
       .filter((field) => field.is_required && !fieldIsComplete(field))
       .sort((first, second) => first.page - second.page || first.order - second.order);
     const target = outstanding.find((field) => field.page >= state.currentPage) || outstanding[0];
-    if (!target) return;
-
-    const input = fieldInputNodes.get(target.id);
-    if (!input) {
-      goToPage(target.page);
-      return;
-    }
-    input.scrollIntoView({ behavior: "smooth", block: "center" });
-    setCurrentPage(target.page);
-    window.setTimeout(() => input.focus({ preventScroll: true }), 320);
+    if (target) focusField(target);
   }
 
   function updateDocumentMeta() {
@@ -811,8 +883,17 @@
   nodes.pageLast?.addEventListener("click", () => goToPage(state.context?.pages.length || 1));
   nodes.nextRequiredButton?.addEventListener("click", focusNextRequiredField);
 
-  nodes.submitButton.addEventListener("click", () => {
+  nodes.submitButton.addEventListener("click", openSubmitModal);
+  nodes.confirmSubmitButton?.addEventListener("click", () => {
+    closeSubmitModal();
     void submitDocument();
+  });
+  nodes.cancelSubmitButton?.addEventListener("click", closeSubmitModal);
+  nodes.closeSubmitModalButton?.addEventListener("click", closeSubmitModal);
+  nodes.submitModal?.addEventListener("click", (event) => {
+    if (event.target instanceof HTMLElement && event.target.dataset.closeSubmitModal === "true") {
+      closeSubmitModal();
+    }
   });
 
   nodes.closeModalButton.addEventListener("click", closeSignatureModal);
@@ -822,6 +903,10 @@
     }
   });
   document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && nodes.submitModal && !nodes.submitModal.hidden) {
+      closeSubmitModal();
+      return;
+    }
     if (event.key === "Escape" && !nodes.signatureModal.hidden) {
       closeSignatureModal();
     }

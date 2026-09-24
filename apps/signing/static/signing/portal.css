@@ -712,3 +712,90 @@ input {
     overflow-x: auto;
   }
 }
+
+/* The progress list scrolls on its own so the submit control is never scrolled away. */
+.progress-panel {
+  position: sticky;
+  top: 18px;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  gap: 14px;
+  max-height: calc(100vh - 36px);
+}
+
+.progress-header h2 {
+  margin: 0 0 4px;
+}
+
+.progress-summary {
+  margin: 0;
+  font-size: 12px;
+  font-weight: 700;
+  color: #9cadbd;
+}
+
+.progress-panel .field-list {
+  margin: 0;
+  overflow-y: auto;
+  padding-right: 4px;
+}
+
+.progress-footer {
+  padding-top: 14px;
+  border-top: 1px solid rgba(218, 232, 248, 0.12);
+}
+
+.modal-card-narrow {
+  max-width: 460px;
+}
+
+.submit-issue-list {
+  display: grid;
+  gap: 8px;
+  max-height: 46vh;
+  overflow-y: auto;
+  margin: 14px 0 4px;
+}
+
+.submit-issue {
+  display: grid;
+  gap: 3px;
+  padding: 11px 12px;
+  border: 1px solid rgba(218, 232, 248, 0.12);
+  border-radius: 12px;
+  background: rgba(248, 250, 252, 0.06);
+  color: #f8fafc;
+  text-align: left;
+  cursor: pointer;
+}
+
+.submit-issue:hover {
+  border-color: rgba(32, 214, 229, 0.4);
+}
+
+.submit-issue strong {
+  font-size: 13px;
+}
+
+.submit-issue span {
+  font-size: 12px;
+  color: #8aa0b6;
+}
+
+@media (max-width: 900px) {
+  /* On a narrow screen the panel cannot be sticky, so the submit control is pinned instead. */
+  .progress-panel {
+    position: static;
+    max-height: none;
+  }
+
+  .progress-footer {
+    position: sticky;
+    bottom: 0;
+    margin: 0 -24px -24px;
+    padding: 14px 24px;
+    border-radius: 0 0 18px 18px;
+    background: rgba(9, 19, 29, 0.96);
+    backdrop-filter: blur(12px);
+  }
+}

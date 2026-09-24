@@ -28,7 +28,6 @@ from apps.billing.entitlements import PlanFeatureEnum, require_feature, require_
 from apps.signing.models import SigningRequest
 from services.authored_pdf import AuthoredPDFRenderer
 from services.docx_import import DocxImporter, DocxImportError
-from services.pdf_anchors import conceal_anchor_tags_on_page
 from services.pdf_engine import PDFEngine
 from tasks.notifications import (
     send_admin_account_created,
@@ -37,7 +36,7 @@ from tasks.notifications import (
 )
 from utils.file_storage import temporary_plaintext_file
 from utils.identity import email_digest
-from utils.pdf_preview import build_preview_matrix
+from utils.pdf_preview import build_preview_matrix, prepare_page_for_preview
 from utils.task_dispatch import enqueue_task
 from utils.throttling import SignacoreRateThrottle
 
@@ -895,7 +894,7 @@ class AdminDocumentPagePreviewView(APIView):
                     if page_number < 1 or page_number > pdf_document.page_count:
                         return Response({"detail": "Page not found."}, status=status.HTTP_404_NOT_FOUND)
                     page = pdf_document[page_number - 1]
-                    conceal_anchor_tags_on_page(page)
+                    prepare_page_for_preview(page)
                     matrix = build_preview_matrix(page, request.query_params.get("width"))
                     pixmap = page.get_pixmap(matrix=matrix, alpha=False)
         except Exception:
