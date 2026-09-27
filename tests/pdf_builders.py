@@ -443,3 +443,110 @@ def build_placeholder_appearance_pdf() -> bytes:
     widget.field_value = "[Minor full legal name]"
     page.add_widget(widget)
     return _to_bytes(document)
+
+
+def build_mixed_packet_pdf() -> bytes:
+    """A packet whose first page is a native form and whose second was laid out to be printed.
+
+    Assembling unrelated documents into one file is routine, and the printed page carries the
+    signature block that makes the packet worth signing.
+    """
+    document, page = _new_document()
+    page.insert_text((72, 138), "Employee name:", fontsize=10)
+    page.add_widget(_text_widget(name="employeeName", rect=fitz.Rect(170, 128, 380, 146)))
+
+    printed = document.new_page(width=PAGE_WIDTH, height=PAGE_HEIGHT)
+    printed.insert_text((72, 120), "Acknowledgement of Receipt", fontsize=12)
+    printed.insert_text((72, 200), "Printed Legal Name:", fontsize=10)
+    shape = printed.new_shape()
+    shape.draw_line((72, 320), (300, 320))
+    shape.finish(width=1)
+    shape.commit()
+    printed.insert_text((72, 334), "Employee Signature", fontsize=9)
+    return _to_bytes(document)
+
+
+def build_exclusive_checkbox_group_pdf() -> bytes:
+    """Checkboxes made mutually exclusive by a script that switches the others off.
+
+    Attestations are built this way when the author wants tick boxes rather than radio buttons.
+    Importing the boxes separately would let a signer attest to two of them at once.
+    """
+    document, page = _new_document()
+    page.insert_text((72, 120), "Select one status:", fontsize=10)
+    names = ("CB_1", "CB_2", "CB_3")
+    for index, name in enumerate(names):
+        top = 140.0 + index * 20.0
+        widget = fitz.Widget()
+        widget.field_name = name
+        widget.field_type = fitz.PDF_WIDGET_TYPE_CHECKBOX
+        widget.rect = fitz.Rect(72, top, 84, top + 12)
+        page.add_widget(widget)
+        others = "".join(f'this.getField\\("{other}"\\).value = "Off";' for other in names if other != name)
+        action_xref = _js_action(document, f'if \\(this.getField\\("{name}"\\).value == "On"\\) {{{others}}}')
+        document.xref_set_key(list(page.widgets())[-1].xref, "A", f"{action_xref} 0 R")
+    return _to_bytes(document)
+
+
+def build_printed_signature_widget_pdf() -> bytes:
+    """A form built to be printed, where the signature and its date are plain text widgets.
+
+    Government forms do this, so the widget type says nothing about what the field collects and
+    the label is the only evidence. The date accompanying a signature must stay a text field.
+    """
+    document, page = _new_document()
+    page.add_widget(
+        _text_widget(name="Signature of Employee", rect=fitz.Rect(72, 300, 380, 318), label="Signature of Employee")
+    )
+    page.add_widget(
+        _text_widget(
+            name="Todays Date",
+            rect=fitz.Rect(390, 300, 520, 318),
+            label="Enter Today's Date of Signature mm/dd/yyyy",
+        )
+    )
+    page.add_widget(
+        _text_widget(
+            name="Employee Middle Initial",
+            rect=fitz.Rect(72, 340, 140, 358),
+            label="Enter Middle Initial, if any",
+        )
+    )
+    page.add_widget(_text_widget(name="Applicant Initials", rect=fitz.Rect(150, 340, 220, 358), label="Initials"))
+    return _to_bytes(document)
+
+
+def build_section_tooltip_pdf() -> bytes:
+    """Widgets whose tooltips describe the section they sit in rather than the field itself.
+
+    A tooltip is written for a screen reader, so it leads with where the field sits and can repeat
+    across a whole section. Using it verbatim gives every field in that section the same label.
+    """
+    document, page = _new_document()
+    descriptions = (
+        "Section 2. Employer Review and Verification. Enter the issuing authority for List A.",
+        "Section 2. Employer Review and Verification. Enter the document number for List A.",
+    )
+    names = ("Issuing Authority 1", "Document Number 1")
+    for index, (name, description) in enumerate(zip(names, descriptions)):
+        top = 200.0 + index * 24.0
+        page.add_widget(_text_widget(name=name, rect=fitz.Rect(72, top, 380, top + 18), label=description))
+    return _to_bytes(document)
+
+
+def build_header_rule_pdf() -> bytes:
+    """A printed page ruled off under its header and above its footer.
+
+    Running heads are ruled this way on every page. The rules are the full width of the text block
+    and look exactly like signature lines to anything measuring only shape.
+    """
+    document, page = _new_document()
+    page.insert_text((72, 30), "Se7en Equity Holdings Inc. | Confidential", fontsize=8)
+    page.insert_text((72, 400), "Reference material only.", fontsize=10)
+    page.insert_text((72, 780), "Page 3 of 9", fontsize=8)
+    shape = page.new_shape()
+    shape.draw_line((72, 36), (540, 36))
+    shape.draw_line((72, 770), (540, 770))
+    shape.finish(width=1)
+    shape.commit()
+    return _to_bytes(document)

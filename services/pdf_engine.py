@@ -17,11 +17,22 @@ from services.pdf_form_import import (
     is_comb_widget,
     is_widget_required,
     resolve_label,
+    shared_tooltip_labels,
     widget_max_length,
 )
 from services.pdf_sanitizer import assert_sanitized, sanitize_document
 
 MIN_TEXT_LAYER_CHARS = 24
+# A running header or footer is ruled off across the full width of the page. Nobody signs in the
+# margin, so a rule that sits in one is decoration rather than a place to write.
+HEADER_FOOTER_MARGIN = 48.0
+# How far below a caption its writing rule is drawn.
+UNDERLINE_GAP = 10.0
+# Words that join a clause to the rest of its sentence. A field caption never hangs on one.
+CLAUSE_WORDS = frozenset(
+    """a an and as at because before but by for from if in of on or since than that the
+    to unless until when which while with without""".split()
+)
 
 
 @dataclass
@@ -74,7 +85,7 @@ class PDFEngine:
 
             native_result = self._import_native_widgets(document)
             if native_result.report.native_widget_count:
-                return native_result
+                return self._add_fields_from_plain_pages(document, native_result)
 
             heuristic_fields = self.detect_heuristic(document)
             report = ImportReport(
@@ -137,11 +148,43 @@ class PDFEngine:
             )
         return detected_fields, scan.unplaced_tag_count
 
+    def _add_fields_from_plain_pages(self, document: fitz.Document, native_result: ImportResult) -> ImportResult:
+        """Run heuristics over the pages that carry no widgets of their own.
+
+        Packets are assembled from unrelated sources, so a fillable government form can sit between
+        an agreement and a policy that were only ever laid out to be printed. A page holding widgets
+        is described entirely by them and is left alone, which keeps an unsupported control from
+        being recreated from its visual outline. A page holding none has nothing to recreate, and
+        skipping it would silently drop every signature line on it.
+        """
+        widget_pages = frozenset(index for index, page in enumerate(document, start=1) if list(page.widgets() or []))
+        if len(widget_pages) == document.page_count:
+            return native_result
+
+        extra_fields = self.detect_heuristic(document, skip_pages=widget_pages)
+        if not extra_fields:
+            return native_result
+
+        fields = native_result.fields + extra_fields
+        for order, detected_field in enumerate(fields, start=1):
+            detected_field.order = order
+
+        report = native_result.report
+        report.imported_field_count = len(fields)
+        # SIGNATURE_FIELD_NOT_DETECTED is deliberately left alone. It reports that the form's own
+        # pages declared nowhere to sign, which a signature line found on an unrelated page of the
+        # same file does not answer - the W-9's instruction pages must not silence the prompt to
+        # place a signature field on the form itself.
+        report.warning_codes = [
+            code for code in report.warning_codes if code != ImportWarningEnum.NO_SUPPORTED_FIELDS_IMPORTED
+        ]
+        return ImportResult(fields=fields, report=report)
+
     def _import_native_widgets(self, document: fitz.Document) -> ImportResult:
         """Import only widgets SignaCore can represent faithfully, reporting everything skipped.
 
-        A PDF that has native widgets never falls back to heuristics, even when every widget is
-        skipped, so unsupported controls are not recreated from their visual outlines.
+        A page that has native widgets never falls back to heuristics, even when every widget on it
+        is skipped, so unsupported controls are not recreated from their visual outlines.
         """
         detected_fields: list[DetectedField] = []
         report = ImportReport(source=DocumentField.DetectionSourceEnum.ACROFORM)
@@ -152,6 +195,7 @@ class PDFEngine:
             if not widgets:
                 continue
             text_lines = collect_text_lines(page)
+            page_tooltips = shared_tooltip_labels(widgets)
             page_height = page.rect.height
             page_field_index = 1
             label_counts: dict[str, int] = {}
@@ -159,7 +203,9 @@ class PDFEngine:
 
             for widget in widgets:
                 report.native_widget_count += 1
-                label, is_confident = resolve_label(widget, text_lines, page_index, page_field_index)
+                label, is_confident = resolve_label(
+                    widget, text_lines, page_index, page_field_index, shared_tooltips=page_tooltips
+                )
                 field_type, warning_code = classify_widget(document, widget, label)
                 if warning_code:
                     report.warning_codes.append(warning_code)
@@ -223,10 +269,14 @@ class PDFEngine:
                 return label
         return ""
 
-    def detect_heuristic(self, document: fitz.Document) -> list[DetectedField]:
+    def detect_heuristic(
+        self, document: fitz.Document, skip_pages: frozenset[int] = frozenset()
+    ) -> list[DetectedField]:
         detected_fields: list[DetectedField] = []
         order = 1
         for page_index, page in enumerate(document, start=1):
+            if page_index in skip_pages:
+                continue
             page_height = page.rect.height
             line_words = self._collect_line_words(page)
             drawings = page.get_drawings()
@@ -522,6 +572,8 @@ class PDFEngine:
                 continue
 
             label = self._clean_label(line_text)
+            if not self._is_caption(label):
+                continue
             field_type = self._heuristic_type_for_text(label.lower()) or DocumentField.FieldTypeEnum.TEXT
             x1 = max(float(word[2]) for word in words)
             y1 = max(float(word[3]) for word in words)
@@ -636,6 +688,8 @@ class PDFEngine:
                 continue
             if rect.width < 40.0 or rect.height > 2.5:
                 continue
+            if rect.y1 <= HEADER_FOOTER_MARGIN or rect.y0 >= page_height - HEADER_FOOTER_MARGIN:
+                continue
             if self._is_table_border(rect, vertical_lines):
                 continue
             if self._line_overlaps_text(rect, line_words):
@@ -646,6 +700,9 @@ class PDFEngine:
                 continue
 
             label = self._label_for_horizontal_line(rect, line_words)
+            if label and not self._is_caption(label):
+                # Body copy that happens to run alongside a rule, not a caption for it.
+                continue
             if not label:
                 label = f"Signature {order}"
                 field_type = DocumentField.FieldTypeEnum.SIGNATURE
@@ -719,21 +776,41 @@ class PDFEngine:
         return self._line_height_for_words(closest_line)
 
     def _label_for_horizontal_line(self, rect: fitz.Rect, line_words: list[list[tuple[Any, ...]]]) -> str:
-        candidates: list[str] = []
+        """Find the caption to the left of a ruled writing space.
+
+        The rule is drawn a little below the baseline of the row it belongs to, which can leave it
+        nearer the caption of the row underneath than its own. Text sitting above the rule is
+        therefore preferred over text merely centred on it, so a signature line is not labelled
+        with the name of the line below it.
+        """
         line_center_y = (rect.y0 + rect.y1) / 2
+        above: list[tuple[float, str]] = []
+        beside: list[tuple[float, str]] = []
         for words in line_words:
-            left_words = []
+            left_words: list[str] = []
+            top = bottom = None
             for word in words:
-                x0, y0, x1, y1 = map(float, word[:4])
+                _, y0, x1, y1 = map(float, word[:4])
                 center_y = (y0 + y1) / 2
-                if abs(center_y - line_center_y) > 12.0:
+                near_row = abs(center_y - line_center_y) <= 12.0
+                sits_above = 0.0 <= rect.y0 - y1 <= UNDERLINE_GAP
+                if not (near_row or sits_above):
                     continue
-                if x1 <= rect.x0 + 8.0 and x1 >= rect.x0 - 220.0:
-                    left_words.append(str(word[4]))
-            if left_words:
-                candidates.append(" ".join(left_words[-4:]))
-        cleaned = self._clean_label(candidates[-1] if candidates else "")
-        return cleaned
+                if not (rect.x0 - 220.0 <= x1 <= rect.x0 + 8.0):
+                    continue
+                left_words.append(str(word[4]))
+                top = y0 if top is None else min(top, y0)
+                bottom = y1 if bottom is None else max(bottom, y1)
+            if not left_words or top is None or bottom is None:
+                continue
+            phrase = " ".join(left_words[-4:])
+            gap = rect.y0 - bottom
+            if 0.0 <= gap <= UNDERLINE_GAP:
+                above.append((gap, phrase))
+            else:
+                beside.append((abs((top + bottom) / 2 - line_center_y), phrase))
+        ranked = sorted(above) or sorted(beside)
+        return self._clean_label(ranked[0][1]) if ranked else ""
 
     def _text_before_first_blank(self, line_text: str) -> str:
         match = self.underscore_pattern.search(line_text)
@@ -788,6 +865,23 @@ class PDFEngine:
                 if abs(y1 - rect.y0) <= 4.0 or abs(y0 - rect.y1) <= 4.0:
                     return True
         return False
+
+    @staticmethod
+    def _is_caption(label: str) -> bool:
+        """Check that a caption names something rather than continuing a sentence.
+
+        Prose reaching the end of a line, or broken by a colon mid-sentence, reads as a caption to
+        anything looking only at where the words sit. A caption names a thing being asked for, so it
+        opens its own phrase and closes it: one starting mid-sentence in lower case belongs to the
+        paragraph around it, and one hinging on a joining word is a clause taken out of that
+        paragraph rather than the name of a field.
+        """
+        if not label or label[:1].islower():
+            return False
+        words = label.split()
+        if not words:
+            return False
+        return words[0].lower() not in CLAUSE_WORDS and words[-1].lower() not in CLAUSE_WORDS
 
     def _is_table_border(self, rect: fitz.Rect, vertical_lines: list[fitz.Rect]) -> bool:
         intersections = 0

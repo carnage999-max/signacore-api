@@ -1041,11 +1041,13 @@ class ScriptedFieldClassificationTests(TestCase):
         self.assertEqual(payload["detection_summary"]["imported_field_count"], 1)
         self.assertEqual(payload["detection_summary"]["ignored_widget_count"], 0)
 
-    def test_a_validation_rule_still_skips_the_field(self) -> None:
+    def test_a_validation_rule_does_not_stop_the_field_importing(self) -> None:
         payload = self.upload(builders.build_validated_text_field_pdf())
 
-        self.assertEqual(payload["fields"], [])
-        self.assertIn("UNSUPPORTED_PDF_JAVASCRIPT", payload["detection_summary"]["warning_codes"])
+        self.assertEqual([field["field_type"] for field in payload["fields"]], ["TEXT"])
+        self.assertEqual(payload["detection_summary"]["ignored_widget_count"], 0)
+        self.assertIn("FIELD_VALIDATION_NOT_ENFORCED", payload["detection_summary"]["warning_codes"])
+        self.assertNotIn("UNSUPPORTED_PDF_JAVASCRIPT", payload["detection_summary"]["warning_codes"])
 
     def test_a_calculation_still_skips_the_field(self) -> None:
         payload = self.upload(builders.build_javascript_calculation_pdf())
@@ -1161,3 +1163,112 @@ class PreviewPagePreparationTests(SimpleTestCase):
 
         with fitz.open("pdf", pdf_bytes) as reopened:
             self.assertIn("[Minor full legal name]", reopened[0].get_text())
+
+
+@override_settings(
+    MEDIA_ROOT=TEST_MEDIA_ROOT,
+    SIGNACORE_SHARED_SECRET="test-signacore-secret",
+    SIGNACORE_SERVICE_USERNAME="signacore-service",
+    SIGNACORE_APP_URL="https://mysignacore.com",
+    EMAIL_BACKEND="django.core.mail.backends.locmem.EmailBackend",
+    CELERY_TASK_ALWAYS_EAGER=True,
+    CELERY_TASK_EAGER_PROPAGATES=True,
+)
+class MixedPacketImportTests(TestCase):
+    """An onboarding packet is several documents in one file.
+
+    A fillable government form sits between agreements that were only ever laid out to be printed,
+    so deciding between native widgets and heuristics once for the whole file left every printed
+    signature block in a 31-page packet undetected.
+    """
+
+    def setUp(self) -> None:
+        cache.clear()
+        self.client = APIClient()
+        self.user = get_user_model().objects.create_user(
+            username="admin", email="admin@mysignacore.com", password="password123", is_staff=True
+        )
+        self.organization = Organization.objects.create(name="Packet Company", created_by=self.user)
+        OrganizationMembership.objects.create(
+            organization=self.organization, user=self.user, role=OrganizationMembership.RoleEnum.ADMIN
+        )
+        self.client.credentials(
+            HTTP_X_SIGNACORE_SECRET=settings.SIGNACORE_SHARED_SECRET,
+            HTTP_X_SIGNACORE_ADMIN_ID=str(self.user.id),
+            HTTP_X_SIGNACORE_ORGANIZATION_ID=str(self.organization.id),
+        )
+
+    def upload(self, pdf_bytes: bytes) -> dict:
+        response = self.client.post(
+            "/api/admin/documents/",
+            {"title": "Packet", "pdf_file": SimpleUploadedFile("p.pdf", pdf_bytes, content_type="application/pdf")},
+            format="multipart",
+        )
+        self.assertEqual(response.status_code, 201, response.json())
+        return response.json()
+
+    def test_a_printed_page_is_detected_alongside_a_native_form_page(self) -> None:
+        payload = self.upload(builders.build_mixed_packet_pdf())
+
+        sources = {field["page"]: field["detection_source"] for field in payload["fields"]}
+        self.assertEqual(sources[1], "ACROFORM")
+        self.assertEqual(sources[2], "HEURISTIC")
+        self.assertIn("SIGNATURE", [field["field_type"] for field in payload["fields"] if field["page"] == 2])
+
+    def test_a_page_carrying_widgets_is_never_read_heuristically(self) -> None:
+        payload = self.upload(builders.build_mixed_packet_pdf())
+
+        page_one = [field for field in payload["fields"] if field["page"] == 1]
+        self.assertEqual([field["detection_source"] for field in page_one], ["ACROFORM"])
+
+    def test_field_order_is_continuous_across_both_detection_paths(self) -> None:
+        payload = self.upload(builders.build_mixed_packet_pdf())
+
+        orders = sorted(field["order"] for field in payload["fields"])
+        self.assertEqual(orders, list(range(1, len(orders) + 1)))
+
+    def test_a_mutually_exclusive_checkbox_group_is_reported_not_imported(self) -> None:
+        payload = self.upload(builders.build_exclusive_checkbox_group_pdf())
+
+        self.assertEqual(payload["fields"], [])
+        self.assertIn("UNSUPPORTED_EXCLUSIVE_CHECKBOX_GROUP", payload["detection_summary"]["warning_codes"])
+        self.assertEqual(payload["detection_summary"]["ignored_widget_count"], 3)
+
+    def test_a_signature_named_text_widget_becomes_a_signature_field(self) -> None:
+        payload = self.upload(builders.build_printed_signature_widget_pdf())
+
+        types = {field["label"]: field["field_type"] for field in payload["fields"]}
+        self.assertEqual(types["Signature of Employee"], "SIGNATURE")
+
+    def test_the_date_accompanying_a_signature_stays_a_text_field(self) -> None:
+        payload = self.upload(builders.build_printed_signature_widget_pdf())
+
+        dates = [field for field in payload["fields"] if "Date" in field["label"]]
+        self.assertEqual([field["field_type"] for field in dates], ["TEXT"])
+
+    def test_a_middle_initial_is_a_text_field_not_a_signing_mark(self) -> None:
+        payload = self.upload(builders.build_printed_signature_widget_pdf())
+
+        types = {field["label"]: field["field_type"] for field in payload["fields"]}
+        self.assertEqual(types["Middle Initial, if any"], "TEXT")
+        self.assertEqual(types["Initials"], "INITIALS")
+
+    def test_a_tooltip_describing_a_section_is_not_used_as_a_label(self) -> None:
+        payload = self.upload(builders.build_section_tooltip_pdf())
+
+        labels = sorted(field["label"] for field in payload["fields"])
+        self.assertEqual(labels, ["Document Number 1", "Issuing Authority 1"])
+        for label in labels:
+            self.assertNotIn("Employer Review", label)
+
+    def test_a_rule_under_a_running_header_is_not_a_signature_line(self) -> None:
+        payload = self.upload(builders.build_header_rule_pdf())
+
+        self.assertEqual(payload["fields"], [])
+        self.assertIn("NO_FIELDS_DETECTED", payload["detection_summary"]["warning_codes"])
+
+    def test_a_signature_found_on_a_printed_page_does_not_silence_the_form_prompt(self) -> None:
+        """The W-9 signs on its form page, and its instruction pages must not answer for it."""
+        payload = self.upload(builders.build_mixed_packet_pdf())
+
+        self.assertIn("SIGNATURE_FIELD_NOT_DETECTED", payload["detection_summary"]["warning_codes"])
