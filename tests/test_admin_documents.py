@@ -510,7 +510,7 @@ class AdminDocumentUploadTests(TestCase):
             )
         )
 
-    def test_upload_pdf_truncates_overlong_detected_labels(self) -> None:
+    def test_upload_pdf_prefers_the_field_name_over_an_overlong_tooltip(self) -> None:
         upload = SimpleUploadedFile(
             "long-label.pdf",
             build_acroform_pdf_with_long_label(),
@@ -525,7 +525,9 @@ class AdminDocumentUploadTests(TestCase):
 
         self.assertEqual(response.status_code, 201, response.json())
         payload = response.json()
-        self.assertEqual(len(payload["fields"][0]["label"]), 255)
+        label = payload["fields"][0]["label"]
+        self.assertNotIn("LLL", label)
+        self.assertEqual(label, "Employee name")
 
     def test_list_documents_returns_signer_progress_counts(self) -> None:
         first = Document.objects.create(

@@ -7,6 +7,7 @@ are detected only so the widget carrying them can be handled safely, never run.
 from __future__ import annotations
 
 import re
+from collections import Counter
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -18,6 +19,7 @@ from apps.documents.models import DocumentField
 class ImportWarningEnum:
     ANCHOR_TAG_NOT_PLACED = "ANCHOR_TAG_NOT_PLACED"
     FIELD_FORMATTING_NOT_APPLIED = "FIELD_FORMATTING_NOT_APPLIED"
+    FIELD_VALIDATION_NOT_ENFORCED = "FIELD_VALIDATION_NOT_ENFORCED"
     HIDDEN_FIELD_IGNORED = "HIDDEN_FIELD_IGNORED"
     NO_FIELDS_DETECTED = "NO_FIELDS_DETECTED"
     NO_SUPPORTED_FIELDS_IMPORTED = "NO_SUPPORTED_FIELDS_IMPORTED"
@@ -25,6 +27,7 @@ class ImportWarningEnum:
     SIGNATURE_FIELD_NOT_DETECTED = "SIGNATURE_FIELD_NOT_DETECTED"
     UNSUPPORTED_ACTION_BUTTON = "UNSUPPORTED_ACTION_BUTTON"
     UNSUPPORTED_CHOICE_FIELD = "UNSUPPORTED_CHOICE_FIELD"
+    UNSUPPORTED_EXCLUSIVE_CHECKBOX_GROUP = "UNSUPPORTED_EXCLUSIVE_CHECKBOX_GROUP"
     UNSUPPORTED_PDF_JAVASCRIPT = "UNSUPPORTED_PDF_JAVASCRIPT"
     UNSUPPORTED_RADIO_GROUP = "UNSUPPORTED_RADIO_GROUP"
     UNSUPPORTED_READ_ONLY_FIELD = "UNSUPPORTED_READ_ONLY_FIELD"
@@ -47,9 +50,12 @@ FLAG_RICH_TEXT = 1 << 25
 ANNOT_FLAG_HIDDEN = 1 << 1
 ANNOT_FLAG_NO_VIEW = 1 << 5
 
-# PDF 32000-1 table 197: additional-action slots.
-# A slot either changes the value the field holds, or only how it is shown while typing.
-VALUE_AFFECTING_SLOTS = ("C", "V")
+# PDF 32000-1 table 197: additional-action slots, grouped by what SignaCore loses by not running
+# them. A calculation derives the value, so a field carrying one cannot be filled in faithfully. A
+# validation rule only rejects input a signer typed, and a formatting or keystroke rule only changes
+# how that input is displayed - neither decides what the value becomes.
+VALUE_AFFECTING_SLOTS = ("C",)
+VALIDATION_SLOTS = ("V",)
 PRESENTATIONAL_SLOTS = ("F", "K", "Fo", "Bl")
 IMAGE_BUTTON_ACTION = "buttonimporticon"
 PARENT_CHAIN_LIMIT = 8
@@ -61,7 +67,22 @@ LABEL_START_PATTERN = re.compile(r"^[A-Za-z0-9(]")
 ITEM_NUMBER_PATTERN = re.compile(r"^(\d+[a-z]?)\s*[.)]?\s+(?=\S)")
 SENTENCE_SPLIT_PATTERN = re.compile(r"(?<=\.)\s+(?=[A-Z])")
 INITIALS_PATTERN = re.compile(r"\binitials?\b", re.IGNORECASE)
+# A middle initial is one letter of a printed name, not a signing mark, so it stays a text field.
+MIDDLE_INITIAL_PATTERN = re.compile(r"\bmiddle\s+initials?\b", re.IGNORECASE)
 SIGNATURE_LABEL_PATTERN = re.compile(r"\b(signature|sign here|signed by)\b", re.IGNORECASE)
+# "Today's Date of Signature" names a date, not somewhere to sign.
+DATE_LABEL_PATTERN = re.compile(r"\bdates?\b|\bmm\W*dd\W*yyyy\b", re.IGNORECASE)
+# A checkbox whose action switches its siblings off is one option of a mutually exclusive group.
+EXCLUSIVE_CHECKBOX_PATTERN = re.compile(r"getfield\([^)]*\)\.value\s*=\s*\"off\"", re.IGNORECASE)
+# A tooltip is written for a screen reader, so it leads with where the field sits in the form and
+# what to do with it before naming it. Both are scaffolding around the label.
+TOOLTIP_PREAMBLE_PATTERN = re.compile(
+    r"^(?i:section|part|step|line|item|supplement)\s+(?:\d+[a-z]?|[A-Z])\b[\s.,:;)-]*"
+)
+TOOLTIP_IMPERATIVE_PATTERN = re.compile(
+    r"^(?:please\s+)?(?:enter|select|choose|provide|indicate|type|input)\b\s*(?:the\s+|your\s+|an?\s+)?",
+    re.IGNORECASE,
+)
 INSTRUCTION_PATTERN = re.compile(
     r"^(note|see|if|for|caution|example|check|enter|complete|do not|you must)\b",
     re.IGNORECASE,
@@ -185,11 +206,16 @@ class WidgetScripts:
 
     action: str = ""
     value_affecting_slots: tuple[str, ...] = ()
+    validation_slots: tuple[str, ...] = ()
     presentational_slots: tuple[str, ...] = ()
 
     @property
     def has_value_affecting_script(self) -> bool:
         return bool(self.value_affecting_slots)
+
+    @property
+    def has_validation_script(self) -> bool:
+        return bool(self.validation_slots)
 
     @property
     def has_presentational_script(self) -> bool:
@@ -207,6 +233,7 @@ def collect_widget_scripts(document: fitz.Document, widget: fitz.Widget) -> Widg
     on a parent - which is how kid widgets normally carry one - would otherwise go unnoticed.
     """
     value_slots: list[str] = []
+    validation: list[str] = []
     presentational: list[str] = []
     action = _action_script(document, widget.xref)
 
@@ -218,18 +245,26 @@ def collect_widget_scripts(document: fitz.Document, widget: fitz.Widget) -> Widg
         "Bl": getattr(widget, "script_blur", None),
         "Fo": getattr(widget, "script_focus", None),
     }
+    buckets = (
+        (VALUE_AFFECTING_SLOTS, value_slots),
+        (VALIDATION_SLOTS, validation),
+        (PRESENTATIONAL_SLOTS, presentational),
+    )
     for slot, script in own_slots.items():
         if not script:
             continue
-        (value_slots if slot in VALUE_AFFECTING_SLOTS else presentational).append(slot)
+        for slots, bucket in buckets:
+            if slot in slots:
+                bucket.append(slot)
+                break
 
     xref = widget.xref
     for _ in range(PARENT_CHAIN_LIMIT):
         for slot in _additional_action_slots(document, xref):
-            if slot in VALUE_AFFECTING_SLOTS and slot not in value_slots:
-                value_slots.append(slot)
-            elif slot in PRESENTATIONAL_SLOTS and slot not in presentational:
-                presentational.append(slot)
+            for slots, bucket in buckets:
+                if slot in slots and slot not in bucket:
+                    bucket.append(slot)
+                    break
         if not action:
             action = _action_script(document, xref)
         parent = document.xref_get_key(xref, "Parent")
@@ -240,6 +275,7 @@ def collect_widget_scripts(document: fitz.Document, widget: fitz.Widget) -> Widg
     return WidgetScripts(
         action=action,
         value_affecting_slots=tuple(value_slots),
+        validation_slots=tuple(validation),
         presentational_slots=tuple(presentational),
     )
 
@@ -265,12 +301,12 @@ def _action_script(document: fitz.Document, xref: int) -> str:
 
 def _javascript_text(obj: str) -> str:
     """Extract a ``/JS`` payload as text. Reading is not running."""
-    match = re.search(r"/JS\s*(<[0-9A-Fa-f]*>|\([^)]*\))", obj)
+    match = re.search(r"/JS\s*(<[0-9A-Fa-f]*>|\()", obj)
     if not match:
         return obj
     raw = match.group(1)
-    if raw.startswith("("):
-        return raw[1:-1]
+    if raw == "(":
+        return _literal_string(obj, match.end(1) - 1)
     try:
         data = bytes.fromhex(raw[1:-1])
     except ValueError:
@@ -278,6 +314,29 @@ def _javascript_text(obj: str) -> str:
     if data[:2] == b"\xfe\xff":
         return data[2:].decode("utf-16-be", "replace")
     return data.decode("latin-1", "replace")
+
+
+def _literal_string(obj: str, start: int) -> str:
+    """Read the PDF literal string that opens at ``start``.
+
+    A script body routinely contains its own brackets, so the closing bracket is the one that
+    balances the opening it - not the first one encountered (PDF 32000-1, 7.3.4.2).
+    """
+    depth = 0
+    index = start
+    while index < len(obj):
+        char = obj[index]
+        if char == "\\":
+            index += 2
+            continue
+        if char == "(":
+            depth += 1
+        elif char == ")":
+            depth -= 1
+            if depth == 0:
+                return obj[start + 1 : index]
+        index += 1
+    return obj[start + 1 :]
 
 
 def _xref_key(document: fitz.Document, xref: int, key: str):
@@ -304,13 +363,23 @@ def classify_widget(document: fitz.Document, widget: fitz.Widget, label: str) ->
     if is_pushbutton:
         return _classify_button(scripts, label)
 
+    if scripts.action and _switches_siblings_off(scripts.action):
+        # One option of a radio group built from checkboxes. Importing the options separately would
+        # let a signer choose two of them, so the whole group is left for the administrator.
+        return None, ImportWarningEnum.UNSUPPORTED_EXCLUSIVE_CHECKBOX_GROUP
+
     if scripts.action or scripts.has_value_affecting_script:
-        # A calculation or a validation rule decides the value; a plain action is untrusted.
+        # A calculation decides the value and cannot be reproduced; a plain action is untrusted.
         return None, ImportWarningEnum.UNSUPPORTED_PDF_JAVASCRIPT
 
     # Formatting, keystroke, focus and blur scripts only affect how a value is shown while it is
-    # being typed, so the field is imported and the lost formatting is reported instead.
-    formatting_warning = ImportWarningEnum.FIELD_FORMATTING_NOT_APPLIED if scripts.has_presentational_script else None
+    # being typed, and a validation rule only rejects what a signer typed. Neither decides the
+    # value, so the field is imported and the behaviour SignaCore drops is reported instead.
+    formatting_warning = None
+    if scripts.has_validation_script:
+        formatting_warning = ImportWarningEnum.FIELD_VALIDATION_NOT_ENFORCED
+    elif scripts.has_presentational_script:
+        formatting_warning = ImportWarningEnum.FIELD_FORMATTING_NOT_APPLIED
 
     if widget_type == fitz.PDF_WIDGET_TYPE_RADIOBUTTON or flags & FLAG_RADIO:
         return None, ImportWarningEnum.UNSUPPORTED_RADIO_GROUP
@@ -332,11 +401,34 @@ def classify_widget(document: fitz.Document, widget: fitz.Widget, label: str) ->
             return None, ImportWarningEnum.UNSUPPORTED_WIDGET_TYPE
         if flags & FLAG_MULTILINE:
             return DocumentField.FieldTypeEnum.MULTILINE, formatting_warning
-        if INITIALS_PATTERN.search(label):
-            return DocumentField.FieldTypeEnum.INITIALS, formatting_warning
-        return DocumentField.FieldTypeEnum.TEXT, formatting_warning
+        return _classify_text_by_label(label), formatting_warning
 
     return None, ImportWarningEnum.UNSUPPORTED_WIDGET_TYPE
+
+
+def _switches_siblings_off(action: str) -> bool:
+    """Spot a mutual-exclusion script without running it.
+
+    The script text is read as data. Escapes are stripped first because the body arrives as a PDF
+    literal string, where its own brackets and quotes are escaped.
+    """
+    return bool(EXCLUSIVE_CHECKBOX_PATTERN.search(action.replace("\\", "")))
+
+
+def _classify_text_by_label(label: str) -> str:
+    """Pick the signing control a single-line text widget really stands for.
+
+    Forms built to be printed put signatures, initials and dates in plain text widgets, so the
+    label is the only evidence of what the field is for. A date is tested first because a signature
+    date is labelled after the signature it accompanies.
+    """
+    if DATE_LABEL_PATTERN.search(label):
+        return DocumentField.FieldTypeEnum.TEXT
+    if INITIALS_PATTERN.search(label) and not MIDDLE_INITIAL_PATTERN.search(label):
+        return DocumentField.FieldTypeEnum.INITIALS
+    if SIGNATURE_LABEL_PATTERN.search(label):
+        return DocumentField.FieldTypeEnum.SIGNATURE
+    return DocumentField.FieldTypeEnum.TEXT
 
 
 def _classify_button(scripts: WidgetScripts, label: str) -> tuple[str | None, str | None]:
@@ -360,15 +452,23 @@ def resolve_label(
     text_lines: list[TextLine],
     page_index: int,
     field_index: int,
+    shared_tooltips: frozenset[str] = frozenset(),
 ) -> tuple[str, bool]:
     """Build a customer-facing label, never exposing an internal AcroForm/XFA field path.
 
     Returns the label and whether it came from the document itself, so a caller can fall back
     to a neighbouring field's caption instead of a positional placeholder.
+
+    ``shared_tooltips`` holds the tooltips that more than one widget on this page carries. A label
+    identifies one field, so a repeated tooltip is describing the section they sit in.
     """
-    tooltip = _clean(str(getattr(widget, "field_label", "") or ""))
-    if tooltip and not _is_internal_path(tooltip):
-        return tooltip[:MAX_LABEL_LENGTH], True
+    tooltip = _tooltip_label(str(getattr(widget, "field_label", "") or ""))
+    if tooltip and tooltip not in shared_tooltips:
+        return tooltip, True
+
+    descriptive_name = _descriptive_field_name(widget)
+    if descriptive_name:
+        return descriptive_name, True
 
     for candidate in _label_candidates(
         widget.rect,
@@ -385,6 +485,45 @@ def resolve_label(
         return field_name[:1].upper() + field_name[1:], False
 
     return f"Page {page_index} field {field_index}", False
+
+
+def shared_tooltip_labels(widgets: list[fitz.Widget]) -> frozenset[str]:
+    """Collect the labels that more than one of these widgets' tooltips reduces to.
+
+    Tooltips describing the same section are written out in full per widget, so they only collide
+    once the positional scaffolding and trailing guidance are stripped.
+    """
+    counts = Counter(_tooltip_label(str(getattr(widget, "field_label", "") or "")) for widget in widgets)
+    return frozenset(label for label, count in counts.items() if label and count > 1)
+
+
+def _descriptive_field_name(widget: fitz.Widget) -> str:
+    """Use the author's own field name when it reads as a phrase rather than a machine token.
+
+    A name like ``US Social Security Number`` identifies the field better than any caption guessed
+    from what happens to sit nearest it on the page. A name like ``email`` or ``CB_1`` identifies
+    nothing, so those wait behind the caption search instead.
+    """
+    name = _clean(str(getattr(widget, "field_name", "") or "").replace("_", " "))
+    words = [word for word in name.split() if word.isalpha() and len(word) > 1]
+    if len(words) < 2 or not _is_confident_label(name):
+        return ""
+    return name[:1].upper() + name[1:]
+
+
+def _tooltip_label(tooltip: str) -> str:
+    """Reduce a widget tooltip to a label, or return empty when it is a description instead.
+
+    A tooltip is authored for accessibility, so it ranges from an exact label to a paragraph of
+    guidance. Stripping the positional and imperative scaffolding exposes the label inside the
+    usable ones; the rest fail the same confidence test as a caption read off the page, and the
+    caller falls back to the field's own name.
+    """
+    text = _clean(tooltip)
+    for pattern in (TOOLTIP_PREAMBLE_PATTERN, TOOLTIP_IMPERATIVE_PATTERN):
+        text = _clean(pattern.sub("", text, count=1))
+    shortened = _shorten(text)
+    return shortened if _is_confident_label(shortened) else ""
 
 
 def _prefers_following_label(widget: fitz.Widget) -> bool:
