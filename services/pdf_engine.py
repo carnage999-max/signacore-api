@@ -14,11 +14,15 @@ from services.pdf_form_import import (
     ImportWarningEnum,
     classify_widget,
     collect_text_lines,
+    collect_widget_scripts,
     is_comb_widget,
     is_widget_required,
+    radio_group_key,
     resolve_label,
     shared_tooltip_labels,
     widget_max_length,
+    widget_on_state,
+    widget_options,
 )
 from services.pdf_sanitizer import assert_sanitized, sanitize_document
 
@@ -49,6 +53,9 @@ class DetectedField:
     order: int
     max_length: int | None = None
     is_comb: bool = False
+    options: list[str] | None = None
+    group_key: str = ""
+    option_value: str = ""
 
 
 @dataclass
@@ -229,11 +236,19 @@ class PDFEngine:
                     label = f"{label} ({label_counts[label]})"
 
                 max_length = widget_max_length(document, widget)
+                options = widget_options(widget) if field_type == DocumentField.FieldTypeEnum.DROPDOWN else None
+                group_key = option_value = ""
+                if field_type == DocumentField.FieldTypeEnum.RADIO:
+                    group_key = radio_group_key(widget, collect_widget_scripts(document, widget))
+                    option_value = widget_on_state(widget) or label
                 rect = widget.rect
                 detected_fields.append(
                     DetectedField(
                         max_length=max_length,
                         is_comb=is_comb_widget(document, widget, max_length),
+                        options=options,
+                        group_key=group_key,
+                        option_value=option_value,
                         field_type=field_type,
                         label=self._normalize_label(label),
                         page=page_index,
@@ -360,7 +375,10 @@ class PDFEngine:
                         self._draw_single_line_text(page, rect, submission["text_value"])
                 elif submission["value_type"] == "CHECKBOX":
                     if str(submission["text_value"]).lower() in {"true", "1", "yes", "on"}:
-                        self._draw_check_mark(page, rect)
+                        if submission.get("field_type") == DocumentField.FieldTypeEnum.RADIO:
+                            self._draw_radio_mark(page, rect)
+                        else:
+                            self._draw_check_mark(page, rect)
                 else:
                     page.insert_image(rect, filename=submission["image_path"])
 
@@ -438,6 +456,16 @@ class PDFEngine:
                 return
             font_size -= 0.5
         page.insert_textbox(rect, text, fontname=self.flatten_fontname, fontsize=self.min_flatten_font_size)
+
+    @staticmethod
+    def _draw_radio_mark(page: fitz.Page, rect: fitz.Rect) -> None:
+        """Fill the chosen option, the way a radio button is marked on paper."""
+        radius = min(rect.width, rect.height) * 0.29
+        centre = fitz.Point((rect.x0 + rect.x1) / 2, (rect.y0 + rect.y1) / 2)
+        shape = page.new_shape()
+        shape.draw_circle(centre, radius)
+        shape.finish(color=(0, 0, 0), fill=(0, 0, 0))
+        shape.commit()
 
     @staticmethod
     def _draw_check_mark(page: fitz.Page, rect: fitz.Rect) -> None:

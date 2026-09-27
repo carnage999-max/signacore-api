@@ -62,6 +62,8 @@ class DocumentField(models.Model):
         TEXT = "TEXT", "Text"
         MULTILINE = "MULTILINE", "Multiline text"
         CHECKBOX = "CHECKBOX", "Checkbox"
+        DROPDOWN = "DROPDOWN", "Dropdown"
+        RADIO = "RADIO", "Radio option"
 
     class DetectionSourceEnum(models.TextChoices):
         ACROFORM = "ACROFORM", "AcroForm"
@@ -84,6 +86,14 @@ class DocumentField(models.Model):
     order = models.PositiveIntegerField()
     max_length = models.PositiveIntegerField(null=True, blank=True)
     is_comb = models.BooleanField(default=False)
+    # The choices a DROPDOWN offers. These come from the form's own option list, never from a
+    # value a signer entered.
+    options = models.JSONField(null=True, blank=True)
+    # A RADIO is stored as one row per option, each keeping the printed box it belongs to, because
+    # the options of a group sit apart on the page and a tick has to be drawn in the right one.
+    # Rows sharing a group are the alternatives of a single choice.
+    group_key = models.CharField(max_length=64, blank=True, default="")
+    option_value = EncryptedTextField(max_length=255, blank=True, default="")
 
     class Meta:
         ordering = ("page", "order")

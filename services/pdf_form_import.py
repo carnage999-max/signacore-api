@@ -9,6 +9,7 @@ from __future__ import annotations
 import re
 from collections import Counter
 from dataclasses import dataclass, field
+from hashlib import sha256
 from typing import Any
 
 import fitz
@@ -74,6 +75,16 @@ SIGNATURE_LABEL_PATTERN = re.compile(r"\b(signature|sign here|signed by)\b", re.
 DATE_LABEL_PATTERN = re.compile(r"\bdates?\b|\bmm\W*dd\W*yyyy\b", re.IGNORECASE)
 # A checkbox whose action switches its siblings off is one option of a mutually exclusive group.
 EXCLUSIVE_CHECKBOX_PATTERN = re.compile(r"getfield\([^)]*\)\.value\s*=\s*\"off\"", re.IGNORECASE)
+GET_FIELD_PATTERN = re.compile(r"getField\(\s*\"([^\"]+)\"\s*\)")
+# An action that does something to the document or the world beyond the field it sits on. PDF
+# 32000-1 table 196. These are never honoured, so a button carrying one is not a field to fill in.
+REAL_ACTION_PATTERN = re.compile(
+    r"/S\s*/(SubmitForm|ResetForm|Launch|URI|GoToR|GoTo|ImportData|Named|Hide|Sound|Movie)\b",
+    re.IGNORECASE,
+)
+# A control no bigger than this in both directions is a box to tick, not a box to write in.
+TICK_BOX_MAX_SIZE = 24.0
+MAX_GROUP_KEY_LENGTH = 64
 # A tooltip is written for a screen reader, so it leads with where the field sits in the form and
 # what to do with it before naming it. Both are scaffolding around the label.
 TOOLTIP_PREAMBLE_PATTERN = re.compile(
@@ -361,12 +372,12 @@ def classify_widget(document: fitz.Document, widget: fitz.Widget, label: str) ->
         return None, ImportWarningEnum.HIDDEN_FIELD_IGNORED
 
     if is_pushbutton:
-        return _classify_button(scripts, label)
+        return _classify_button(scripts, label, widget.rect)
 
     if scripts.action and _switches_siblings_off(scripts.action):
-        # One option of a radio group built from checkboxes. Importing the options separately would
-        # let a signer choose two of them, so the whole group is left for the administrator.
-        return None, ImportWarningEnum.UNSUPPORTED_EXCLUSIVE_CHECKBOX_GROUP
+        # One option of a radio group built from checkboxes. It is imported as a radio option so
+        # that choosing it clears the others, which is what the form's own script does.
+        return DocumentField.FieldTypeEnum.RADIO, None
 
     if scripts.action or scripts.has_value_affecting_script:
         # A calculation decides the value and cannot be reproduced; a plain action is untrusted.
@@ -382,12 +393,19 @@ def classify_widget(document: fitz.Document, widget: fitz.Widget, label: str) ->
         formatting_warning = ImportWarningEnum.FIELD_FORMATTING_NOT_APPLIED
 
     if widget_type == fitz.PDF_WIDGET_TYPE_RADIOBUTTON or flags & FLAG_RADIO:
-        return None, ImportWarningEnum.UNSUPPORTED_RADIO_GROUP
+        return DocumentField.FieldTypeEnum.RADIO, formatting_warning
 
     if widget_type in (fitz.PDF_WIDGET_TYPE_LISTBOX, fitz.PDF_WIDGET_TYPE_COMBOBOX) or flags & FLAG_COMBO:
-        return None, ImportWarningEnum.UNSUPPORTED_CHOICE_FIELD
+        return DocumentField.FieldTypeEnum.DROPDOWN, formatting_warning
 
     if flags & FLAG_READ_ONLY:
+        # A printed signature line is routinely locked so the form's own text tool cannot type
+        # into it, on forms that are invalid unless signed. SignaCore draws its signature onto the
+        # page rather than filling the form, so the lock does not describe what it can collect.
+        # Anything else read-only holds a value its author does not want changed.
+        locked_type = _classify_text_by_label(label)
+        if locked_type in (DocumentField.FieldTypeEnum.SIGNATURE, DocumentField.FieldTypeEnum.INITIALS):
+            return locked_type, formatting_warning
         return None, ImportWarningEnum.UNSUPPORTED_READ_ONLY_FIELD
 
     if widget_type == fitz.PDF_WIDGET_TYPE_CHECKBOX:
@@ -404,6 +422,43 @@ def classify_widget(document: fitz.Document, widget: fitz.Widget, label: str) ->
         return _classify_text_by_label(label), formatting_warning
 
     return None, ImportWarningEnum.UNSUPPORTED_WIDGET_TYPE
+
+
+def widget_options(widget: fitz.Widget) -> list[str]:
+    """The choices a dropdown offers, in the order the form lists them.
+
+    Forms open their option list with a blank entry so the field can show as unset. The signer
+    portal renders its own empty choice, so a blank is dropped rather than offered twice.
+    """
+    values = [_clean(str(value)) for value in (getattr(widget, "choice_values", None) or [])]
+    seen: dict[str, None] = {}
+    for value in values:
+        if value:
+            seen.setdefault(value, None)
+    return list(seen)
+
+
+def radio_group_key(widget: fitz.Widget, scripts: WidgetScripts) -> str:
+    """Name the group whose options are alternatives to one another.
+
+    Real radio kids share the field name of the parent that holds their value. Checkboxes wired
+    together by a script have their own names instead, so the group is named for every field the
+    script touches - which each member of the group names identically.
+    """
+    members = sorted(set(GET_FIELD_PATTERN.findall(scripts.action.replace("\\", ""))))
+    key = "|".join(members) if members else _clean(str(getattr(widget, "field_name", "") or ""))
+    if len(key) > MAX_GROUP_KEY_LENGTH:
+        key = sha256(key.encode("utf-8")).hexdigest()[:MAX_GROUP_KEY_LENGTH]
+    return key
+
+
+def widget_on_state(widget: fitz.Widget) -> str:
+    """The value the form records when this option is the one chosen."""
+    try:
+        state = widget.on_state()
+    except Exception:  # pragma: no cover - widget without an appearance stream
+        return ""
+    return _clean(str(state or ""))
 
 
 def _switches_siblings_off(action: str) -> bool:
@@ -431,20 +486,27 @@ def _classify_text_by_label(label: str) -> str:
     return DocumentField.FieldTypeEnum.TEXT
 
 
-def _classify_button(scripts: WidgetScripts, label: str) -> tuple[str | None, str | None]:
-    """An image-import button on a signature line is where a signature belongs.
+def _classify_button(scripts: WidgetScripts, label: str, rect: fitz.Rect) -> tuple[str | None, str | None]:
+    """Decide what a push button actually collects.
 
-    Acrobat builds a signature placeholder as a push button whose action imports an icon. Its
-    action is never run; SignaCore collects its own signature at the same rectangle. The label
-    has to agree, so a logo placeholder is not turned into a signature field.
+    Acrobat builds a signature placeholder as a push button whose action imports an icon, and
+    forms routinely draw an ordinary field as a button so they can attach a picker to it. Neither
+    action is ever run. A button that submits, resets, prints or navigates is not a field at all,
+    so only those are skipped; the rest are read as the control their label and size describe.
     """
-    if not scripts.is_image_button:
+    if scripts.is_image_button:
+        if INITIALS_PATTERN.search(label):
+            return DocumentField.FieldTypeEnum.INITIALS, None
+        if SIGNATURE_LABEL_PATTERN.search(label):
+            return DocumentField.FieldTypeEnum.SIGNATURE, None
         return None, ImportWarningEnum.UNSUPPORTED_ACTION_BUTTON
-    if INITIALS_PATTERN.search(label):
-        return DocumentField.FieldTypeEnum.INITIALS, None
-    if SIGNATURE_LABEL_PATTERN.search(label):
-        return DocumentField.FieldTypeEnum.SIGNATURE, None
-    return None, ImportWarningEnum.UNSUPPORTED_ACTION_BUTTON
+
+    if REAL_ACTION_PATTERN.search(scripts.action):
+        return None, ImportWarningEnum.UNSUPPORTED_ACTION_BUTTON
+
+    if rect.width <= TICK_BOX_MAX_SIZE and rect.height <= TICK_BOX_MAX_SIZE:
+        return DocumentField.FieldTypeEnum.CHECKBOX, None
+    return _classify_text_by_label(label), None
 
 
 def resolve_label(

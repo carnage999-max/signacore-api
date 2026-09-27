@@ -105,18 +105,27 @@ class NativeFormImportTests(TestCase):
         rendered_top = page_height - text_field["y"] - text_field["height"]
         self.assertAlmostEqual(rendered_top, source_rect.y0, places=3)
 
-    def test_radio_group_is_ignored_and_reported(self) -> None:
+    def test_a_radio_group_imports_one_option_per_choice(self) -> None:
         payload = self.upload(builders.build_radio_group_pdf())
 
-        self.assertEqual(payload["fields"], [])
-        self.assertIn("UNSUPPORTED_RADIO_GROUP", payload["detection_summary"]["warning_codes"])
-        self.assertEqual(payload["detection_summary"]["ignored_widget_count"], 3)
+        self.assertEqual([field["field_type"] for field in payload["fields"]], ["RADIO"] * 3)
+        self.assertEqual(payload["detection_summary"]["ignored_widget_count"], 0)
 
-    def test_choice_fields_are_ignored_and_reported(self) -> None:
+    def test_the_options_of_one_radio_group_share_a_group_key(self) -> None:
+        payload = self.upload(builders.build_radio_group_pdf())
+
+        keys = {field["group_key"] for field in payload["fields"]}
+        self.assertEqual(len(keys), 1)
+        self.assertNotIn("", keys)
+
+    def test_a_choice_field_imports_as_a_dropdown_carrying_its_options(self) -> None:
         payload = self.upload(builders.build_choice_field_pdf())
 
-        self.assertEqual(payload["fields"], [])
-        self.assertIn("UNSUPPORTED_CHOICE_FIELD", payload["detection_summary"]["warning_codes"])
+        self.assertEqual([field["field_type"] for field in payload["fields"]], ["DROPDOWN", "DROPDOWN"])
+        self.assertEqual(
+            [field["options"] for field in payload["fields"]],
+            [["January", "February", "March"], ["Airplane", "Boat"]],
+        )
 
     def test_action_button_is_ignored_and_reported(self) -> None:
         payload = self.upload(builders.build_action_button_pdf())
@@ -177,23 +186,18 @@ class NativeFormImportTests(TestCase):
     def test_mixed_form_imports_only_supported_widgets_and_persists_the_report(self) -> None:
         payload = self.upload(builders.build_mixed_form_pdf())
 
-        self.assertEqual([field["field_type"] for field in payload["fields"]], ["TEXT"])
+        self.assertEqual(sorted(field["field_type"] for field in payload["fields"]), ["DROPDOWN", "RADIO", "TEXT"])
         self.assertEqual(payload["detection_summary"]["native_widget_count"], 4)
-        self.assertEqual(payload["detection_summary"]["imported_field_count"], 1)
-        self.assertEqual(payload["detection_summary"]["ignored_widget_count"], 3)
+        self.assertEqual(payload["detection_summary"]["imported_field_count"], 3)
+        self.assertEqual(payload["detection_summary"]["ignored_widget_count"], 1)
 
         detail = self.client.get(f"/api/admin/documents/{payload['id']}/")
         self.assertEqual(detail.status_code, 200, detail.json())
         summary = detail.json()["detection_summary"]
-        self.assertEqual(summary["ignored_widget_count"], 3)
+        self.assertEqual(summary["ignored_widget_count"], 1)
         self.assertEqual(
             sorted(summary["warning_codes"]),
-            [
-                "SIGNATURE_FIELD_NOT_DETECTED",
-                "UNSUPPORTED_ACTION_BUTTON",
-                "UNSUPPORTED_CHOICE_FIELD",
-                "UNSUPPORTED_RADIO_GROUP",
-            ],
+            ["SIGNATURE_FIELD_NOT_DETECTED", "UNSUPPORTED_ACTION_BUTTON"],
         )
 
     def test_form_with_only_unsupported_widgets_does_not_fall_back_to_heuristics(self) -> None:
@@ -1227,12 +1231,16 @@ class MixedPacketImportTests(TestCase):
         orders = sorted(field["order"] for field in payload["fields"])
         self.assertEqual(orders, list(range(1, len(orders) + 1)))
 
-    def test_a_mutually_exclusive_checkbox_group_is_reported_not_imported(self) -> None:
+    def test_a_mutually_exclusive_checkbox_group_imports_as_radio_options(self) -> None:
+        """Checkboxes a script keeps exclusive are the same choice a radio group expresses.
+
+        Importing them as checkboxes would let a signer attest to two citizenship statuses.
+        """
         payload = self.upload(builders.build_exclusive_checkbox_group_pdf())
 
-        self.assertEqual(payload["fields"], [])
-        self.assertIn("UNSUPPORTED_EXCLUSIVE_CHECKBOX_GROUP", payload["detection_summary"]["warning_codes"])
-        self.assertEqual(payload["detection_summary"]["ignored_widget_count"], 3)
+        self.assertEqual([field["field_type"] for field in payload["fields"]], ["RADIO"] * 3)
+        self.assertEqual(len({field["group_key"] for field in payload["fields"]}), 1)
+        self.assertEqual(payload["detection_summary"]["ignored_widget_count"], 0)
 
     def test_a_signature_named_text_widget_becomes_a_signature_field(self) -> None:
         payload = self.upload(builders.build_printed_signature_widget_pdf())
@@ -1272,3 +1280,9 @@ class MixedPacketImportTests(TestCase):
         payload = self.upload(builders.build_mixed_packet_pdf())
 
         self.assertIn("SIGNATURE_FIELD_NOT_DETECTED", payload["detection_summary"]["warning_codes"])
+
+    def test_a_locked_signature_line_is_still_somewhere_to_sign(self) -> None:
+        payload = self.upload(builders.build_locked_signature_pdf())
+
+        self.assertEqual([field["field_type"] for field in payload["fields"]], ["SIGNATURE"])
+        self.assertIn("UNSUPPORTED_READ_ONLY_FIELD", payload["detection_summary"]["warning_codes"])
