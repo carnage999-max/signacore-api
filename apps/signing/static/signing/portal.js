@@ -529,9 +529,22 @@
       const isCurrent = Number(thumb.dataset.page) === bounded;
       thumb.classList.toggle("page-thumb-current", isCurrent);
       if (isCurrent && options?.scrollRail !== false) {
-        thumb.scrollIntoView({ block: "nearest" });
+        revealThumbInRail(thumb);
       }
     });
+  }
+
+  function revealThumbInRail(thumb) {
+    const rail = nodes.pageThumbs;
+    if (!rail) return;
+    // Only the rail moves. scrollIntoView would scroll every ancestor that can scroll, the
+    // window included, and the rail sits above the pages once the layout is a single column -
+    // so following the page being read would drag the reader back up to the rail, every time
+    // the page changed. Whichever axis the rail scrolls on, the other clamps to no movement.
+    const railBox = rail.getBoundingClientRect();
+    const thumbBox = thumb.getBoundingClientRect();
+    rail.scrollLeft += thumbBox.left - railBox.left - (railBox.width - thumbBox.width) / 2;
+    rail.scrollTop += thumbBox.top - railBox.top - (railBox.height - thumbBox.height) / 2;
   }
 
   function goToPage(pageNumber) {
