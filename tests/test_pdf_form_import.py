@@ -1165,6 +1165,15 @@ class PreviewPagePreparationTests(SimpleTestCase):
             self.assertIn("[Minor full legal name]", reopened[0].get_text())
 
 
+@override_settings(
+    MEDIA_ROOT=TEST_MEDIA_ROOT,
+    SIGNACORE_SHARED_SECRET="test-signacore-secret",
+    SIGNACORE_SERVICE_USERNAME="signacore-service",
+    SIGNACORE_APP_URL="https://mysignacore.com",
+    EMAIL_BACKEND="django.core.mail.backends.locmem.EmailBackend",
+    CELERY_TASK_ALWAYS_EAGER=True,
+    CELERY_TASK_EAGER_PROPAGATES=True,
+)
 class MixedPacketImportTests(TestCase):
     """An onboarding packet is several documents in one file.
 
