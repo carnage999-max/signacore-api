@@ -271,6 +271,9 @@ input {
   border: 1px solid rgba(218, 232, 248, 0.18);
 }
 
+/* The width and height attributes carry the page's proportions, from which the browser derives
+   the aspect ratio, so the box is the right height from the first paint rather than growing when
+   the image arrives. "height: auto" is what preserves that ratio. */
 .page-image {
   display: block;
   width: 100%;
@@ -578,6 +581,19 @@ input {
   }
 }
 
+@media (max-width: 900px) {
+  /* The document sits inside a panel, so the blur behind it covers everything being scrolled and
+     has to be re-sampled each frame. On a phone that cost lands on the one gesture that matters,
+     and the panels read the same without it. */
+  .hero-panel,
+  .panel,
+  .modal-card,
+  .notice {
+    backdrop-filter: none;
+    background: rgba(9, 19, 29, 0.94);
+  }
+}
+
 @media (max-width: 640px) {
   .signacore-app {
     padding: 18px 14px 32px;
@@ -651,6 +667,7 @@ input {
   gap: 8px;
   max-height: 58vh;
   overflow-y: auto;
+  overscroll-behavior: contain;
   padding-right: 4px;
 }
 
@@ -737,6 +754,7 @@ input {
 .progress-panel .field-list {
   margin: 0;
   overflow-y: auto;
+  overscroll-behavior: contain;
   padding-right: 4px;
 }
 
@@ -754,6 +772,7 @@ input {
   gap: 8px;
   max-height: 46vh;
   overflow-y: auto;
+  overscroll-behavior: contain;
   margin: 14px 0 4px;
 }
 
@@ -795,7 +814,8 @@ input {
     margin: 0 -24px -24px;
     padding: 14px 24px;
     border-radius: 0 0 18px 18px;
-    background: rgba(9, 19, 29, 0.96);
-    backdrop-filter: blur(12px);
+    /* Opaque rather than blurred: a backdrop filter behind a sticky bar is recomposited against
+       the page on every frame, which is what makes a long document stutter under a finger. */
+    background: #0b1521;
   }
 }

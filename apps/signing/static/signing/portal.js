@@ -400,6 +400,10 @@
 
   function renderPages() {
     if (!state.context) return;
+    // Emptying the list collapses the document to nothing, and the browser clamps the scroll
+    // position to the height that is left. Saving a signature rebuilds the pages, so without
+    // this the reader is thrown back up the document every time they sign.
+    const previousScrollY = window.scrollY;
     nodes.pagesRoot.innerHTML = "";
     pageCardNodes.clear();
     fieldInputNodes.clear();
@@ -411,6 +415,14 @@
       const pageImage = document.createElement("img");
       pageImage.className = "page-image";
       pageImage.alt = `${state.context.document_title} page ${pageData.number}`;
+      // The page's own proportions, so the card reserves its full height before the image
+      // arrives. Without them every page is zero-high until it loads, and a long document
+      // re-flows under the reader on each one, which reads as scrolling that will not settle.
+      pageImage.width = Math.round(pageData.width);
+      pageImage.height = Math.round(pageData.height);
+      // A 31-page packet is ~230 MiB of bitmap once decoded, which a phone cannot hold at once.
+      pageImage.loading = "lazy";
+      pageImage.decoding = "async";
       pageImage.src = pageData.preview_url;
 
       const overlay = document.createElement("div");
@@ -466,6 +478,9 @@
     applyFieldHighlighting();
     renderPageRail();
     observePageVisibility();
+    if (previousScrollY > 0 && window.scrollY !== previousScrollY) {
+      window.scrollTo({ top: previousScrollY });
+    }
   }
 
   function renderPageRail() {
@@ -514,9 +529,22 @@
       const isCurrent = Number(thumb.dataset.page) === bounded;
       thumb.classList.toggle("page-thumb-current", isCurrent);
       if (isCurrent && options?.scrollRail !== false) {
-        thumb.scrollIntoView({ block: "nearest" });
+        revealThumbInRail(thumb);
       }
     });
+  }
+
+  function revealThumbInRail(thumb) {
+    const rail = nodes.pageThumbs;
+    if (!rail) return;
+    // Only the rail moves. scrollIntoView would scroll every ancestor that can scroll, the
+    // window included, and the rail sits above the pages once the layout is a single column -
+    // so following the page being read would drag the reader back up to the rail, every time
+    // the page changed. Whichever axis the rail scrolls on, the other clamps to no movement.
+    const railBox = rail.getBoundingClientRect();
+    const thumbBox = thumb.getBoundingClientRect();
+    rail.scrollLeft += thumbBox.left - railBox.left - (railBox.width - thumbBox.width) / 2;
+    rail.scrollTop += thumbBox.top - railBox.top - (railBox.height - thumbBox.height) / 2;
   }
 
   function goToPage(pageNumber) {
