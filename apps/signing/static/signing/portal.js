@@ -8,6 +8,7 @@
     values: {},
     fieldErrors: {},
     activeFieldId: "",
+    sheetFieldId: null,
     signatureMode: "draw",
     typedSignature: "",
     resendTimerId: 0,
@@ -53,6 +54,15 @@
     cancelSubmitButton: document.getElementById("cancel-submit-button"),
     confirmSubmitButton: document.getElementById("confirm-submit-button"),
     documentPanel: document.getElementById("document-panel"),
+    fieldSheet: document.getElementById("field-sheet"),
+    fieldSheetTitle: document.getElementById("field-sheet-title"),
+    fieldSheetHint: document.getElementById("field-sheet-hint"),
+    fieldSheetLabel: document.getElementById("field-sheet-label"),
+    fieldSheetInput: document.getElementById("field-sheet-input"),
+    fieldSheetTextarea: document.getElementById("field-sheet-textarea"),
+    closeFieldSheetButton: document.getElementById("close-field-sheet-button"),
+    cancelFieldSheetButton: document.getElementById("cancel-field-sheet-button"),
+    saveFieldSheetButton: document.getElementById("save-field-sheet-button"),
     signatureModal: document.getElementById("signature-modal"),
     closeModalButton: document.getElementById("close-modal-button"),
     drawModeButton: document.getElementById("draw-mode-button"),
@@ -265,6 +275,79 @@
     }
   }
 
+  // A field is drawn at the size of the box printed on the page, which on a form is a few
+  // millimetres. Focusing an input smaller than 16px makes iOS Safari zoom the page to meet it,
+  // and the reader is left zoomed in with the document half off screen. Below this width the tap
+  // opens a sheet instead, where the field is legible and nothing is zoomed.
+  const narrowViewport = window.matchMedia("(max-width: 900px)");
+
+  function usesFieldSheet(field) {
+    return narrowViewport.matches && (field.field_type === "TEXT" || field.field_type === "MULTILINE");
+  }
+
+  function handOffToFieldSheet(field, control) {
+    control.addEventListener("pointerdown", (event) => {
+      if (!usesFieldSheet(field)) return;
+      // Taking the tap before it lands is what stops the field being focused, and so stops the
+      // zoom; blurring after the fact is already too late.
+      event.preventDefault();
+      control.blur();
+      openFieldSheet(field.id);
+    });
+  }
+
+  function openFieldSheet(fieldId) {
+    const field = state.context?.fields.find((entry) => entry.id === fieldId);
+    if (!field) return;
+    state.sheetFieldId = fieldId;
+
+    const multiline = field.field_type === "MULTILINE";
+    const control = multiline ? nodes.fieldSheetTextarea : nodes.fieldSheetInput;
+    nodes.fieldSheetInput.hidden = multiline;
+    nodes.fieldSheetTextarea.hidden = !multiline;
+    nodes.fieldSheetInput.parentElement.hidden = multiline;
+
+    nodes.fieldSheetTitle.textContent = field.label;
+    nodes.fieldSheetLabel.textContent = field.label;
+    nodes.fieldSheetHint.textContent = field.is_required
+      ? "This field is required."
+      : "You can leave this blank.";
+    control.value = getFieldValue(fieldId)?.textValue || "";
+    if (field.max_length) {
+      control.maxLength = field.max_length;
+    } else {
+      control.removeAttribute("maxlength");
+    }
+
+    nodes.fieldSheet.hidden = false;
+    window.setTimeout(() => control.focus(), 60);
+  }
+
+  function closeFieldSheet() {
+    nodes.fieldSheet.hidden = true;
+    state.sheetFieldId = null;
+  }
+
+  function saveFieldSheet() {
+    const fieldId = state.sheetFieldId;
+    const field = state.context?.fields.find((entry) => entry.id === fieldId);
+    if (!field) return closeFieldSheet();
+
+    const control = field.field_type === "MULTILINE" ? nodes.fieldSheetTextarea : nodes.fieldSheetInput;
+    const value = control.value;
+    state.values[fieldId] = { type: "TEXT", textValue: value };
+    delete state.fieldErrors[fieldId];
+
+    const inline = fieldInputNodes.get(fieldId);
+    if (inline) {
+      inline.value = value;
+      markFieldFilled(inline, value.trim());
+    }
+    closeFieldSheet();
+    renderFieldList();
+    updateSubmitState();
+  }
+
   function buildTextField(field) {
     const input = document.createElement("input");
     input.type = "text";
@@ -279,6 +362,7 @@
       input.classList.add("comb-field-input");
       input.style.setProperty("--comb-cells", String(field.max_length));
     }
+    handOffToFieldSheet(field, input);
     input.addEventListener("input", () => {
       state.values[field.id] = {
         type: "TEXT",
@@ -297,6 +381,7 @@
     textarea.className = "text-field-input multiline-field-input";
     textarea.placeholder = field.label;
     textarea.value = getFieldValue(field.id)?.textValue || "";
+    handOffToFieldSheet(field, textarea);
     textarea.addEventListener("input", () => {
       state.values[field.id] = {
         type: "TEXT",
@@ -990,6 +1075,21 @@
   nodes.submitModal?.addEventListener("click", (event) => {
     if (event.target instanceof HTMLElement && event.target.dataset.closeSubmitModal === "true") {
       closeSubmitModal();
+    }
+  });
+
+  nodes.closeFieldSheetButton?.addEventListener("click", closeFieldSheet);
+  nodes.cancelFieldSheetButton?.addEventListener("click", closeFieldSheet);
+  nodes.saveFieldSheetButton?.addEventListener("click", saveFieldSheet);
+  nodes.fieldSheet?.addEventListener("click", (event) => {
+    if (event.target instanceof HTMLElement && event.target.dataset.closeFieldSheet) {
+      closeFieldSheet();
+    }
+  });
+  nodes.fieldSheetInput?.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") {
+      event.preventDefault();
+      saveFieldSheet();
     }
   });
 

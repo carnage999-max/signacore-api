@@ -812,6 +812,34 @@ input {
   border-top: 1px solid rgba(218, 232, 248, 0.12);
 }
 
+/* The sheet exists so a field can be filled at a legible size; anything under 16px would bring
+   back the zoom it is here to avoid. */
+.field-sheet-input {
+  font-size: 16px;
+}
+
+.field-sheet-textarea {
+  width: 100%;
+  min-height: 120px;
+  resize: vertical;
+  line-height: 1.5;
+}
+
+@media (max-width: 900px) {
+  /* Rises from the bottom, within thumb reach and clear of the keyboard. */
+  .field-sheet {
+    align-items: end;
+    padding: 0;
+  }
+
+  .field-sheet-card {
+    width: 100%;
+    max-width: none;
+    border-radius: 18px 18px 0 0;
+    padding-bottom: calc(18px + env(safe-area-inset-bottom));
+  }
+}
+
 .modal-card-narrow {
   max-width: 460px;
 }
