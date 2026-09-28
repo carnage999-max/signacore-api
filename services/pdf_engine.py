@@ -32,6 +32,15 @@ MIN_TEXT_LAYER_CHARS = 24
 HEADER_FOOTER_MARGIN = 48.0
 # How far below a caption its writing rule is drawn.
 UNDERLINE_GAP = 10.0
+# Rules within this distance of each other are the same line of a grid drawn cell by cell.
+GRID_LINE_TOLERANCE = 2.0
+# A cell smaller than this is a rule or a tick box rather than somewhere to write, and one taller
+# than this is a panel holding its own layout rather than a row of a form.
+MIN_CELL_WIDTH = 40.0
+MIN_CELL_HEIGHT = 8.0
+MAX_CELL_HEIGHT = 90.0
+# Keeps the field inside the printed cell rather than sitting on its border.
+CELL_PADDING = 1.5
 # Words that join a clause to the rest of its sentence. A field caption never hangs on one.
 CLAUSE_WORDS = frozenset(
     """a an and as at because before but by for from if in of on or since than that the
@@ -343,6 +352,16 @@ class PDFEngine:
             )
             page_candidates.extend(line_candidates)
             order += len(line_candidates)
+
+            cell_candidates = self._extract_table_cell_fields(
+                line_words=line_words,
+                drawings=drawings,
+                page_index=page_index,
+                page_height=page_height,
+                order_start=order,
+            )
+            page_candidates.extend(cell_candidates)
+            order += len(cell_candidates)
 
             deduped_candidates = self._deduplicate_fields(page_candidates)
             for index, candidate in enumerate(deduped_candidates, start=order - len(page_candidates)):
@@ -752,6 +771,113 @@ class PDFEngine:
             )
             order += 1
         return fields
+
+    def _extract_table_cell_fields(
+        self,
+        line_words: list[list[tuple[Any, ...]]],
+        drawings: list[dict[str, Any]],
+        page_index: int,
+        page_height: float,
+        order_start: int,
+    ) -> list[DetectedField]:
+        """Find the blank cells of a form laid out as a table.
+
+        A form drawn as a table names what it wants in one cell and leaves the neighbouring cell
+        empty to write in. The rules that bound those cells are exactly the table borders the line
+        extractor has to ignore, so the cells are read from the grid instead of from the rules.
+
+        A cell is offered as a field only when it is empty, which is what separates a form from a
+        table that is simply presenting information - there, every cell already has content.
+        """
+        columns = self._grid_lines(
+            [d["rect"] for d in drawings if self._is_grid_rule(d.get("rect"), vertical=True)], horizontal=False
+        )
+        rows = self._grid_lines(
+            [d["rect"] for d in drawings if self._is_grid_rule(d.get("rect"), vertical=False)], horizontal=True
+        )
+        if len(columns) < 3 or len(rows) < 3:
+            return []
+
+        words = [
+            (float(word[0]), float(word[1]), float(word[2]), float(word[3]), str(word[4] or ""))
+            for line in line_words
+            for word in line
+        ]
+
+        fields: list[DetectedField] = []
+        order = order_start
+        for top, bottom in zip(rows, rows[1:]):
+            if not MIN_CELL_HEIGHT <= bottom - top <= MAX_CELL_HEIGHT:
+                continue
+            cells = [
+                (left, right, self._text_within(words, left, right, top, bottom))
+                for left, right in zip(columns, columns[1:])
+                if right - left >= MIN_CELL_WIDTH
+            ]
+            captions = [text for _, _, text in cells if text]
+            if not captions or len(captions) == len(cells):
+                # Nothing names the row, or the row is full and is presenting information.
+                continue
+            label = self._clean_label(captions[0])
+            if not self._is_caption(label):
+                continue
+
+            for left, right, text in cells:
+                if text:
+                    continue
+                fields.append(
+                    DetectedField(
+                        field_type=self._heuristic_type_for_text(label.lower()) or DocumentField.FieldTypeEnum.TEXT,
+                        label=self._normalize_label(label),
+                        page=page_index,
+                        x=left + CELL_PADDING,
+                        y=page_height - bottom + CELL_PADDING,
+                        width=right - left - CELL_PADDING * 2,
+                        height=bottom - top - CELL_PADDING * 2,
+                        is_required=True,
+                        detection_source=DocumentField.DetectionSourceEnum.HEURISTIC,
+                        order=order,
+                    )
+                )
+                order += 1
+        return fields
+
+    @staticmethod
+    def _is_grid_rule(rect: fitz.Rect | None, *, vertical: bool) -> bool:
+        if not rect:
+            return False
+        if vertical:
+            return rect.width <= 2.5 and rect.height >= MIN_CELL_HEIGHT
+        return rect.height <= 2.5 and rect.width >= MIN_CELL_WIDTH
+
+    @staticmethod
+    def _grid_lines(rects: list[fitz.Rect], *, horizontal: bool) -> list[float]:
+        """Collapse the rules of a grid into the distinct positions they sit at.
+
+        A border drawn cell by cell repeats the same position once per cell, and two rules meant
+        to be the same line can be a fraction of a point apart.
+        """
+        positions = sorted(rect.y0 if horizontal else rect.x0 for rect in rects)
+        collapsed: list[float] = []
+        for position in positions:
+            if not collapsed or position - collapsed[-1] > GRID_LINE_TOLERANCE:
+                collapsed.append(position)
+        return collapsed
+
+    @staticmethod
+    def _text_within(
+        words: list[tuple[float, float, float, float, str]],
+        left: float,
+        right: float,
+        top: float,
+        bottom: float,
+    ) -> str:
+        inside = [
+            token
+            for x0, y0, x1, y1, token in words
+            if token.strip() and left <= (x0 + x1) / 2 <= right and top <= (y0 + y1) / 2 <= bottom
+        ]
+        return " ".join(inside)
 
     def _label_for_checkbox(self, rect: fitz.Rect, line_words: list[list[tuple[Any, ...]]]) -> str:
         checkbox_center_y = (rect.y0 + rect.y1) / 2
