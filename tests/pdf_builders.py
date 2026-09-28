@@ -261,12 +261,17 @@ def build_xfa_style_pdf() -> bytes:
 
 
 def build_flat_pdf() -> bytes:
-    """No native widgets at all, so heuristic detection is expected to run."""
+    """No native widgets at all, so heuristic detection is expected to run.
+
+    The signature line carries its caption beside it, which is what says the line is for signing.
+    An unnamed rule is somewhere to write, not somewhere to sign.
+    """
     document, page = _new_document()
     page.insert_text((72, 120), "Name:")
     page.insert_text((72, 220), "Initials:")
+    page.insert_text((72, 324), "Employee Signature", fontsize=9)
     shape = page.new_shape()
-    shape.draw_line((72, 320), (240, 320))
+    shape.draw_line((250, 320), (460, 320))
     shape.finish(width=1)
     shape.commit()
     return _to_bytes(document)
@@ -474,11 +479,11 @@ def build_mixed_packet_pdf() -> bytes:
     printed = document.new_page(width=PAGE_WIDTH, height=PAGE_HEIGHT)
     printed.insert_text((72, 120), "Acknowledgement of Receipt", fontsize=12)
     printed.insert_text((72, 200), "Printed Legal Name:", fontsize=10)
+    printed.insert_text((72, 324), "Employee Signature", fontsize=9)
     shape = printed.new_shape()
-    shape.draw_line((72, 320), (300, 320))
+    shape.draw_line((250, 320), (470, 320))
     shape.finish(width=1)
     shape.commit()
-    printed.insert_text((72, 334), "Employee Signature", fontsize=9)
     return _to_bytes(document)
 
 
@@ -628,4 +633,66 @@ def build_form_table_pdf() -> bytes:
         page.insert_text((66, 332.0 + index * 24.0 + 16), service, fontsize=9)
         page.insert_text((246, 332.0 + index * 24.0 + 16), weeks, fontsize=9)
     grid(332.0, 2)
+    return _to_bytes(document)
+
+
+def build_two_tables_one_page_pdf() -> bytes:
+    """A form table and a reference table on one page, whose columns do not line up.
+
+    Taking every rule on the page as one grid cuts each table at the other's column edges, and a
+    two-column form comes back with a field in every part its neighbour happens to divide.
+    """
+    document, page = _new_document()
+
+    def rule(start: tuple[float, float], end: tuple[float, float]) -> None:
+        shape = page.new_shape()
+        shape.draw_line(start, end)
+        shape.finish(width=0.8)
+        shape.commit()
+
+    def grid(top: float, rows: int, columns: tuple[float, ...]) -> None:
+        for index in range(rows + 1):
+            y = top + index * 24.0
+            rule((columns[0], y), (columns[-1], y))
+        for x in columns:
+            rule((x, top), (x, top + rows * 24.0))
+
+    for index, caption in enumerate(("Legal First Name", "Legal Last Name", "Home Address")):
+        page.insert_text((66, 130.0 + index * 24.0 + 16), caption, fontsize=9)
+    grid(130.0, 3, (60.0, 240.0, 560.0))
+
+    headings = ("Department", "Contact", "Extension", "Email")
+    for index, row in enumerate((headings, ("Facilities", "J Bell", "318", "fac@example.test"))):
+        for column, value in zip((66.0, 166.0, 296.0, 386.0), row):
+            page.insert_text((column, 300.0 + index * 24.0 + 16), value, fontsize=9)
+    grid(300.0, 2, (60.0, 160.0, 290.0, 380.0, 560.0))
+    return _to_bytes(document)
+
+
+def build_caption_above_rule_pdf() -> bytes:
+    """Captions written on the line above the rule they name, spanning the same width.
+
+    A signature block is often set out this way rather than in two columns, and a search that
+    only looks to the left of a rule finds nothing to call any of them.
+    """
+    document, page = _new_document()
+    for index, caption in enumerate(("Employee Acknowledgment Signature", "Printed Name", "Acknowledgment Date")):
+        top = 200.0 + index * 52.0
+        page.insert_text((60, top), caption, fontsize=10)
+        shape = page.new_shape()
+        shape.draw_line((60, top + 12), (500, top + 12))
+        shape.finish(width=0.8)
+        shape.commit()
+    return _to_bytes(document)
+
+
+def build_written_answer_lines_pdf() -> bytes:
+    """A block of ruled lines for a written answer, under a prompt that names none of them."""
+    document, page = _new_document()
+    page.insert_text((60, 180), "Please explain any scheduling restrictions:", fontsize=10)
+    for index in range(5):
+        shape = page.new_shape()
+        shape.draw_line((60, 210.0 + index * 24.0), (560, 210.0 + index * 24.0))
+        shape.finish(width=0.8)
+        shape.commit()
     return _to_bytes(document)

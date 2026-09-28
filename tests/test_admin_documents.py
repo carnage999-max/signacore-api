@@ -67,8 +67,11 @@ def build_flat_pdf() -> bytes:
     page = document.new_page(width=612, height=792)
     page.insert_text((72, 120), "Name:")
     page.insert_text((72, 220), "Initials:")
+    # The caption beside the rule is what says the line is for signing; an unnamed rule is
+    # somewhere to write.
+    page.insert_text((72, 324), "Employee Signature", fontsize=9)
     shape = page.new_shape()
-    shape.draw_line((72, 320), (240, 320))
+    shape.draw_line((250, 320), (460, 320))
     shape.finish(width=1)
     shape.commit()
 

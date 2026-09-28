@@ -30,8 +30,14 @@ MIN_TEXT_LAYER_CHARS = 24
 # A running header or footer is ruled off across the full width of the page. Nobody signs in the
 # margin, so a rule that sits in one is decoration rather than a place to write.
 HEADER_FOOTER_MARGIN = 48.0
-# How far below a caption its writing rule is drawn.
+# How far below a caption its writing rule is drawn, when the caption stands beside it.
 UNDERLINE_GAP = 10.0
+# How far below a caption written over the rule that rule may sit. A caption on its own line
+# clears the descenders of its own text before the rule begins, so it sits further off.
+ABOVE_CAPTION_GAP = 18.0
+# How far to the left of a rule a caption written above it may end. A caption beside a rule is not
+# held to this, because a form's label column can sit well clear of the space it labels.
+BESIDE_CAPTION_BAND = 14.0
 # A space wider than this between two words of a row separates one column from the next rather
 # than one word of a caption from the next.
 CAPTION_WORD_GAP = 26.0
@@ -759,8 +765,12 @@ class PDFEngine:
                 # caption is a writing line whatever follows it, and prose often follows it.
                 continue
             if not label:
-                label = f"Signature {order}"
-                field_type = DocumentField.FieldTypeEnum.SIGNATURE
+                # Nothing names this rule, so there is no evidence it is a signature line rather
+                # than a line to write on - and a block of them is a free-text answer area, which
+                # as signature boxes would ask a signer to sign the same thing six times. Text is
+                # what an unnamed writing line collects unless its caption says otherwise.
+                label = f"Field {order}"
+                field_type = DocumentField.FieldTypeEnum.TEXT
             else:
                 field_type = self._heuristic_type_for_text(label.lower()) or DocumentField.FieldTypeEnum.TEXT
             fields.append(
@@ -797,13 +807,11 @@ class PDFEngine:
         A cell is offered as a field only when it is empty, which is what separates a form from a
         table that is simply presenting information - there, every cell already has content.
         """
-        columns = self._grid_lines(
-            [d["rect"] for d in drawings if self._is_grid_rule(d.get("rect"), vertical=True)], horizontal=False
-        )
+        verticals = [d["rect"] for d in drawings if self._is_grid_rule(d.get("rect"), vertical=True)]
         rows = self._grid_lines(
             [d["rect"] for d in drawings if self._is_grid_rule(d.get("rect"), vertical=False)], horizontal=True
         )
-        if len(columns) < 3 or len(rows) < 3:
+        if len(verticals) < 2 or len(rows) < 3:
             return []
 
         words = [
@@ -816,6 +824,19 @@ class PDFEngine:
         order = order_start
         for top, bottom in zip(rows, rows[1:]):
             if not MIN_CELL_HEIGHT <= bottom - top <= MAX_CELL_HEIGHT:
+                continue
+            # Only the rules that run the height of this row divide it. A page can hold more than
+            # one table, and taking every vertical on the page would cut each table's rows at the
+            # other's column edges.
+            columns = self._grid_lines(
+                [
+                    rect
+                    for rect in verticals
+                    if rect.y0 <= top + GRID_LINE_TOLERANCE and rect.y1 >= bottom - GRID_LINE_TOLERANCE
+                ],
+                horizontal=False,
+            )
+            if len(columns) < 3:
                 continue
             cells = [
                 (left, right, self._text_within(words, left, right, top, bottom))
@@ -949,27 +970,34 @@ class PDFEngine:
         above: list[tuple[float, str]] = []
         beside: list[tuple[float, str]] = []
         for words in line_words:
-            candidates: list[tuple[float, float, float, float, str]] = []
+            alongside: list[tuple[float, float, float, float, str]] = []
+            overhead: list[tuple[float, float, float, float, str]] = []
             for word in words:
                 x0, y0, x1, y1 = map(float, word[:4])
-                center_y = (y0 + y1) / 2
-                near_row = abs(center_y - line_center_y) <= 12.0
-                sits_above = 0.0 <= rect.y0 - y1 <= UNDERLINE_GAP
-                if not (near_row or sits_above):
-                    continue
-                if x1 <= rect.x0 + 8.0:
-                    candidates.append((x0, y0, x1, y1, str(word[4])))
-            phrase_words = self._caption_run(candidates)
-            if not phrase_words:
-                continue
-            top = min(word[1] for word in phrase_words)
-            bottom = max(word[3] for word in phrase_words)
-            phrase = " ".join(word[4] for word in phrase_words)
-            gap = rect.y0 - bottom
-            if 0.0 <= gap <= UNDERLINE_GAP:
-                above.append((gap, phrase))
-            else:
-                beside.append((abs((top + bottom) / 2 - line_center_y), phrase))
+                gap = rect.y0 - y1
+                # Sitting over the rule, either written across it on the line above or set off to
+                # its left in a label column. How far off varies by an order of magnitude between
+                # documents, so distance is not used to judge it: a label column reaches 174pt in
+                # one packet, and a heading that means something else sits 169pt away in another.
+                if 0.0 <= gap <= ABOVE_CAPTION_GAP and x0 <= rect.x1:
+                    overhead.append((x0, y0, x1, y1, str(word[4])))
+                # Standing beside it: a label column, which ends before the rule begins. The band
+                # is wider than a row's own height because the rule sits below its caption's
+                # baseline; the closest caption still wins, so admitting more costs nothing.
+                if abs((y0 + y1) / 2 - line_center_y) <= BESIDE_CAPTION_BAND and x1 <= rect.x0 + 8.0:
+                    alongside.append((x0, y0, x1, y1, str(word[4])))
+
+            overhead_run = self._caption_run(overhead)
+            if overhead_run:
+                above.append(
+                    (rect.y0 - max(word[3] for word in overhead_run), " ".join(word[4] for word in overhead_run))
+                )
+
+            beside_run = self._caption_run(alongside)
+            if beside_run:
+                centre = (min(word[1] for word in beside_run) + max(word[3] for word in beside_run)) / 2
+                beside.append((abs(centre - line_center_y), " ".join(word[4] for word in beside_run)))
+
         ranked = sorted(above) or sorted(beside)
         return self._clean_label(ranked[0][1]) if ranked else ""
 
