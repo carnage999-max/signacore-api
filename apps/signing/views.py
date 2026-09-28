@@ -462,6 +462,7 @@ class SignerSubmitView(APIView):
             return FieldSubmission.ValueTypeEnum.SIGNATURE_PNG
         if field_type == DocumentField.FieldTypeEnum.INITIALS:
             return FieldSubmission.ValueTypeEnum.INITIALS_PNG
-        if field_type == DocumentField.FieldTypeEnum.CHECKBOX:
+        if field_type in (DocumentField.FieldTypeEnum.CHECKBOX, DocumentField.FieldTypeEnum.RADIO):
+            # A radio option records whether it is the one chosen, exactly as a checkbox does.
             return FieldSubmission.ValueTypeEnum.CHECKBOX
         return FieldSubmission.ValueTypeEnum.TEXT

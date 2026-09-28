@@ -11,6 +11,7 @@ import fitz
 PAGE_WIDTH = 612.0
 PAGE_HEIGHT = 792.0
 
+FLAG_READ_ONLY = 1 << 0
 FLAG_REQUIRED = 1 << 1
 FLAG_MULTILINE = 1 << 12
 FLAG_RADIO = 1 << 15
@@ -95,16 +96,21 @@ def build_supported_acroform_pdf() -> bytes:
 
 
 def build_radio_group_pdf() -> bytes:
-    """Three radio kids of one group, as an exclusive choice control."""
+    """Three radio kids of one group, as an exclusive choice control.
+
+    Kids of a radio group share the field name holding the group's value; only the appearance
+    state distinguishes one option from another.
+    """
     document, page = _new_document()
     for index, top in enumerate((200, 230, 260)):
         page.add_widget(_text_widget(name=f"delivery_choice_{index}", rect=fitz.Rect(72, top, 86, top + 14)))
-        _retype_last_widget(document, page, field_type="/Btn", flags=FLAG_RADIO | (1 << 14))
+        xref = _retype_last_widget(document, page, field_type="/Btn", flags=FLAG_RADIO | (1 << 14))
+        document.xref_set_key(xref, "T", "(delivery_choice)")
     return _to_bytes(document)
 
 
 def build_choice_field_pdf() -> bytes:
-    """A list box and a combo box - both /Ch controls SignaCore cannot represent."""
+    """A list box and a combo box, the two shapes a /Ch choice control takes."""
     document, page = _new_document()
 
     page.add_widget(_text_widget(name="month", rect=fitz.Rect(72, 144, 260, 210)))
@@ -193,7 +199,8 @@ def build_mixed_form_pdf() -> bytes:
     _retype_last_widget(document, page, field_type="/Ch", flags=FLAG_COMBO, options="[(Nigeria)(Ghana)]")
 
     page.add_widget(_text_widget(name="reset", rect=fitz.Rect(72, 290, 160, 314)))
-    _retype_last_widget(document, page, field_type="/Btn", flags=FLAG_PUSHBUTTON)
+    xref = _retype_last_widget(document, page, field_type="/Btn", flags=FLAG_PUSHBUTTON)
+    document.xref_set_key(xref, "A", f"{_action(document, '/S/ResetForm')} 0 R")
 
     return _to_bytes(document)
 
@@ -202,7 +209,8 @@ def build_unsupported_only_form_pdf() -> bytes:
     """Native widgets that are all unsupported, drawn over heuristic-looking page furniture.
 
     The underscores and drawn line would be picked up by heuristic detection, which must not
-    run for a document that has native widgets.
+    run for a page that has native widgets. A submit button is the control SignaCore can never
+    honour, whatever else it learns to import.
     """
     document, page = _new_document()
     page.insert_text((72, 120), "Signature:________________________ Date:____________")
@@ -211,8 +219,9 @@ def build_unsupported_only_form_pdf() -> bytes:
     shape.finish(width=1)
     shape.commit()
 
-    page.add_widget(_text_widget(name="choice", rect=fitz.Rect(72, 400, 260, 424)))
-    _retype_last_widget(document, page, field_type="/Ch", flags=FLAG_COMBO, options="[(One)(Two)]")
+    page.add_widget(_text_widget(name="submit", rect=fitz.Rect(72, 400, 260, 424)))
+    xref = _retype_last_widget(document, page, field_type="/Btn", flags=FLAG_PUSHBUTTON)
+    document.xref_set_key(xref, "A", f"{_action(document, '/S/SubmitForm/F(https://example.invalid/post)')} 0 R")
 
     return _to_bytes(document)
 
@@ -351,6 +360,13 @@ def build_blank_digital_pdf() -> bytes:
     page.insert_text((72, 120), "This memorandum records the parties' shared understanding.", fontsize=11)
     page.insert_text((72, 150), "It creates no obligations and requires no response.", fontsize=11)
     return _to_bytes(document)
+
+
+def _action(document: fitz.Document, body: str) -> int:
+    """Create a non-JavaScript action, such as a form submission or a reset."""
+    xref = document.get_new_xref()
+    document.update_object(xref, f"<</Type/Action{body}>>")
+    return xref
 
 
 def _js_action(document: fitz.Document, script: str) -> int:
@@ -549,4 +565,30 @@ def build_header_rule_pdf() -> bytes:
     shape.draw_line((72, 770), (540, 770))
     shape.finish(width=1)
     shape.commit()
+    return _to_bytes(document)
+
+
+def build_locked_signature_pdf() -> bytes:
+    """A signature line locked against typing, beside a locked field holding a fixed value.
+
+    Forms that are invalid unless signed still mark the signature line read-only, because the
+    lock is there to stop the form's own text tool writing in it.
+    """
+    document, page = _new_document()
+    page.add_widget(
+        _text_widget(
+            name="Employee signature",
+            rect=fitz.Rect(122, 433, 388, 449),
+            label="EMPLOYEE'S SIGNATURE",
+            flags=FLAG_READ_ONLY,
+        )
+    )
+    page.add_widget(
+        _text_widget(
+            name="Office use only",
+            rect=fitz.Rect(122, 470, 388, 486),
+            label="Office use only",
+            flags=FLAG_READ_ONLY,
+        )
+    )
     return _to_bytes(document)

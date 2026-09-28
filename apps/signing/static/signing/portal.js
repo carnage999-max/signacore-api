@@ -144,7 +144,10 @@
     if (field.field_type === "TEXT" || field.field_type === "MULTILINE") {
       return Boolean(value.textValue && value.textValue.trim());
     }
-    if (field.field_type === "CHECKBOX") {
+    if (field.field_type === "DROPDOWN") {
+      return Boolean(value.textValue && value.textValue.trim());
+    }
+    if (field.field_type === "CHECKBOX" || field.field_type === "RADIO") {
       if (field.is_required) return Boolean(value.checked);
       return typeof value.checked === "boolean";
     }
@@ -334,6 +337,63 @@
     return button;
   }
 
+  function buildDropdownField(field) {
+    const select = document.createElement("select");
+    select.className = "dropdown-input";
+    select.setAttribute("aria-label", field.label);
+
+    const blank = document.createElement("option");
+    blank.value = "";
+    blank.textContent = "";
+    select.appendChild(blank);
+    (field.options || []).forEach((option) => {
+      const node = document.createElement("option");
+      node.value = option;
+      node.textContent = option;
+      select.appendChild(node);
+    });
+    select.value = getFieldValue(field.id)?.textValue || "";
+
+    select.addEventListener("change", () => {
+      state.values[field.id] = { type: "TEXT", textValue: select.value };
+      delete state.fieldErrors[field.id];
+      markFieldFilled(select, Boolean(select.value));
+      renderFieldList();
+      updateSubmitState();
+    });
+    return select;
+  }
+
+  function buildRadioField(field) {
+    const input = document.createElement("input");
+    input.type = "radio";
+    input.className = "radio-input";
+    // Sharing the group name is what makes the browser clear the other options for us, which is
+    // the behaviour the form's own script or radio group expressed.
+    input.name = `group-${field.group_key}`;
+    input.checked = Boolean(getFieldValue(field.id)?.checked);
+    input.setAttribute("aria-label", field.option_value || field.label);
+
+    input.addEventListener("change", () => {
+      groupMembers(field).forEach((member) => {
+        state.values[member.id] = { type: "CHECKBOX", checked: member.id === field.id };
+        delete state.fieldErrors[member.id];
+        const node = fieldInputNodes.get(member.id);
+        if (node) markFieldFilled(node, member.id === field.id);
+      });
+      renderFieldList();
+      updateSubmitState();
+    });
+    return input;
+  }
+
+  function groupMembers(field) {
+    if (!state.context || !field.group_key) return [field];
+    return state.context.fields.filter(
+      (candidate) => candidate.field_type === "RADIO" && candidate.group_key === field.group_key,
+    );
+  }
+
   function getReusableSignatureTargets(activeField) {
     if (!state.context || !activeField) return [];
     return state.context.fields.filter(
@@ -439,10 +499,15 @@
           const isTextual = field.field_type === "TEXT" || field.field_type === "MULTILINE";
           const typeClassName = isTextual
             ? "field-overlay-text"
-            : field.field_type === "CHECKBOX"
+            : field.field_type === "DROPDOWN"
+              ? "field-overlay-text"
+              : field.field_type === "RADIO"
+                ? "field-overlay-checkbox"
+                : field.field_type === "CHECKBOX"
               ? "field-overlay-checkbox"
               : "field-overlay-signature";
-          const minHeightPercent = isTextual ? 1.15 : field.field_type === "CHECKBOX" ? 1.2 : 1.8;
+          const isTickBox = field.field_type === "CHECKBOX" || field.field_type === "RADIO";
+          const minHeightPercent = isTextual || field.field_type === "DROPDOWN" ? 1.15 : isTickBox ? 1.2 : 1.8;
 
           fieldNode.className = `field-overlay ${typeClassName} ${field.is_required ? "field-overlay-required" : ""} ${
             state.fieldErrors[field.id] ? "field-error" : ""
@@ -460,6 +525,10 @@
             fieldContent = buildTextField(field);
           } else if (field.field_type === "MULTILINE") {
             fieldContent = buildMultilineField(field);
+          } else if (field.field_type === "DROPDOWN") {
+            fieldContent = buildDropdownField(field);
+          } else if (field.field_type === "RADIO") {
+            fieldContent = buildRadioField(field);
           } else if (field.field_type === "CHECKBOX") {
             fieldContent = buildCheckboxField(field);
           } else {

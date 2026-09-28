@@ -462,6 +462,9 @@ class AdminDocumentsView(APIView):
                         order=field.order,
                         max_length=field.max_length,
                         is_comb=field.is_comb,
+                        options=field.options,
+                        group_key=field.group_key,
+                        option_value=field.option_value,
                     )
                     for field in detected_fields
                 ]
