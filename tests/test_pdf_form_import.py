@@ -1286,3 +1286,16 @@ class MixedPacketImportTests(TestCase):
 
         self.assertEqual([field["field_type"] for field in payload["fields"]], ["SIGNATURE"])
         self.assertIn("UNSUPPORTED_READ_ONLY_FIELD", payload["detection_summary"]["warning_codes"])
+
+    def test_the_blank_cells_of_a_form_table_become_fields(self) -> None:
+        payload = self.upload(builders.build_form_table_pdf())
+
+        labels = [field["label"] for field in payload["fields"]]
+        self.assertEqual(sorted(labels), ["Full Legal Name", "Home Address", "Mobile Phone"])
+
+    def test_a_table_presenting_information_is_not_turned_into_a_form(self) -> None:
+        """Every cell of a reference table already has content, so none of it is asking for any."""
+        payload = self.upload(builders.build_form_table_pdf())
+
+        self.assertNotIn("1 year", [field["label"] for field in payload["fields"]])
+        self.assertEqual(len(payload["fields"]), 3)

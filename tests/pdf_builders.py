@@ -592,3 +592,40 @@ def build_locked_signature_pdf() -> bytes:
         )
     )
     return _to_bytes(document)
+
+
+def build_form_table_pdf() -> bytes:
+    """A form laid out as a table beside a table that is only presenting information.
+
+    The form names what it wants in the left cell of each row and leaves the right cell empty.
+    The second table has both cells filled, which is what tells the two apart. Borders are drawn
+    as separate rules, which is how a word processor emits a table.
+    """
+    document, page = _new_document()
+
+    def rule(start: tuple[float, float], end: tuple[float, float]) -> None:
+        # Each border is its own path, as a word processor emits them; a single path would be
+        # read as one shape the size of the whole table.
+        shape = page.new_shape()
+        shape.draw_line(start, end)
+        shape.finish(width=0.8)
+        shape.commit()
+
+    def grid(top: float, rows: int) -> None:
+        for index in range(rows + 1):
+            y = top + index * 24.0
+            rule((60, y), (520, y))
+        for x in (60, 240, 520):
+            rule((x, top), (x, top + rows * 24.0))
+
+    page.insert_text((70, 118), "Emergency contact", fontsize=11)
+    for index, caption in enumerate(("Full Legal Name", "Home Address", "Mobile Phone")):
+        page.insert_text((66, 130.0 + index * 24.0 + 16), caption, fontsize=9)
+    grid(130.0, 3)
+
+    page.insert_text((70, 320), "Vacation entitlement", fontsize=11)
+    for index, (service, weeks) in enumerate((("1 year", "1 week"), ("2 years", "2 weeks"))):
+        page.insert_text((66, 332.0 + index * 24.0 + 16), service, fontsize=9)
+        page.insert_text((246, 332.0 + index * 24.0 + 16), weeks, fontsize=9)
+    grid(332.0, 2)
+    return _to_bytes(document)
