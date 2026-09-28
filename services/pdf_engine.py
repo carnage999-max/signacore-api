@@ -32,6 +32,9 @@ MIN_TEXT_LAYER_CHARS = 24
 HEADER_FOOTER_MARGIN = 48.0
 # How far below a caption its writing rule is drawn.
 UNDERLINE_GAP = 10.0
+# A space wider than this between two words of a row separates one column from the next rather
+# than one word of a caption from the next.
+CAPTION_WORD_GAP = 26.0
 # Rules within this distance of each other are the same line of a grid drawn cell by cell.
 GRID_LINE_TOLERANCE = 2.0
 # A cell smaller than this is a rule or a tick box rather than somewhere to write, and one taller
@@ -739,7 +742,7 @@ class PDFEngine:
                 continue
             if self._is_table_border(rect, vertical_lines):
                 continue
-            if self._line_overlaps_text(rect, line_words):
+            if self._underlines_text(rect, line_words):
                 continue
 
             line_height = self._line_height_near_rect(rect, line_words)
@@ -749,6 +752,11 @@ class PDFEngine:
             label = self._label_for_horizontal_line(rect, line_words)
             if label and not self._is_caption(label):
                 # Body copy that happens to run alongside a rule, not a caption for it.
+                continue
+            if not label and self._sits_above_text(rect, line_words):
+                # Nothing names this rule and a paragraph opens directly beneath it, so it is
+                # dividing the page rather than waiting to be written on. A rule that does have a
+                # caption is a writing line whatever follows it, and prose often follows it.
                 continue
             if not label:
                 label = f"Signature {order}"
@@ -941,23 +949,22 @@ class PDFEngine:
         above: list[tuple[float, str]] = []
         beside: list[tuple[float, str]] = []
         for words in line_words:
-            left_words: list[str] = []
-            top = bottom = None
+            candidates: list[tuple[float, float, float, float, str]] = []
             for word in words:
-                _, y0, x1, y1 = map(float, word[:4])
+                x0, y0, x1, y1 = map(float, word[:4])
                 center_y = (y0 + y1) / 2
                 near_row = abs(center_y - line_center_y) <= 12.0
                 sits_above = 0.0 <= rect.y0 - y1 <= UNDERLINE_GAP
                 if not (near_row or sits_above):
                     continue
-                if not (rect.x0 - 220.0 <= x1 <= rect.x0 + 8.0):
-                    continue
-                left_words.append(str(word[4]))
-                top = y0 if top is None else min(top, y0)
-                bottom = y1 if bottom is None else max(bottom, y1)
-            if not left_words or top is None or bottom is None:
+                if x1 <= rect.x0 + 8.0:
+                    candidates.append((x0, y0, x1, y1, str(word[4])))
+            phrase_words = self._caption_run(candidates)
+            if not phrase_words:
                 continue
-            phrase = " ".join(left_words[-4:])
+            top = min(word[1] for word in phrase_words)
+            bottom = max(word[3] for word in phrase_words)
+            phrase = " ".join(word[4] for word in phrase_words)
             gap = rect.y0 - bottom
             if 0.0 <= gap <= UNDERLINE_GAP:
                 above.append((gap, phrase))
@@ -965,6 +972,25 @@ class PDFEngine:
                 beside.append((abs((top + bottom) / 2 - line_center_y), phrase))
         ranked = sorted(above) or sorted(beside)
         return self._clean_label(ranked[0][1]) if ranked else ""
+
+    @staticmethod
+    def _caption_run(
+        candidates: list[tuple[float, float, float, float, str]],
+    ) -> list[tuple[float, float, float, float, str]]:
+        """Take the run of words nearest the rule, stopping where the row's layout breaks.
+
+        A caption can be any length, so counting words truncates it - "Social Security Number"
+        becomes "Security Number", and "Date of Birth" becomes a fragment that then reads as
+        prose. Reading leftwards from the rule and stopping at the first wide gap keeps the whole
+        caption while leaving behind whatever sits in an earlier column of the same row.
+        """
+        ordered = sorted(candidates, key=lambda word: word[0])
+        run: list[tuple[float, float, float, float, str]] = []
+        for word in reversed(ordered):
+            if run and run[0][0] - word[2] > CAPTION_WORD_GAP:
+                break
+            run.insert(0, word)
+        return run
 
     def _text_before_first_blank(self, line_text: str) -> str:
         match = self.underscore_pattern.search(line_text)
@@ -1006,7 +1032,15 @@ class PDFEngine:
 
         return prefix
 
-    def _line_overlaps_text(self, rect: fitz.Rect, line_words: list[list[tuple[Any, ...]]]) -> bool:
+    def _underlines_text(self, rect: fitz.Rect, line_words: list[list[tuple[Any, ...]]]) -> bool:
+        """Check whether the rule is the underline of the text directly on top of it."""
+        return self._touches_text(rect, line_words, above=True)
+
+    def _sits_above_text(self, rect: fitz.Rect, line_words: list[list[tuple[Any, ...]]]) -> bool:
+        """Check whether text opens immediately beneath the rule."""
+        return self._touches_text(rect, line_words, above=False)
+
+    def _touches_text(self, rect: fitz.Rect, line_words: list[list[tuple[Any, ...]]], *, above: bool) -> bool:
         for words in line_words:
             for word in words:
                 x0, y0, x1, y1 = map(float, word[:4])
@@ -1016,7 +1050,8 @@ class PDFEngine:
                 horizontal_overlap = min(x1, rect.x1) - max(x0, rect.x0)
                 if horizontal_overlap <= 12.0:
                     continue
-                if abs(y1 - rect.y0) <= 4.0 or abs(y0 - rect.y1) <= 4.0:
+                distance = abs(y1 - rect.y0) if above else abs(y0 - rect.y1)
+                if distance <= 4.0:
                     return True
         return False
 
