@@ -132,6 +132,29 @@
       </div>
     </div>
 
+    <div id="field-sheet" class="modal field-sheet" hidden>
+      <div class="modal-backdrop" data-close-field-sheet="true"></div>
+      <div class="modal-card field-sheet-card" role="dialog" aria-modal="true" aria-labelledby="field-sheet-title">
+        <div class="modal-header">
+          <div>
+            <p class="eyebrow">Fill in</p>
+            <h2 id="field-sheet-title">Field</h2>
+          </div>
+          <button id="close-field-sheet-button" class="icon-button" type="button" aria-label="Close">&times;</button>
+        </div>
+        <p id="field-sheet-hint" class="panel-copy"></p>
+        <label class="field">
+          <span id="field-sheet-label">Value</span>
+          <input id="field-sheet-input" class="text-input field-sheet-input">
+        </label>
+        <textarea id="field-sheet-textarea" class="text-input field-sheet-input field-sheet-textarea" rows="5" hidden></textarea>
+        <div class="modal-actions">
+          <button id="cancel-field-sheet-button" class="secondary-button" type="button">Cancel</button>
+          <button id="save-field-sheet-button" class="primary-button" type="button">Done</button>
+        </div>
+      </div>
+    </div>
+
     <div id="signature-modal" class="modal" hidden>
       <div class="modal-backdrop" data-close-modal="true"></div>
       <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="signature-modal-title">
