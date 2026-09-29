@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import logging
-from contextlib import ExitStack
 from datetime import timedelta
 
 import fitz
@@ -19,10 +18,10 @@ from rest_framework.views import APIView
 
 from apps.documents.models import Document, DocumentField
 from apps.documents.serializers import DocumentFieldSerializer
-from services.pdf_engine import PDFEngine
+from services.document_completion import issue_completed_document
 from services.pdf_sanitizer import PDFSanitizationError
 from tasks.notifications import notify_admin_progress, send_completion_emails, send_otp_email
-from utils.file_storage import save_encrypted_field_file, temporary_output_file, temporary_plaintext_file
+from utils.file_storage import temporary_plaintext_file
 from utils.otp import generate_otp, hash_otp, verify_otp
 from utils.pdf_preview import build_preview_matrix, prepare_page_for_preview
 from utils.signer_session import build_signer_session_token, verify_signer_session_token
@@ -387,64 +386,29 @@ class SignerSubmitView(APIView):
                     status=status.HTTP_200_OK,
                 )
 
-            all_submissions = list(
-                FieldSubmission.objects.select_related("document_field")
-                .filter(signing_request__document=document)
-                .order_by("submitted_at")
-            )
-            with ExitStack() as stack:
-                source_path = stack.enter_context(temporary_plaintext_file(document.original_pdf, suffix=".pdf"))
-                output_path = stack.enter_context(temporary_output_file(suffix=".pdf"))
-                flatten_submissions = []
-                for submission in all_submissions:
-                    image_path = ""
-                    if submission.image_value:
-                        image_path = str(
-                            stack.enter_context(temporary_plaintext_file(submission.image_value, suffix=".png"))
-                        )
-                    flatten_submissions.append(
-                        {
-                            "page": submission.document_field.page,
-                            "field_type": submission.document_field.field_type,
-                            "max_length": submission.document_field.max_length,
-                            "is_comb": submission.document_field.is_comb,
-                            "x": submission.document_field.x,
-                            "y": submission.document_field.y,
-                            "width": submission.document_field.width,
-                            "height": submission.document_field.height,
-                            "value_type": submission.value_type,
-                            "text_value": submission.text_value,
-                            "image_path": image_path,
-                        }
-                    )
-                try:
-                    PDFEngine().flatten(source_path, output_path, flatten_submissions)
-                except PDFSanitizationError:
-                    # The signature is kept; only the unsafe packaged file is withheld, and the
-                    # document stays un-completed so the sender can act on it.
-                    logger.exception(
-                        "Completed PDF failed sanitization",
-                        extra={"document_id": str(document.id)},
-                    )
-                    document.status = Document.StatusEnum.PARTIALLY_SIGNED
-                    document.save(update_fields=["status", "updated_at"])
-                    return Response(
-                        {
-                            "status": Document.StatusEnum.PARTIALLY_SIGNED,
-                            "message": (
-                                "Your signature was recorded. This document needs attention from "
-                                "the sender before the final copy can be issued."
-                            ),
-                        },
-                        status=status.HTTP_202_ACCEPTED,
-                    )
-                save_encrypted_field_file(
-                    document.signed_pdf,
-                    output_path,
-                    filename=f"{document.id}-signed.pdf",
+            try:
+                issue_completed_document(document)
+            except PDFSanitizationError:
+                # The signature is kept; only the unsafe packaged file is withheld, and the
+                # document stays un-completed so the sender can act on it. The reconciler will
+                # try again, which is what recovers a document whose failure was later fixed.
+                logger.exception(
+                    "Completed PDF failed sanitization",
+                    extra={"document_id": str(document.id)},
                 )
-            document.status = Document.StatusEnum.COMPLETED
-            document.save(update_fields=["status", "signed_pdf", "updated_at"])
+                document.status = Document.StatusEnum.PARTIALLY_SIGNED
+                document.save(update_fields=["status", "updated_at"])
+                return Response(
+                    {
+                        "status": Document.StatusEnum.PARTIALLY_SIGNED,
+                        "message": (
+                            "Your signature was recorded. This document needs attention from "
+                            "the sender before the final copy can be issued."
+                        ),
+                    },
+                    status=status.HTTP_202_ACCEPTED,
+                )
+
             transaction.on_commit(
                 lambda document_id=str(document.id): enqueue_task(
                     send_completion_emails,
