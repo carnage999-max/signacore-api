@@ -7,6 +7,7 @@ from unittest.mock import patch
 import fitz
 from django.conf import settings
 from django.contrib.auth import get_user_model
+from django.core import mail
 from django.core.cache import cache
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import SimpleTestCase, TestCase, override_settings
@@ -19,6 +20,7 @@ from apps.signing.models import SigningRequest
 from services.pdf_anchors import conceal_anchor_tags_on_page
 from services.pdf_engine import PDFEngine
 from services.pdf_sanitizer import PDFSanitizationError, _has_live_key, find_active_content
+from tasks.signing import issue_outstanding_completed_documents
 from utils.file_storage import temporary_plaintext_file
 from utils.pdf_preview import build_preview_matrix, prepare_page_for_preview
 
@@ -966,7 +968,7 @@ class SanitizationFailureTests(TestCase):
                 format="multipart",
             )
 
-    @patch("apps.signing.views.PDFEngine.flatten", side_effect=PDFSanitizationError("still contains /JS"))
+    @patch("services.document_completion.PDFEngine.flatten", side_effect=PDFSanitizationError("still contains /JS"))
     def test_signature_is_kept_and_no_unsafe_file_is_issued(self, _flatten) -> None:
         response = self.submit()
 
@@ -979,7 +981,7 @@ class SanitizationFailureTests(TestCase):
         self.assertEqual(self.signing_request.status, SigningRequest.StatusEnum.SIGNED)
         self.assertTrue(self.signing_request.submissions.exists())
 
-    @patch("apps.signing.views.PDFEngine.flatten", side_effect=PDFSanitizationError("still contains /JS"))
+    @patch("services.document_completion.PDFEngine.flatten", side_effect=PDFSanitizationError("still contains /JS"))
     def test_signer_is_told_the_sender_must_act(self, _flatten) -> None:
         response = self.submit()
 
@@ -1367,3 +1369,119 @@ class SanitizationBoundaryTests(SimpleTestCase):
 
     def test_a_key_set_to_null_is_still_treated_as_absent(self) -> None:
         self.assertFalse(_has_live_key("<</AA null>>", "/AA"))
+
+
+@override_settings(
+    MEDIA_ROOT=TEST_MEDIA_ROOT,
+    EMAIL_BACKEND="django.core.mail.backends.locmem.EmailBackend",
+    CELERY_TASK_ALWAYS_EAGER=True,
+    CELERY_TASK_EAGER_PROPAGATES=True,
+)
+class OutstandingCompletionTests(TestCase):
+    """A document everyone signed but which never got its copy is found and finished.
+
+    The copy is produced in the request carrying the last signature. Anything interrupting that
+    leaves the signatures stored with nothing to show for them, and no completion email, because
+    that is sent only once a copy exists. Nothing was watching for it.
+    """
+
+    def setUp(self) -> None:
+        cache.clear()
+        self.client = APIClient()
+        self.user = get_user_model().objects.create_user(
+            username="admin", email="admin@example.com", password="pw123456"
+        )
+        self.organization = Organization.objects.create(name="Reconcile Company", created_by=self.user)
+        self.document = Document.objects.create(
+            title="Stranded",
+            original_pdf=SimpleUploadedFile("flat.pdf", builders.build_flat_pdf(), content_type="application/pdf"),
+            created_by=self.user,
+            organization=self.organization,
+            status=Document.StatusEnum.SENT,
+        )
+        self.field = DocumentField.objects.create(
+            document=self.document,
+            field_type=DocumentField.FieldTypeEnum.TEXT,
+            label="Signer name",
+            page=1,
+            x=72,
+            y=620,
+            width=180,
+            height=24,
+            is_required=True,
+            detection_source=DocumentField.DetectionSourceEnum.MANUAL,
+            order=1,
+        )
+        self.signing_request = SigningRequest.objects.create(
+            document=self.document,
+            signer_email="jane@example.com",
+            signer_name="Jane Doe",
+            expires_at=timezone.now() + timedelta(days=7),
+        )
+
+    def strand(self) -> None:
+        """Sign the document, with the packaging failing the way a fault in it would."""
+        with self.settings(SIGNACORE_TEST_OTP_CODE="123456"):
+            self.client.post(f"/api/sign/{self.signing_request.id}/otp/send/")
+            verify = self.client.post(
+                f"/api/sign/{self.signing_request.id}/otp/verify/", {"otp": "123456"}, format="json"
+            )
+        token = verify.json()["session_token"]
+        with patch(
+            "services.document_completion.PDFEngine.flatten",
+            side_effect=PDFSanitizationError("still contains /JS"),
+        ):
+            with self.captureOnCommitCallbacks(execute=True):
+                self.client.post(
+                    f"/api/sign/{self.signing_request.id}/submit/",
+                    {
+                        "session_token": token,
+                        f"field_{self.field.id}_type": "TEXT",
+                        f"field_{self.field.id}_value": "Jane Doe",
+                    },
+                    format="multipart",
+                )
+        self.document.refresh_from_db()
+        self.assertFalse(self.document.signed_pdf)
+
+    def test_a_stranded_document_is_completed_on_the_next_sweep(self) -> None:
+        self.strand()
+        mail.outbox.clear()
+
+        self.assertEqual(issue_outstanding_completed_documents(), 1)
+
+        self.document.refresh_from_db()
+        self.assertEqual(self.document.status, Document.StatusEnum.COMPLETED)
+        self.assertTrue(self.document.signed_pdf)
+        # The email is the point of finishing it: neither party heard anything the first time.
+        self.assertEqual(len(mail.outbox), 1)
+        self.assertIn("jane@example.com", mail.outbox[0].recipients())
+        self.assertIn("admin@example.com", mail.outbox[0].recipients())
+
+    def test_a_document_still_awaiting_a_signer_is_left_alone(self) -> None:
+        self.strand()
+        SigningRequest.objects.create(
+            document=self.document,
+            signer_email="sam@example.com",
+            signer_name="Sam Roe",
+            expires_at=timezone.now() + timedelta(days=7),
+        )
+
+        self.assertEqual(issue_outstanding_completed_documents(), 0)
+        self.document.refresh_from_db()
+        self.assertFalse(self.document.signed_pdf)
+
+    def test_a_voided_document_is_left_alone(self) -> None:
+        self.strand()
+        self.document.status = Document.StatusEnum.VOIDED
+        self.document.save(update_fields=["status"])
+
+        self.assertEqual(issue_outstanding_completed_documents(), 0)
+        self.document.refresh_from_db()
+        self.assertFalse(self.document.signed_pdf)
+
+    def test_a_document_that_already_has_its_copy_is_not_reissued(self) -> None:
+        self.strand()
+        self.assertEqual(issue_outstanding_completed_documents(), 1)
+
+        self.assertEqual(issue_outstanding_completed_documents(), 0)

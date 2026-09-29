@@ -258,7 +258,13 @@ CELERY_BEAT_SCHEDULE = {
     "expire-signing-links-hourly": {
         "task": "tasks.signing.expire_signing_links",
         "schedule": 3600,
-    }
+    },
+    # A document everyone has signed but which never received its completed copy is invisible
+    # until someone goes looking, so this looks regularly rather than waiting to be asked.
+    "issue-outstanding-completed-documents": {
+        "task": "tasks.signing.issue_outstanding_completed_documents",
+        "schedule": 900,
+    },
 }
 
 FERNET_KEY = env("FERNET_KEY")
