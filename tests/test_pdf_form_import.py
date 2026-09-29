@@ -1299,3 +1299,24 @@ class MixedPacketImportTests(TestCase):
 
         self.assertNotIn("1 year", [field["label"] for field in payload["fields"]])
         self.assertEqual(len(payload["fields"]), 3)
+
+    def test_one_table_does_not_take_its_neighbour_column_edges(self) -> None:
+        payload = self.upload(builders.build_two_tables_one_page_pdf())
+
+        labels = sorted(field["label"] for field in payload["fields"])
+        self.assertEqual(labels, ["Home Address", "Legal First Name", "Legal Last Name"])
+
+    def test_a_caption_written_above_a_rule_names_it(self) -> None:
+        payload = self.upload(builders.build_caption_above_rule_pdf())
+
+        named = {field["label"]: field["field_type"] for field in payload["fields"]}
+        self.assertEqual(named.get("Employee Acknowledgment Signature"), "SIGNATURE")
+        self.assertEqual(named.get("Printed Name"), "TEXT")
+        self.assertEqual(named.get("Acknowledgment Date"), "TEXT")
+
+    def test_unnamed_writing_lines_are_not_signature_fields(self) -> None:
+        """Five ruled lines under a prompt are one written answer, not five things to sign."""
+        payload = self.upload(builders.build_written_answer_lines_pdf())
+
+        types = {field["field_type"] for field in payload["fields"]}
+        self.assertNotIn("SIGNATURE", types)
