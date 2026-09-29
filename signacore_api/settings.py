@@ -8,6 +8,8 @@ from corsheaders.defaults import default_headers
 from cryptography.fernet import Fernet
 from django.core.exceptions import ImproperlyConfigured
 
+from utils.observability import configure_error_reporting
+
 BASE_DIR = Path(__file__).resolve().parent.parent
 
 
@@ -299,3 +301,27 @@ APPLE_OAUTH_CLIENT_ID = env("APPLE_OAUTH_CLIENT_ID", "") or ""
 APPLE_OAUTH_TEAM_ID = env("APPLE_OAUTH_TEAM_ID", "") or ""
 APPLE_OAUTH_KEY_ID = env("APPLE_OAUTH_KEY_ID", "") or ""
 APPLE_OAUTH_PRIVATE_KEY = (env("APPLE_OAUTH_PRIVATE_KEY", "") or "").replace("\\n", "\n")
+
+# --- Error reporting -------------------------------------------------------
+# Off unless a DSN is configured, so development, tests and any deployment without one are
+# unaffected. What is sent is decided in utils.observability, not left to the SDK's defaults.
+SENTRY_DSN = env("SENTRY_DSN", "") or ""
+SENTRY_ENVIRONMENT = env("SENTRY_ENVIRONMENT", "staging") or "staging"
+SENTRY_RELEASE = env("SENTRY_RELEASE", "") or ""
+
+
+def _sentry_traces_sample_rate() -> float:
+    try:
+        rate = float(env("SENTRY_TRACES_SAMPLE_RATE", "0.1") or 0.1)
+    except (TypeError, ValueError):
+        return 0.1
+    return min(max(rate, 0.0), 1.0)
+
+
+SENTRY_ENABLED = configure_error_reporting(
+    dsn=SENTRY_DSN,
+    environment=SENTRY_ENVIRONMENT,
+    release=SENTRY_RELEASE,
+    traces_sample_rate=_sentry_traces_sample_rate(),
+    debug=False,
+)

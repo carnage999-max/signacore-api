@@ -9,7 +9,6 @@ from django.conf import settings
 from django.db import transaction
 from django.http import Http404, HttpResponse
 from django.shortcuts import get_object_or_404
-from django.templatetags.static import static
 from django.utils import timezone
 from django.utils.text import slugify
 from django.views.generic import TemplateView
@@ -27,6 +26,7 @@ from utils.file_storage import temporary_plaintext_file
 from utils.otp import generate_otp, hash_otp, verify_otp
 from utils.pdf_preview import build_preview_matrix, prepare_page_for_preview
 from utils.signer_session import build_signer_session_token, verify_signer_session_token
+from utils.static_assets import versioned_static
 from utils.task_dispatch import enqueue_task
 from utils.throttling import SignacoreRateThrottle
 
@@ -120,8 +120,8 @@ class SignerPortalView(TemplateView):
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
         context["signing_token"] = str(kwargs["token"])
-        context["signer_portal_css_url"] = static("signing/portal.css")
-        context["signer_portal_js_url"] = static("signing/portal.js")
+        context["signer_portal_css_url"] = versioned_static("signing/portal.css")
+        context["signer_portal_js_url"] = versioned_static("signing/portal.js")
         context["signer_account_url"] = f"{settings.SIGNACORE_APP_URL.rstrip('/')}/register?role=signer"
         return context
 
