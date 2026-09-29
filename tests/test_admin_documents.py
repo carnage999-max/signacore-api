@@ -473,9 +473,11 @@ class AdminDocumentUploadTests(TestCase):
         self.assertGreaterEqual(payload["detection_summary"]["field_count"], 2)
         self.assertTrue(any(field["field_type"] == "SIGNATURE" for field in payload["fields"]))
         self.assertTrue(any(field["field_type"] == "TEXT" for field in payload["fields"]))
+        # A written answer is given room to be written in, rather than the height of the caption
+        # printed beside it, so a value never renders smaller than one entered in a table cell.
         self.assertTrue(
             all(
-                8 <= field["height"] <= 16
+                18 <= field["height"] <= 40
                 for field in payload["fields"]
                 if field["field_type"] in {"SIGNATURE", "TEXT"}
             )

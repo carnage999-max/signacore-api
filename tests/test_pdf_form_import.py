@@ -1320,3 +1320,19 @@ class MixedPacketImportTests(TestCase):
 
         types = {field["field_type"] for field in payload["fields"]}
         self.assertNotIn("SIGNATURE", types)
+
+    def test_tick_boxes_are_not_required_but_a_signature_line_is(self) -> None:
+        payload = self.upload(builders.build_optional_tick_boxes_pdf())
+
+        required = {field["field_type"] for field in payload["fields"] if field["is_required"]}
+        optional = {field["field_type"] for field in payload["fields"] if not field["is_required"]}
+        self.assertNotIn("CHECKBOX", required)
+        self.assertIn("CHECKBOX", optional)
+        self.assertIn("SIGNATURE", required)
+
+    def test_a_block_of_ruled_lines_becomes_one_written_answer(self) -> None:
+        payload = self.upload(builders.build_written_answer_lines_pdf())
+
+        types = [field["field_type"] for field in payload["fields"]]
+        self.assertEqual(types.count("MULTILINE"), 1)
+        self.assertNotIn("SIGNATURE", types)

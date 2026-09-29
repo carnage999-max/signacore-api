@@ -696,3 +696,28 @@ def build_written_answer_lines_pdf() -> bytes:
         shape.finish(width=0.8)
         shape.commit()
     return _to_bytes(document)
+
+
+def build_optional_tick_boxes_pdf() -> bytes:
+    """A question answered by one of two tick boxes, beside a line to sign.
+
+    Requiring every box a page shows makes a document impossible to submit: a signer cannot tick
+    both YES and NO. A place to sign is the one thing a printed page does speak for.
+    """
+    document, page = _new_document()
+    page.insert_text((60, 200), "Do you require a parking permit?", fontsize=10)
+    # Ruled boxes rather than a ballot-box glyph, which the built-in fonts do not carry, and which
+    # is how a word processor draws a tick box anyway.
+    for left, caption in ((300.0, "YES"), (380.0, "NO")):
+        page.insert_text((left, 200), caption, fontsize=10)
+        box = page.new_shape()
+        box.draw_rect(fitz.Rect(left + 26, 191, left + 37, 202))
+        box.finish(width=0.8, color=(0, 0, 0))
+        box.commit()
+
+    page.insert_text((60, 300), "Employee Signature", fontsize=10)
+    rule = page.new_shape()
+    rule.draw_line((250, 296), (520, 296))
+    rule.finish(width=0.8)
+    rule.commit()
+    return _to_bytes(document)
