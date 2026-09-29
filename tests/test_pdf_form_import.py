@@ -1485,3 +1485,106 @@ class OutstandingCompletionTests(TestCase):
         self.assertEqual(issue_outstanding_completed_documents(), 1)
 
         self.assertEqual(issue_outstanding_completed_documents(), 0)
+
+
+@override_settings(
+    MEDIA_ROOT=TEST_MEDIA_ROOT,
+    EMAIL_BACKEND="django.core.mail.backends.locmem.EmailBackend",
+    CELERY_TASK_ALWAYS_EAGER=True,
+    CELERY_TASK_EAGER_PROPAGATES=True,
+)
+class SignerSignedCopyTests(TestCase):
+    """A signer can keep a copy of what they put their name to."""
+
+    def setUp(self) -> None:
+        cache.clear()
+        self.client = APIClient()
+        self.user = get_user_model().objects.create_user(
+            username="admin", email="admin@example.com", password="pw123456"
+        )
+        self.organization = Organization.objects.create(name="Copy Company", created_by=self.user)
+        self.document = Document.objects.create(
+            title="Consent Form",
+            original_pdf=SimpleUploadedFile("flat.pdf", builders.build_flat_pdf(), content_type="application/pdf"),
+            created_by=self.user,
+            organization=self.organization,
+            status=Document.StatusEnum.SENT,
+        )
+        self.field = DocumentField.objects.create(
+            document=self.document,
+            field_type=DocumentField.FieldTypeEnum.TEXT,
+            label="Signer name",
+            page=1,
+            x=72,
+            y=620,
+            width=180,
+            height=24,
+            is_required=True,
+            detection_source=DocumentField.DetectionSourceEnum.MANUAL,
+            order=1,
+        )
+        self.signing_request = SigningRequest.objects.create(
+            document=self.document,
+            signer_email="jane@example.com",
+            signer_name="Jane Doe",
+            expires_at=timezone.now() + timedelta(days=7),
+        )
+
+    def verify(self) -> str:
+        with self.settings(SIGNACORE_TEST_OTP_CODE="123456"):
+            self.client.post(f"/api/sign/{self.signing_request.id}/otp/send/")
+            verify = self.client.post(
+                f"/api/sign/{self.signing_request.id}/otp/verify/", {"otp": "123456"}, format="json"
+            )
+        return verify.json()["session_token"]
+
+    def sign(self) -> None:
+        token = self.verify()
+        with self.captureOnCommitCallbacks(execute=True):
+            self.client.post(
+                f"/api/sign/{self.signing_request.id}/submit/",
+                {
+                    "session_token": token,
+                    f"field_{self.field.id}_type": "TEXT",
+                    f"field_{self.field.id}_value": "Jane Doe",
+                },
+                format="multipart",
+            )
+
+    def test_a_signer_can_download_the_completed_copy(self) -> None:
+        self.sign()
+        self.document.refresh_from_db()
+        self.assertEqual(self.document.status, Document.StatusEnum.COMPLETED)
+
+        response = self.client.get(f"/api/sign/{self.signing_request.id}/signed/")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response["Content-Type"], "application/pdf")
+        self.assertIn("attachment", response["Content-Disposition"])
+        self.assertTrue(response.content.startswith(b"%PDF"))
+
+    def test_an_unverified_visitor_cannot_download_it(self) -> None:
+        self.sign()
+        self.client.cookies.clear()
+
+        response = self.client.get(f"/api/sign/{self.signing_request.id}/signed/")
+
+        self.assertEqual(response.status_code, 403)
+
+    def test_there_is_nothing_to_download_before_the_document_completes(self) -> None:
+        self.verify()
+
+        response = self.client.get(f"/api/sign/{self.signing_request.id}/signed/")
+
+        self.assertEqual(response.status_code, 404)
+
+    def test_the_context_says_whether_a_copy_is_ready(self) -> None:
+        self.verify()
+        before = self.client.get(f"/api/sign/{self.signing_request.id}/").json()
+        self.assertFalse(before["has_signed"])
+        self.assertFalse(before["signed_copy_ready"])
+
+        self.sign()
+        after = self.client.get(f"/api/sign/{self.signing_request.id}/").json()
+        self.assertTrue(after["has_signed"])
+        self.assertTrue(after["signed_copy_ready"])
