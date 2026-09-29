@@ -8,6 +8,7 @@ from unittest.mock import patch
 import fitz
 from django.conf import settings
 from django.contrib.auth import get_user_model
+from django.contrib.staticfiles import finders
 from django.core import mail
 from django.core.cache import cache
 from django.core.files.uploadedfile import SimpleUploadedFile
@@ -1661,6 +1662,47 @@ class SignerSignedCopyTests(TestCase):
 
         self.assertEqual(response.status_code, 404)
 
+    def test_an_error_is_data_and_never_a_web_page(self) -> None:
+        """What a browser asks for must not change a download into an HTML file.
+
+        The download was an anchor carrying the download attribute, pointed at this endpoint. A
+        click is a navigation, so it asked for text/html, and every branch that was not the file
+        answered through the browsable renderer with a full HTML page - which the download
+        attribute then saved to disk under the document's name. The signer got an HTML file where
+        their agreement should have been, and nothing said otherwise.
+        """
+        browser = "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
+        self.verify()
+
+        not_ready = self.client.get(f"/api/sign/{self.signing_request.id}/signed/", HTTP_ACCEPT=browser)
+
+        self.assertEqual(not_ready.status_code, 404)
+        self.assertEqual(not_ready["Content-Type"], "application/json")
+        self.assertNotIn(b"<!DOCTYPE html>", not_ready.content)
+
+        self.client.cookies.clear()
+        unverified = self.client.get(f"/api/sign/{self.signing_request.id}/signed/", HTTP_ACCEPT=browser)
+
+        self.assertEqual(unverified.status_code, 403)
+        self.assertEqual(unverified["Content-Type"], "application/json")
+        self.assertNotIn(b"<!DOCTYPE html>", unverified.content)
+
+    def test_the_file_is_served_whatever_the_client_asks_for(self) -> None:
+        """Restricting the renderer must not make the endpoint refuse the request instead.
+
+        Negotiation runs before the handler, so a view that only renders JSON answers 406 to a
+        browser asking for HTML - and to a client asking for a PDF - taking the file with it.
+        """
+        self.sign()
+
+        for accept in ("text/html", "application/pdf", "application/pdf, application/json", "*/*"):
+            with self.subTest(accept=accept):
+                response = self.client.get(f"/api/sign/{self.signing_request.id}/signed/", HTTP_ACCEPT=accept)
+
+                self.assertEqual(response.status_code, 200)
+                self.assertEqual(response["Content-Type"], "application/pdf")
+                self.assertTrue(response.content.startswith(b"%PDF"))
+
     def test_the_context_says_whether_a_copy_is_ready(self) -> None:
         self.verify()
         before = self.client.get(f"/api/sign/{self.signing_request.id}/").json()
@@ -1691,6 +1733,20 @@ class PortalAssetVersionTests(SimpleTestCase):
             versioned_static("signing/portal.css"),
             versioned_static("signing/portal.js"),
         )
+
+    def test_the_favicon_is_a_real_icon_and_is_versioned(self) -> None:
+        """The tab showed a hand-drawn placeholder rather than the product's own mark.
+
+        Versioned like the others: a browser holds on to a favicon harder than anything else it
+        caches, so replacing the file without changing the URL leaves the old mark in place.
+        """
+        url = versioned_static("signing/favicon.ico")
+
+        self.assertIn("signing/favicon.ico", url)
+        self.assertRegex(url, r"\?v=[0-9a-f]{12}$")
+        located = finders.find("signing/favicon.ico")
+        self.assertIsNotNone(located, "the portal's favicon must be a file that ships with the app")
+        self.assertTrue(Path(located).read_bytes().startswith(b"\x00\x00\x01\x00"), "must be a real ICO")
 
     def test_a_missing_asset_still_returns_a_usable_url(self) -> None:
         url = versioned_static("signing/not-a-real-file.css")
