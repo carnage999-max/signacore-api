@@ -54,6 +54,9 @@
     cancelSubmitButton: document.getElementById("cancel-submit-button"),
     confirmSubmitButton: document.getElementById("confirm-submit-button"),
     documentPanel: document.getElementById("document-panel"),
+    signedPanel: document.getElementById("signed-panel"),
+    signedCopyCopy: document.getElementById("signed-copy-copy"),
+    downloadSignedButton: document.getElementById("download-signed-button"),
     fieldSheet: document.getElementById("field-sheet"),
     fieldSheetTitle: document.getElementById("field-sheet-title"),
     fieldSheetHint: document.getElementById("field-sheet-hint"),
@@ -422,6 +425,32 @@
     return button;
   }
 
+  function showSignedState() {
+    if (!nodes.signedPanel) return;
+    const ready = Boolean(state.context?.signed_copy_ready);
+    nodes.signedPanel.hidden = false;
+    nodes.signedCopyCopy.textContent = ready
+      ? "Your signature is recorded. Keep a copy for your records."
+      : "Your signature is recorded. The completed copy is being prepared and will be emailed to you.";
+    nodes.downloadSignedButton.hidden = !ready;
+    if (ready) {
+      nodes.downloadSignedButton.href = `/api/sign/${app.dataset.signingToken}/signed/`;
+    }
+    if (nodes.fieldProgressPanel) {
+      nodes.fieldProgressPanel.hidden = true;
+    }
+    lockDocument();
+  }
+
+  function lockDocument() {
+    // Every control is disabled rather than removed, so the page still reads as the document that
+    // was signed rather than an empty form.
+    nodes.pagesRoot?.querySelectorAll("input, textarea, select, button").forEach((control) => {
+      control.disabled = true;
+    });
+    nodes.pagesRoot?.classList.add("pages-root-signed");
+  }
+
   function buildDropdownField(field) {
     const select = document.createElement("select");
     select.className = "dropdown-input";
@@ -786,6 +815,13 @@
     renderFieldList();
     renderPages();
     updateSubmitState();
+
+    // A signer returning to a document they already signed gets what they signed, not a form to
+    // fill in again.
+    if (state.context.has_signed) {
+      state.submitted = true;
+      showSignedState();
+    }
   }
 
   function setSignatureMode(mode) {
@@ -1004,6 +1040,14 @@
       state.submitted = true;
       nodes.submitButton.textContent = "Document submitted";
       setNotice(payload.message || "Document signed successfully.", "success");
+      // The document is no longer something to fill in. Reloading gets the completed copy's
+      // whereabouts rather than guessing at it, and leaves the page showing what was signed.
+      try {
+        await loadContext();
+      } catch (reloadError) {
+        void reloadError;
+        showSignedState();
+      }
     } catch (error) {
       if (error instanceof Error) {
         setNotice(error.message, "error");

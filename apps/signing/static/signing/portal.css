@@ -896,3 +896,38 @@ input {
     background: #0b1521;
   }
 }
+
+/* --- After signing: the document is a record, not a form --- */
+
+.signed-panel h2 {
+  margin: 0 0 8px;
+  font-size: 1.05rem;
+}
+
+.signed-panel .primary-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  margin-top: 4px;
+  text-decoration: none;
+}
+
+/* The signer's own entries stay legible; only the invitation to edit is withdrawn. */
+.pages-root-signed .field-overlay {
+  background: transparent;
+  box-shadow: none;
+}
+
+.pages-root-signed .field-overlay input,
+.pages-root-signed .field-overlay textarea,
+.pages-root-signed .field-overlay select,
+.pages-root-signed .signature-field-button {
+  color: #111827;
+  opacity: 1;
+  cursor: default;
+}
+
+.pages-root-signed .checkbox-input,
+.pages-root-signed .radio-input {
+  cursor: default;
+}

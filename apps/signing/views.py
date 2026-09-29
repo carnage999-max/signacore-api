@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 from datetime import timedelta
+from pathlib import Path
 
 import fitz
 from django.conf import settings
@@ -10,6 +11,7 @@ from django.http import Http404, HttpResponse
 from django.shortcuts import get_object_or_404
 from django.templatetags.static import static
 from django.utils import timezone
+from django.utils.text import slugify
 from django.views.generic import TemplateView
 from rest_framework import status
 from rest_framework.parsers import FormParser, MultiPartParser
@@ -165,6 +167,13 @@ class SignerContextView(APIView):
             "page_count": len(pages),
             "pages": pages,
             "fields": DocumentFieldSerializer(signing_request.document.fields.all(), many=True).data,
+            # Whether this signer has finished, and whether the completed copy exists to be kept.
+            # A document is not editable once signed, and the copy can lag the signature when the
+            # packaging had to be retried.
+            "has_signed": signing_request.status == SigningRequest.StatusEnum.SIGNED,
+            "signed_copy_ready": bool(
+                signing_request.document.status == Document.StatusEnum.COMPLETED and signing_request.document.signed_pdf
+            ),
         }
         return Response(payload, status=status.HTTP_200_OK)
 
@@ -192,6 +201,43 @@ class SignerPagePreviewView(APIView):
                 matrix = build_preview_matrix(page, request.query_params.get("width"))
                 pixmap = page.get_pixmap(matrix=matrix, alpha=False)
         return HttpResponse(pixmap.tobytes("png"), content_type="image/png")
+
+
+class SignerSignedCopyView(APIView):
+    """Serve the completed document to a signer who signed it.
+
+    The same verified session that let them fill the document lets them keep a copy of what they
+    put their name to, which otherwise exists only in an email they may never have received.
+    """
+
+    permission_classes = []
+    authentication_classes = []
+    throttle_classes = [SignacoreRateThrottle]
+    throttle_scope = "signer_preview"
+    serializer_class = SigningRequestSerializer
+
+    def get(self, request, token):
+        signing_request = get_signing_request_or_404(token)
+        if not has_verified_signer_session(request, signing_request):
+            return Response(
+                {"detail": "Verify your email before downloading this document."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        document = signing_request.document
+        if document.status != Document.StatusEnum.COMPLETED or not document.signed_pdf:
+            return Response(
+                {"detail": "The completed copy is not ready yet."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        with temporary_plaintext_file(document.signed_pdf, suffix=".pdf") as signed_path:
+            payload = Path(signed_path).read_bytes()
+
+        response = HttpResponse(payload, content_type="application/pdf")
+        filename = f"{slugify(document.title) or 'document'}-signed.pdf"
+        response["Content-Disposition"] = f'attachment; filename="{filename}"'
+        return response
 
 
 class SignerOtpSendView(APIView):
