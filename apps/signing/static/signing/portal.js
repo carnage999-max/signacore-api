@@ -54,6 +54,7 @@
     cancelSubmitButton: document.getElementById("cancel-submit-button"),
     confirmSubmitButton: document.getElementById("confirm-submit-button"),
     documentPanel: document.getElementById("document-panel"),
+    fieldRail: document.getElementById("field-rail"),
     signedPanel: document.getElementById("signed-panel"),
     signedCopyCopy: document.getElementById("signed-copy-copy"),
     downloadSignedButton: document.getElementById("download-signed-button"),
@@ -268,7 +269,40 @@
       item.append(label, fieldStatus);
       nodes.fieldList.appendChild(item);
     });
+    renderFieldRail();
     updateDocumentMeta();
+  }
+
+  /**
+   * The narrow-screen counterpart of the field list.
+   *
+   * The list itself scrolls, and on a phone it fills the screen, so reaching it stops the page
+   * scrolling and traps the reader in it. The rail carries the same information in the margin: one
+   * mark per field, numbered until it is filled and ticked afterwards, tapped to jump to it.
+   */
+  function renderFieldRail() {
+    if (!nodes.fieldRail || !state.context) return;
+
+    const fields = state.context.fields;
+    nodes.fieldRail.hidden = state.submitted || fields.length === 0;
+    nodes.fieldRail.innerHTML = "";
+
+    fields.forEach((field, index) => {
+      const complete = fieldIsComplete(field);
+      const mark = document.createElement("button");
+      mark.type = "button";
+      mark.className = `rail-mark ${complete ? "rail-mark-complete" : ""} ${
+        field.is_required && !complete ? "rail-mark-required" : ""
+      }`;
+      mark.textContent = complete ? "\u2713" : String(index + 1);
+      mark.title = field.label;
+      mark.setAttribute(
+        "aria-label",
+        `${field.label}, page ${field.page}, ${complete ? "completed" : field.is_required ? "required" : "optional"}`,
+      );
+      mark.addEventListener("click", () => focusField(field));
+      nodes.fieldRail.appendChild(mark);
+    });
   }
 
   function markFieldFilled(node, isFilled) {
@@ -438,6 +472,9 @@
     }
     if (nodes.fieldProgressPanel) {
       nodes.fieldProgressPanel.hidden = true;
+    }
+    if (nodes.fieldRail) {
+      nodes.fieldRail.hidden = true;
     }
     lockDocument();
   }

@@ -931,3 +931,110 @@ input {
 .pages-root-signed .radio-input {
   cursor: default;
 }
+
+/* --- Narrow screens: the field list becomes a rail in the margin --- */
+
+/* Hidden on a wide screen, where the full field list is on show and has room to be. */
+.field-rail {
+  display: none;
+}
+
+@media (max-width: 900px) {
+  .field-rail {
+    position: fixed;
+    top: 50%;
+    right: 4px;
+    z-index: 6;
+    display: grid;
+    gap: 5px;
+    max-height: 70dvh;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    padding: 6px 4px;
+    border: 1px solid rgba(218, 232, 248, 0.14);
+    border-radius: 999px;
+    background: rgba(9, 19, 29, 0.92);
+    transform: translateY(-50%);
+    scrollbar-width: none;
+  }
+
+  .field-rail::-webkit-scrollbar {
+    display: none;
+  }
+
+  .rail-mark {
+    width: 22px;
+    height: 22px;
+    flex: none;
+    padding: 0;
+    border: 1px solid rgba(218, 232, 248, 0.2);
+    border-radius: 50%;
+    background: transparent;
+    color: #cbd7e3;
+    font-size: 10px;
+    font-weight: 800;
+    line-height: 1;
+    cursor: pointer;
+  }
+
+  /* A required field still waiting is the only thing worth drawing the eye. */
+  .rail-mark-required {
+    border-color: rgba(32, 214, 229, 0.55);
+    color: #20d6e5;
+  }
+
+  .rail-mark-complete {
+    border-color: rgba(63, 185, 80, 0.5);
+    background: rgba(63, 185, 80, 0.16);
+    color: #7ee493;
+  }
+
+  /* The list scrolls within itself, so on a phone it swallows the page's own scrolling. The rail
+     carries the same information without taking the gesture. */
+  .progress-panel .progress-header,
+  .progress-panel .field-list {
+    display: none;
+  }
+
+  /* Pinned so the document can be reached from any page without scrolling back for the thumbnails
+     or forward for the button. */
+  .page-rail {
+    position: sticky;
+    top: 0;
+    z-index: 5;
+    background: rgba(9, 19, 29, 0.96);
+  }
+
+  /* The sidebar sits after the document in the narrow layout, so a footer stuck inside it only
+     pins once you have scrolled the whole document. Fixed to the viewport instead, the submit
+     control is reachable from wherever the reader is. */
+  .progress-panel {
+    position: static;
+    padding: 0;
+    border: 0;
+    background: transparent;
+    box-shadow: none;
+  }
+
+  .progress-footer {
+    position: fixed;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 6;
+    margin: 0;
+    padding: 10px 14px calc(10px + env(safe-area-inset-bottom));
+    border-top: 1px solid rgba(218, 232, 248, 0.14);
+    border-radius: 0;
+    background: #0b1521;
+  }
+
+  /* Clears the pinned control, so the end of the document is not hidden behind it. */
+  .signacore-app {
+    padding-bottom: 88px;
+  }
+
+  .field-rail {
+    max-height: 58dvh;
+  }
+}
