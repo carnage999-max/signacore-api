@@ -50,6 +50,12 @@ MIN_CELL_HEIGHT = 8.0
 MAX_CELL_HEIGHT = 90.0
 # Keeps the field inside the printed cell rather than sitting on its border.
 CELL_PADDING = 1.5
+# The least room a written answer is given, whatever the text beside the line happens to measure.
+MIN_WRITING_HEIGHT = 18.0
+# Ruled lines this far apart or less belong to the same written answer, and this many of them make
+# a block rather than a coincidence.
+MAX_ANSWER_LINE_PITCH = 40.0
+MIN_ANSWER_BLOCK_LINES = 3
 # Words that join a clause to the rest of its sentence. A field caption never hangs on one.
 CLAUSE_WORDS = frozenset(
     """a an and as at because before but by for from if in of on or since than that the
@@ -74,6 +80,8 @@ class DetectedField:
     options: list[str] | None = None
     group_key: str = ""
     option_value: str = ""
+    # False when nothing on the page named this field and it carries a positional placeholder.
+    is_named: bool = True
 
 
 @dataclass
@@ -372,7 +380,9 @@ class PDFEngine:
             page_candidates.extend(cell_candidates)
             order += len(cell_candidates)
 
-            deduped_candidates = self._deduplicate_fields(page_candidates)
+            deduped_candidates = self._settle_heuristic_fields(
+                self._merge_written_answer_lines(self._deduplicate_fields(page_candidates))
+            )
             for index, candidate in enumerate(deduped_candidates, start=order - len(page_candidates)):
                 candidate.order = index
             detected_fields.extend(deduped_candidates)
@@ -764,6 +774,7 @@ class PDFEngine:
                 # dividing the page rather than waiting to be written on. A rule that does have a
                 # caption is a writing line whatever follows it, and prose often follows it.
                 continue
+            named = bool(label)
             if not label:
                 # Nothing names this rule, so there is no evidence it is a signature line rather
                 # than a line to write on - and a block of them is a free-text answer area, which
@@ -785,6 +796,7 @@ class PDFEngine:
                     is_required=True,
                     detection_source=DocumentField.DetectionSourceEnum.HEURISTIC,
                     order=order,
+                    is_named=named,
                 )
             )
             order += 1
@@ -1082,6 +1094,80 @@ class PDFEngine:
                 if distance <= 4.0:
                     return True
         return False
+
+    @staticmethod
+    def _merge_written_answer_lines(candidates: list[DetectedField]) -> list[DetectedField]:
+        """Collapse a ruled block written for one answer into one field.
+
+        Several rules of the same width, evenly spaced and named by nothing, are the space left
+        for a single written answer. Kept apart they ask for that answer a line at a time, so a
+        sentence has to be broken across separate inputs to fit, and each line is offered as its
+        own thing to fill in. Rules that carry their own captions are left alone: a column of them
+        is a form, and merging those would lose every label on it.
+        """
+        unnamed = sorted(
+            (c for c in candidates if not c.is_named and c.field_type == DocumentField.FieldTypeEnum.TEXT),
+            key=lambda field: -field.y,
+        )
+        merged: list[DetectedField] = []
+        block: list[DetectedField] = []
+
+        def flush() -> None:
+            if len(block) < MIN_ANSWER_BLOCK_LINES:
+                return
+            top, bottom = block[0], block[-1]
+            top.field_type = DocumentField.FieldTypeEnum.MULTILINE
+            top.label = "Written answer"
+            top.height = top.y + top.height - bottom.y
+            top.y = bottom.y
+            merged.append(top)
+            for line in block[1:]:
+                merged.append(line)
+
+        for line in unnamed:
+            if block and (
+                abs(line.x - block[-1].x) > GRID_LINE_TOLERANCE
+                or abs(line.width - block[-1].width) > GRID_LINE_TOLERANCE
+                or not MIN_CELL_HEIGHT <= block[-1].y - line.y <= MAX_ANSWER_LINE_PITCH
+            ):
+                flush()
+                block = []
+            block.append(line)
+        flush()
+
+        absorbed = {id(field) for field in merged}
+        kept = [field for field in candidates if id(field) not in absorbed]
+        return kept + [field for field in merged if field.field_type == DocumentField.FieldTypeEnum.MULTILINE]
+
+    @staticmethod
+    def _settle_heuristic_fields(candidates: list[DetectedField]) -> list[DetectedField]:
+        """Apply what can honestly be concluded about a field read off a printed page.
+
+        Requiredness is not written on a page. A printed line gives its position and, through its
+        caption, what it collects - nothing about it says an answer is compulsory, and assuming so
+        is worse than leaving it open. A pair of tick boxes reading YES and NO cannot both be
+        ticked, so requiring both stops the document being submitted at all. Only a place to sign
+        speaks for itself: a signature line exists to be signed. The rest is the administrator's
+        to mark, which they can do in the editor.
+
+        A writing line is also given room to be written in. Its height comes from the text nearest
+        it, which measures the caption's own glyphs rather than the space left to answer in, and a
+        value set in a nine-point box next to one set in a table cell reads as two different
+        documents.
+        """
+        for candidate in candidates:
+            candidate.is_required = candidate.field_type in (
+                DocumentField.FieldTypeEnum.SIGNATURE,
+                DocumentField.FieldTypeEnum.INITIALS,
+            )
+            if candidate.field_type in (
+                DocumentField.FieldTypeEnum.TEXT,
+                DocumentField.FieldTypeEnum.MULTILINE,
+                DocumentField.FieldTypeEnum.SIGNATURE,
+                DocumentField.FieldTypeEnum.INITIALS,
+            ):
+                candidate.height = max(candidate.height, MIN_WRITING_HEIGHT)
+        return candidates
 
     @staticmethod
     def _is_caption(label: str) -> bool:
