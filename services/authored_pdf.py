@@ -20,6 +20,7 @@ from reportlab.lib import colors
 from reportlab.lib.enums import TA_CENTER, TA_JUSTIFY, TA_LEFT, TA_RIGHT
 from reportlab.lib.pagesizes import A4, LETTER
 from reportlab.lib.styles import ParagraphStyle
+from reportlab.pdfbase.pdfmetrics import stringWidth
 from reportlab.platypus import (
     BaseDocTemplate,
     Flowable,
@@ -34,6 +35,11 @@ from reportlab.platypus import (
 )
 
 from apps.documents.models import DocumentField
+
+# Space between a run of text and the field that follows it on the same line.
+INLINE_FIELD_GUTTER = 6.0
+# Below this a text run has no room left to be read, so the line is stacked instead.
+MIN_INLINE_TEXT_WIDTH = 60.0
 
 
 @dataclass(frozen=True)
@@ -229,7 +235,7 @@ class AuthoredPDFRenderer:
         if node_type == "heading":
             return self._render_heading(node)
         if node_type == "paragraph":
-            return self._render_paragraph(node)
+            return self._render_paragraph(node, available_width, fields)
         if node_type in {"bulletList", "orderedList"}:
             return self._render_list(node, node_type, available_width, fields)
         if node_type == "blockquote":
@@ -282,11 +288,137 @@ class AuthoredPDFRenderer:
         )
         return [Paragraph(markup, style)]
 
-    def _render_paragraph(self, node: dict[str, Any]) -> list[Any]:
-        markup = self._inline_markup(node)
-        if not markup.strip():
-            return [Spacer(1, 8)]
-        return [Paragraph(markup, self._body_style(node))]
+    def _render_paragraph(
+        self,
+        node: dict[str, Any],
+        available_width: float,
+        fields: list[SigningFieldFlowable],
+    ) -> list[Any]:
+        """Render a paragraph, including any signing fields sitting in the run of its text.
+
+        A field is an atom with no text of its own, so it contributes nothing to inline markup. A
+        paragraph carrying one has to be laid out as its parts rather than as a single piece of
+        text, or the field is silently left out of the document and no signing field is created
+        for it - the document looks right in the editor and comes out with nowhere to sign.
+        """
+        segments = self._split_inline_fields(node)
+        if not any(is_field for is_field, _ in segments):
+            markup = self._inline_markup(node)
+            if not markup.strip():
+                return [Spacer(1, 8)]
+            return [Paragraph(markup, self._body_style(node))]
+
+        return self._render_inline_row(node, segments, available_width, fields)
+
+    def _split_inline_fields(self, node: dict[str, Any]) -> list[tuple[bool, Any]]:
+        """Break a paragraph's children into runs of text and the fields between them."""
+        segments: list[tuple[bool, Any]] = []
+        run: list[Any] = []
+        for child in node.get("content", []) or []:
+            if isinstance(child, dict) and child.get("type") == "signacoreField":
+                if run:
+                    segments.append((False, {"type": "paragraph", "content": run, "attrs": node.get("attrs")}))
+                    run = []
+                segments.append((True, child))
+                continue
+            run.append(child)
+
+        if run:
+            segments.append((False, {"type": "paragraph", "content": run, "attrs": node.get("attrs")}))
+        return segments
+
+    def _render_inline_row(
+        self,
+        node: dict[str, Any],
+        segments: list[tuple[bool, Any]],
+        available_width: float,
+        fields: list[SigningFieldFlowable],
+    ) -> list[Any]:
+        """Lay the text and the fields of one paragraph out side by side.
+
+        A borderless single-row table is what keeps them on the same line: ReportLab has no way to
+        set a flowable inside a paragraph's own text.
+        """
+        field_widths: list[float] = []
+        for is_field, segment in segments:
+            if is_field:
+                attrs = segment.get("attrs") or {}
+                width, _ = self.field_sizes[str(attrs.get("fieldType", "TEXT")).upper()]
+                field_widths.append(width)
+
+        text_count = sum(1 for is_field, _ in segments if not is_field)
+        remaining = available_width - sum(field_widths) - INLINE_FIELD_GUTTER * max(len(segments) - 1, 0)
+        if text_count and remaining < MIN_INLINE_TEXT_WIDTH * text_count:
+            # The fields alone fill the line, so stacking them is the only honest layout left.
+            return self._render_stacked(segments, available_width, fields)
+
+        cells: list[Any] = []
+        widths: list[float] = []
+        for is_field, segment in segments:
+            if is_field:
+                rendered = self._render_field(segment, available_width, fields)
+                cells.append(next(item for item in rendered if isinstance(item, SigningFieldFlowable)))
+                widths.append(field_widths.pop(0))
+                continue
+            markup = self._inline_markup(segment)
+            cells.append(Paragraph(markup, self._body_style(node)) if markup.strip() else "")
+            # Sized to the text it holds, so the field sits against the words it follows rather
+            # than being pushed to the far side of a column stretched to fill the line.
+            widths.append(min(self._natural_text_width(segment), remaining))
+
+        surplus = available_width - sum(widths) - INLINE_FIELD_GUTTER * max(len(segments) - 1, 0)
+        if surplus > 0:
+            if segments[-1][0]:
+                # The line ends on a field, so the room left over goes after it. Adding it to the
+                # text instead would push the field away from the words it belongs to.
+                cells.append("")
+                widths.append(surplus)
+            else:
+                widths[-1] += surplus
+
+        row = Table([cells], colWidths=widths, hAlign="LEFT")
+        row.setStyle(
+            TableStyle(
+                [
+                    ("VALIGN", (0, 0), (-1, -1), "BOTTOM"),
+                    ("LEFTPADDING", (0, 0), (-1, -1), 0),
+                    ("RIGHTPADDING", (0, 0), (-1, -1), INLINE_FIELD_GUTTER),
+                    ("TOPPADDING", (0, 0), (-1, -1), 0),
+                    ("BOTTOMPADDING", (0, 0), (-1, -1), 0),
+                ]
+            )
+        )
+        return [row, Spacer(1, 18)]
+
+    def _natural_text_width(self, segment: dict[str, Any]) -> float:
+        """Measure the width the segment's own words occupy, before any wrapping."""
+        text = self._plain_text(segment)
+        if not text:
+            return 0.0
+        return stringWidth(text, "Helvetica", self.body_font_size) + INLINE_FIELD_GUTTER
+
+    def _plain_text(self, node: Any) -> str:
+        if not isinstance(node, dict):
+            return ""
+        if node.get("type") == "text":
+            return str(node.get("text", ""))
+        return "".join(self._plain_text(child) for child in node.get("content", []) or [])
+
+    def _render_stacked(
+        self,
+        segments: list[tuple[bool, Any]],
+        available_width: float,
+        fields: list[SigningFieldFlowable],
+    ) -> list[Any]:
+        rendered: list[Any] = []
+        for is_field, segment in segments:
+            if is_field:
+                rendered.extend(self._render_field(segment, available_width, fields))
+                continue
+            markup = self._inline_markup(segment)
+            if markup.strip():
+                rendered.append(Paragraph(markup, self._body_style(segment)))
+        return rendered
 
     def _body_style(self, node: dict[str, Any]) -> ParagraphStyle:
         return ParagraphStyle(
@@ -424,6 +556,10 @@ class AuthoredPDFRenderer:
                 continue
             if child.get("type") == "hardBreak":
                 parts.append("<br/>")
+                continue
+            if child.get("type") == "signacoreField":
+                # Handled where the block is rendered, which is the only place it can become a
+                # signing field. Recursing here would return the empty string and lose it.
                 continue
             if child.get("type") != "text":
                 parts.append(self._inline_markup(child))

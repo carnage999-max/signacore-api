@@ -335,3 +335,149 @@ class AuthoredFormattingTests(SimpleTestCase):
             self.assertTrue(rules, "the field rule must be drawn on the page the field reports")
         finally:
             document.close()
+
+
+class InlineAuthoredFieldTests(SimpleTestCase):
+    """A field written in the run of a sentence has to survive into the document.
+
+    The editor places fields inline, so a field arrives inside a paragraph's content rather than
+    beside it. A field is an atom with no text of its own, so a paragraph rendered as one piece of
+    inline markup drops it: the document looks right while it is being written and comes out with
+    nowhere to sign, and no signing field is recorded for it either.
+    """
+
+    @staticmethod
+    def field(field_type: str = "TEXT", label: str = "Field") -> dict:
+        return {
+            "type": "signacoreField",
+            "attrs": {"fieldType": field_type, "label": label, "required": True},
+        }
+
+    def render(self, content: list[dict]) -> tuple[bytes, list]:
+        return AuthoredPDFRenderer().render({"type": "doc", "content": content})
+
+    def test_a_field_in_the_run_of_a_sentence_becomes_a_signing_field(self) -> None:
+        _, fields = self.render(
+            [
+                {
+                    "type": "paragraph",
+                    "content": [{"type": "text", "text": "Signed by: "}, self.field("SIGNATURE", "Employee Signature")],
+                }
+            ]
+        )
+
+        self.assertEqual([field.label for field in fields], ["Employee Signature"])
+
+    def test_the_field_sits_on_the_line_of_the_text_it_follows(self) -> None:
+        _, fields = self.render(
+            [
+                {
+                    "type": "paragraph",
+                    "content": [
+                        {"type": "text", "text": "Name: "},
+                        self.field("TEXT", "Name"),
+                        {"type": "text", "text": "  Date: "},
+                        self.field("TEXT", "Date"),
+                    ],
+                }
+            ]
+        )
+
+        self.assertEqual(len(fields), 2)
+        # Same line, and in the order they were written.
+        self.assertAlmostEqual(fields[0].y, fields[1].y, delta=1.0)
+        self.assertLess(fields[0].x, fields[1].x)
+
+    def test_a_field_is_placed_after_the_words_it_follows(self) -> None:
+        _, [after_text] = self.render(
+            [
+                {
+                    "type": "paragraph",
+                    "content": [{"type": "text", "text": "Signed by: "}, self.field("SIGNATURE", "Sig")],
+                }
+            ]
+        )
+        _, [at_start] = self.render([{"type": "paragraph", "content": [self.field("SIGNATURE", "Sig")]}])
+
+        # Not pushed to the far margin by a text column stretched to fill the line.
+        self.assertGreater(after_text.x, at_start.x)
+        self.assertLess(after_text.x, at_start.x + 200)
+
+    def test_a_field_beside_a_paragraph_still_works(self) -> None:
+        _, fields = self.render(
+            [
+                {"type": "paragraph", "content": [{"type": "text", "text": "Sign below."}]},
+                self.field("SIGNATURE", "Sig"),
+            ]
+        )
+
+        self.assertEqual([field.label for field in fields], ["Sig"])
+
+    def test_a_field_inside_a_list_item_is_kept(self) -> None:
+        _, fields = self.render(
+            [
+                {
+                    "type": "bulletList",
+                    "content": [
+                        {
+                            "type": "listItem",
+                            "content": [
+                                {
+                                    "type": "paragraph",
+                                    "content": [
+                                        {"type": "text", "text": "Initial here: "},
+                                        self.field("INITIALS", "Initials"),
+                                    ],
+                                }
+                            ],
+                        }
+                    ],
+                }
+            ]
+        )
+
+        self.assertEqual([field.label for field in fields], ["Initials"])
+
+    def test_a_field_inside_a_table_cell_is_kept(self) -> None:
+        _, fields = self.render(
+            [
+                {
+                    "type": "table",
+                    "content": [
+                        {
+                            "type": "tableRow",
+                            "content": [
+                                {
+                                    "type": "tableCell",
+                                    "content": [
+                                        {
+                                            "type": "paragraph",
+                                            "content": [{"type": "text", "text": "Sign: "}, self.field("TEXT", "Cell")],
+                                        }
+                                    ],
+                                }
+                            ],
+                        }
+                    ],
+                }
+            ]
+        )
+
+        self.assertEqual([field.label for field in fields], ["Cell"])
+
+    def test_a_line_too_full_for_its_fields_still_keeps_them(self) -> None:
+        """A line whose fields leave no room to read is stacked rather than squeezed."""
+        _, fields = self.render(
+            [
+                {
+                    "type": "paragraph",
+                    "content": [
+                        {"type": "text", "text": "A very long preamble " * 4},
+                        self.field("MULTILINE", "First"),
+                        self.field("MULTILINE", "Second"),
+                    ],
+                }
+            ]
+        )
+
+        self.assertEqual([field.label for field in fields], ["First", "Second"])
