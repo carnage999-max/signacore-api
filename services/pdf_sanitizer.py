@@ -88,8 +88,17 @@ def find_active_content(pdf_path: str | Path) -> list[str]:
 
 
 def _has_live_key(obj: str, token: str) -> bool:
-    """A key whose value is ``null`` is equivalent to an absent key (PDF 32000-1, 7.3.9)."""
-    return bool(re.search(rf"{re.escape(token)}(?!\s*null\b)", obj))
+    """Check for a key, not for text that merely starts the same way.
+
+    A name runs until a delimiter or whitespace (PDF 32000-1, 7.3.5), so ``/AA`` followed by
+    another regular character is the start of a longer name and not the additional-actions key.
+    Fonts are routinely subset under a six-letter prefix - ``/FontName/AAAAAA+DejaVuSans`` is the
+    usual shape - and searching for the bare token found ``/AA`` inside every one of them, which
+    condemned a perfectly inert document as carrying active content.
+
+    A key whose value is ``null`` is equivalent to an absent key (7.3.9).
+    """
+    return bool(re.search(rf"{re.escape(token)}(?=[\s/\[\]<>(){{}}%]|$)(?!\s*null\b)", obj))
 
 
 def assert_sanitized(pdf_path: str | Path) -> None:

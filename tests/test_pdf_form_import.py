@@ -18,7 +18,7 @@ from apps.documents.models import Document, DocumentField
 from apps.signing.models import SigningRequest
 from services.pdf_anchors import conceal_anchor_tags_on_page
 from services.pdf_engine import PDFEngine
-from services.pdf_sanitizer import PDFSanitizationError, find_active_content
+from services.pdf_sanitizer import PDFSanitizationError, _has_live_key, find_active_content
 from utils.file_storage import temporary_plaintext_file
 from utils.pdf_preview import build_preview_matrix, prepare_page_for_preview
 
@@ -1336,3 +1336,34 @@ class MixedPacketImportTests(TestCase):
         types = [field["field_type"] for field in payload["fields"]]
         self.assertEqual(types.count("MULTILINE"), 1)
         self.assertNotIn("SIGNATURE", types)
+
+
+class SanitizationBoundaryTests(SimpleTestCase):
+    """A key is a name, not a prefix of one.
+
+    Fonts are subset under a six-letter prefix, so nearly every PDF carries names like
+    /AAAAAA+DejaVuSans. Matching the bare token /AA inside those condemned inert documents as
+    active, which stopped them completing: no signed copy was written and no completion email was
+    sent, while the signer was told the sender had to act.
+    """
+
+    def test_a_font_subset_prefix_is_not_an_additional_action(self) -> None:
+        for name in ("/FontName/AAAAAA+DejaVuSans-Bold", "/BaseFont/AAAAAB+Arial"):
+            self.assertFalse(_has_live_key(name, "/AA"), name)
+
+    def test_a_longer_name_is_not_the_key_it_starts_with(self) -> None:
+        self.assertFalse(_has_live_key("<</Name/Widgets>>", "/Widget"))
+
+    def test_a_real_key_is_still_found(self) -> None:
+        for obj, token in (
+            ("<</AA 12 0 R>>", "/AA"),
+            ("<</AA<</O 3 0 R>>>>", "/AA"),
+            ("<</S/JavaScript/JS(app.alert)>>", "/JS"),
+            ("<</Subtype/Widget>>", "/Widget"),
+            ("<</URI(https://example.invalid)>>", "/URI"),
+            ("<</AcroForm 4 0 R>>", "/AcroForm"),
+        ):
+            self.assertTrue(_has_live_key(obj, token), obj)
+
+    def test_a_key_set_to_null_is_still_treated_as_absent(self) -> None:
+        self.assertFalse(_has_live_key("<</AA null>>", "/AA"))
