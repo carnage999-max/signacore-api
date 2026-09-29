@@ -22,7 +22,9 @@ from services.pdf_engine import PDFEngine
 from services.pdf_sanitizer import PDFSanitizationError, _has_live_key, find_active_content
 from tasks.signing import issue_outstanding_completed_documents
 from utils.file_storage import temporary_plaintext_file
+from utils.observability import before_send, configure_error_reporting
 from utils.pdf_preview import build_preview_matrix, prepare_page_for_preview
+from utils.static_assets import versioned_static
 
 from . import pdf_builders as builders
 
@@ -1588,3 +1590,66 @@ class SignerSignedCopyTests(TestCase):
         after = self.client.get(f"/api/sign/{self.signing_request.id}/").json()
         self.assertTrue(after["has_signed"])
         self.assertTrue(after["signed_copy_ready"])
+
+
+class PortalAssetVersionTests(SimpleTestCase):
+    """A deployed change to the portal has to reach people already using it.
+
+    The portal's stylesheet and script are served by Django under fixed names, so a browser that
+    has seen them once keeps its copy. A change then appears not to have shipped at all.
+    """
+
+    def test_the_url_carries_a_digest_of_the_file(self) -> None:
+        url = versioned_static("signing/portal.css")
+
+        self.assertIn("signing/portal.css", url)
+        self.assertRegex(url, r"\?v=[0-9a-f]{12}$")
+
+    def test_two_different_files_get_different_versions(self) -> None:
+        self.assertNotEqual(
+            versioned_static("signing/portal.css"),
+            versioned_static("signing/portal.js"),
+        )
+
+    def test_a_missing_asset_still_returns_a_usable_url(self) -> None:
+        url = versioned_static("signing/not-a-real-file.css")
+
+        self.assertIn("signing/not-a-real-file.css", url)
+        self.assertNotIn("?v=", url)
+
+
+class ErrorReportingTests(SimpleTestCase):
+    """What leaves the service is decided deliberately, not left to a default.
+
+    SignaCore handles signatures, identity documents and the contents of other people's
+    agreements. An error report is worth having; sending any of that with it is not.
+    """
+
+    def test_reporting_stays_off_without_a_dsn(self) -> None:
+        self.assertFalse(
+            configure_error_reporting(dsn="", environment="test", release="", traces_sample_rate=0.1, debug=False)
+        )
+
+    def test_identifying_values_are_scrubbed_from_an_event(self) -> None:
+        event = before_send(
+            {
+                "request": {
+                    "headers": {"Authorization": "Bearer abc", "User-Agent": "Firefox"},
+                    "cookies": {"session_token": "s3cret"},
+                },
+                "extra": {"signer_email": "jane@example.com", "document_id": "doc-1"},
+            },
+            {},
+        )
+
+        self.assertEqual(event["request"]["headers"]["Authorization"], "[scrubbed]")
+        self.assertEqual(event["request"]["cookies"]["session_token"], "[scrubbed]")
+        self.assertEqual(event["extra"]["signer_email"], "[scrubbed]")
+        # What is left has to be enough to act on, or the report is not worth sending.
+        self.assertEqual(event["request"]["headers"]["User-Agent"], "Firefox")
+        self.assertEqual(event["extra"]["document_id"], "doc-1")
+
+    def test_a_signed_value_is_scrubbed_however_deeply_it_sits(self) -> None:
+        event = before_send({"a": {"b": [{"c": {"text_value": "Jane Doe"}}]}}, {})
+
+        self.assertEqual(event["a"]["b"][0]["c"]["text_value"], "[scrubbed]")
