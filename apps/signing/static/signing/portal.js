@@ -942,6 +942,31 @@
     nodes.pagesRoot.classList.toggle("pages-root-plain", !enabled);
   }
 
+  /** Notice that this document moved on while the tab was sitting in the background.
+   *
+   * The page reads its state once, when it loads, and then holds it. A signer who leaves the tab
+   * open keeps whatever was true at that moment: after an administrator asks for a re-sign, the
+   * document is theirs to fill in again, but the tab still reads "This document has already been
+   * signed" over a locked copy, and nothing on the page will ever say otherwise.
+   *
+   * Only a change in status reloads. Nothing is re-rendered while the two agree, so returning to
+   * the tab cannot disturb a half-filled form - and when the status has changed, what was being
+   * filled in could no longer be submitted anyway.
+   */
+  async function refreshIfStale() {
+    if (document.visibilityState !== "visible" || isSubmitting || !state.context) return;
+    try {
+      const latest = await request(app.dataset.contextUrl);
+      if (latest.status !== state.context.status || latest.document_status !== state.context.document_status) {
+        window.location.reload();
+      }
+    } catch (error) {
+      // A failed check is not worth interrupting anyone over; the page is no more wrong than it
+      // already was, and the next look will try again.
+      void error;
+    }
+  }
+
   async function loadContext() {
     state.context = await request(app.dataset.contextUrl);
     nodes.statusBadge.textContent = state.context.status.replaceAll("_", " ");
@@ -1296,6 +1321,15 @@
     if (event.target instanceof HTMLElement && event.target.dataset.closeSubmitModal === "true") {
       closeSubmitModal();
     }
+  });
+
+  document.addEventListener("visibilitychange", () => {
+    void refreshIfStale();
+  });
+  // Restoring from the back/forward cache does not re-run this script, so the page comes back
+  // exactly as it was left however long ago that was.
+  window.addEventListener("pageshow", (event) => {
+    if (event.persisted) void refreshIfStale();
   });
 
   nodes.closeFieldSheetButton?.addEventListener("click", closeFieldSheet);

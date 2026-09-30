@@ -988,6 +988,57 @@ class AdminDocumentUploadTests(TestCase):
         self.assertIsNone(signing_request.signed_at)
         self.assertEqual(signing_request.submissions.count(), 0)
 
+    def test_resend_lets_the_signer_ask_for_a_code_straight_away(self) -> None:
+        """The cooldown belongs to the round that just ended, not to the one being started.
+
+        Asking for a code is rate limited so nobody can be mailed repeatedly. Re-sending cleared
+        the verification but left the timestamp behind, so a signer following a fresh link was
+        told to wait before they could begin - on the one screen that has nothing else to do.
+        """
+        document = Document.objects.create(
+            title="Reopen Me",
+            original_pdf=SimpleUploadedFile("reopen.pdf", build_flat_pdf(), content_type="application/pdf"),
+            created_by=self.user,
+            organization=self.organization,
+            status=Document.StatusEnum.COMPLETED,
+        )
+        DocumentField.objects.create(
+            document=document,
+            field_type=DocumentField.FieldTypeEnum.TEXT,
+            label="Full name",
+            page=1,
+            x=72,
+            y=620,
+            width=180,
+            height=24,
+            is_required=True,
+            detection_source=DocumentField.DetectionSourceEnum.MANUAL,
+            order=1,
+        )
+        signing_request = SigningRequest.objects.create(
+            document=document,
+            signer_email="signed@example.com",
+            signer_name="Signed User",
+            status=SigningRequest.StatusEnum.SIGNED,
+            signed_at=timezone.now(),
+            otp_last_sent_at=timezone.now(),
+            expires_at=timezone.now() + timedelta(days=7),
+        )
+
+        response = self.client.post(
+            f"/api/admin/documents/{document.id}/signing-requests/{signing_request.id}/resend/",
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 200, response.json())
+        signing_request.refresh_from_db()
+        self.assertIsNone(signing_request.otp_last_sent_at)
+
+        signer = APIClient()
+        sent = signer.post(f"/api/sign/{signing_request.id}/otp/send/")
+
+        self.assertEqual(sent.status_code, 200, sent.json())
+
     def test_download_signed_document_returns_file(self) -> None:
         document = Document.objects.create(
             title="Completed",
