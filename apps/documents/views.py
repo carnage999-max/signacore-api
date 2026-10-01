@@ -13,7 +13,7 @@ from django.contrib.auth import get_user_model
 from django.core.files.base import ContentFile
 from django.db import transaction
 from django.db.models import Count, Q
-from django.http import FileResponse, HttpResponse
+from django.http import FileResponse, HttpResponse, HttpResponseNotModified
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from drf_spectacular.utils import extend_schema
@@ -36,7 +36,13 @@ from tasks.notifications import (
 )
 from utils.file_storage import temporary_plaintext_file
 from utils.identity import email_digest
-from utils.pdf_preview import build_preview_matrix, prepare_page_for_preview
+from utils.pdf_preview import (
+    build_preview_matrix,
+    prepare_page_for_preview,
+    preview_etag,
+    preview_is_unchanged,
+    with_preview_caching,
+)
 from utils.task_dispatch import enqueue_task
 from utils.throttling import SignacoreRateThrottle
 
@@ -891,6 +897,30 @@ class AdminDocumentPagePreviewView(APIView):
 
     def get(self, request, document_id, page_number):
         document = get_scoped_document(request, document_id)
+
+        def record_view() -> None:
+            """Looking at a page is the event, whether or not the server had to redraw it.
+
+            A page served from the browser's copy was still looked at, so the trail must say so;
+            otherwise caching would quietly thin the audit history.
+            """
+            log_admin_event(
+                request,
+                AdminAuditLog.ActionEnum.DOCUMENT_VIEW,
+                f"Previewed page {page_number} for document: {document.title}.",
+                target_type="document",
+                target_id=document.id,
+                metadata={"page": page_number},
+            )
+
+        # After the scope check, so a 304 cannot confirm a document belonging to another
+        # organisation.
+        requested_width = request.query_params.get("width")
+        etag = preview_etag(document, page_number, requested_width)
+        if preview_is_unchanged(request, etag):
+            record_view()
+            return with_preview_caching(HttpResponseNotModified(), etag)
+
         try:
             with temporary_plaintext_file(document.original_pdf, suffix=".pdf") as pdf_path:
                 with fitz.open(pdf_path) as pdf_document:
@@ -898,7 +928,7 @@ class AdminDocumentPagePreviewView(APIView):
                         return Response({"detail": "Page not found."}, status=status.HTTP_404_NOT_FOUND)
                     page = pdf_document[page_number - 1]
                     prepare_page_for_preview(page)
-                    matrix = build_preview_matrix(page, request.query_params.get("width"))
+                    matrix = build_preview_matrix(page, requested_width)
                     pixmap = page.get_pixmap(matrix=matrix, alpha=False)
         except Exception:
             logger.exception(
@@ -913,15 +943,8 @@ class AdminDocumentPagePreviewView(APIView):
                 {"detail": "This PDF page could not be previewed. Try again shortly."},
                 status=status.HTTP_503_SERVICE_UNAVAILABLE,
             )
-        log_admin_event(
-            request,
-            AdminAuditLog.ActionEnum.DOCUMENT_VIEW,
-            f"Previewed page {page_number} for document: {document.title}.",
-            target_type="document",
-            target_id=document.id,
-            metadata={"page": page_number},
-        )
-        return HttpResponse(pixmap.tobytes("png"), content_type="image/png")
+        record_view()
+        return with_preview_caching(HttpResponse(pixmap.tobytes("png"), content_type="image/png"), etag)
 
 
 class AdminSigningRequestResendView(APIView):
