@@ -256,6 +256,19 @@ DEFAULT_FROM_EMAIL = env("DEFAULT_FROM_EMAIL", "SignaCore - by Se7en <signacore@
 REDIS_URL = env("REDIS_URL", "redis://127.0.0.1:6379/3")
 CELERY_BROKER_URL = env("CELERY_BROKER_URL", REDIS_URL)
 CELERY_RESULT_BACKEND = env("CELERY_RESULT_BACKEND", REDIS_URL)
+# Every module holding a task, named rather than discovered.
+#
+# ``autodiscover_tasks()`` looks for a ``tasks`` module inside each entry of INSTALLED_APPS. These
+# tasks live in a top-level ``tasks`` package instead, which is in none of them, so it found
+# nothing. What registered anyway did so by accident: the views import ``tasks.notifications`` at
+# module level, so loading Django pulled it in. ``tasks.signing`` and ``tasks.documents`` are
+# imported nowhere at module level, so a worker never saw them, and beat published both scheduled
+# tasks to a worker that discarded them as unknown.
+CELERY_IMPORTS = (
+    "tasks.documents",
+    "tasks.notifications",
+    "tasks.signing",
+)
 CELERY_BEAT_SCHEDULE = {
     "expire-signing-links-hourly": {
         "task": "tasks.signing.expire_signing_links",
@@ -319,7 +332,11 @@ def _sentry_traces_sample_rate() -> float:
 
 
 SENTRY_ENABLED = configure_error_reporting(
-    dsn=SENTRY_DSN,
+    # A test run is not an incident. The suite deliberately provokes failures - an unsanitisable
+    # document, a submission that cannot complete - and with a DSN in the developer's .env every
+    # one of them was reported against the production project, which is precisely the signal an
+    # alert on new issues is meant to carry.
+    dsn="" if "test" in sys.argv else SENTRY_DSN,
     environment=SENTRY_ENVIRONMENT,
     release=SENTRY_RELEASE,
     traces_sample_rate=_sentry_traces_sample_rate(),
