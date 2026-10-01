@@ -956,6 +956,10 @@ class AdminSigningRequestResendView(APIView):
             signing_request.status = SigningRequest.StatusEnum.PENDING
             signing_request.otp_hash = ""
             signing_request.otp_expires_at = None
+            # Cleared with the rest of the verification, or the resend cooldown from the round
+            # they already completed still applies: the signer opens the new link, asks for a
+            # code, and is told to wait for a minute before they may begin.
+            signing_request.otp_last_sent_at = None
             signing_request.signed_at = None
             signing_request.ip_address = ""
             signing_request.user_agent = ""
@@ -965,6 +969,7 @@ class AdminSigningRequestResendView(APIView):
                     "status",
                     "otp_hash",
                     "otp_expires_at",
+                    "otp_last_sent_at",
                     "signed_at",
                     "ip_address",
                     "user_agent",

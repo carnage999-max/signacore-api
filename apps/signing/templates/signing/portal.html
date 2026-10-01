@@ -1,11 +1,10 @@
-{% load static %}
 <!doctype html>
 <html lang="en">
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Signacore Signer Portal</title>
-    <link rel="icon" href="{% static 'signing/favicon.svg' %}" type="image/svg+xml" sizes="any">
+    <link rel="icon" href="{{ signer_portal_icon_url }}" sizes="16x16 32x32">
     <link rel="stylesheet" href="{{ signer_portal_css_url }}">
   </head>
   <body>
@@ -71,7 +70,7 @@
           <div id="signed-panel" class="panel signed-panel" hidden>
             <h2>You have signed this document</h2>
             <p id="signed-copy-copy" class="panel-copy"></p>
-            <a id="download-signed-button" class="primary-button" href="#" download hidden>Download your copy</a>
+            <button id="download-signed-button" class="primary-button" type="button" hidden>Download your copy</button>
           </div>
 
           <div id="field-progress-panel" class="panel progress-panel" hidden>
@@ -134,6 +133,7 @@
         <div class="modal-actions">
           <button id="cancel-submit-button" class="secondary-button" type="button">Keep editing</button>
           <button id="confirm-submit-button" class="primary-button" type="button">Submit document</button>
+          <button id="modal-download-button" class="primary-button" type="button" hidden>Download your copy</button>
         </div>
       </div>
     </div>

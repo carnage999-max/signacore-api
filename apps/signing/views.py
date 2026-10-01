@@ -14,6 +14,7 @@ from django.utils.text import slugify
 from django.views.generic import TemplateView
 from rest_framework import status
 from rest_framework.parsers import FormParser, MultiPartParser
+from rest_framework.renderers import JSONRenderer
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
@@ -122,6 +123,9 @@ class SignerPortalView(TemplateView):
         context["signing_token"] = str(kwargs["token"])
         context["signer_portal_css_url"] = versioned_static("signing/portal.css")
         context["signer_portal_js_url"] = versioned_static("signing/portal.js")
+        # Versioned like the rest: a browser holds on to a favicon harder than anything else
+        # it caches, so replacing one without a new URL leaves the old mark on the tab.
+        context["signer_portal_icon_url"] = versioned_static("signing/favicon.ico")
         context["signer_account_url"] = f"{settings.SIGNACORE_APP_URL.rstrip('/')}/register?role=signer"
         return context
 
@@ -215,6 +219,19 @@ class SignerSignedCopyView(APIView):
     throttle_classes = [SignacoreRateThrottle]
     throttle_scope = "signer_preview"
     serializer_class = SigningRequestSerializer
+    # A file, or a short reason why not. Never a web page: the browsable renderer answers a
+    # navigation with a full HTML document, and this endpoint used to be the target of an anchor
+    # carrying the download attribute, so that page was saved to disk under the document's name.
+    renderer_classes = [JSONRenderer]
+
+    def perform_content_negotiation(self, request, force=False):
+        """Answer in the one form this endpoint has, rather than refusing the request.
+
+        Restricting the renderer would otherwise make any client that does not ask for JSON -
+        including a browser, which asks for HTML - fail negotiation with 406 before the handler
+        runs, and that would take the file with it.
+        """
+        return super().perform_content_negotiation(request, force=True)
 
     def get(self, request, token):
         signing_request = get_signing_request_or_404(token)

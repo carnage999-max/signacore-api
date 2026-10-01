@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import tempfile
 from datetime import timedelta
+from pathlib import Path
 from unittest.mock import patch
 
 import fitz
 from django.conf import settings
 from django.contrib.auth import get_user_model
+from django.contrib.staticfiles import finders
 from django.core import mail
 from django.core.cache import cache
 from django.core.files.uploadedfile import SimpleUploadedFile
@@ -19,7 +21,13 @@ from apps.documents.models import Document, DocumentField
 from apps.signing.models import SigningRequest
 from services.pdf_anchors import conceal_anchor_tags_on_page
 from services.pdf_engine import PDFEngine
-from services.pdf_sanitizer import PDFSanitizationError, _has_live_key, find_active_content
+from services.pdf_sanitizer import (
+    PDFSanitizationError,
+    _has_live_key,
+    assert_sanitized,
+    find_active_content,
+    sanitize_document,
+)
 from tasks.signing import issue_outstanding_completed_documents
 from utils.file_storage import temporary_plaintext_file
 from utils.observability import before_send, configure_error_reporting
@@ -1373,6 +1381,80 @@ class SanitizationBoundaryTests(SimpleTestCase):
         self.assertFalse(_has_live_key("<</AA null>>", "/AA"))
 
 
+class UnverifiableObjectTests(SimpleTestCase):
+    """An object nobody can read is not an object anybody can vouch for.
+
+    Verification used to skip an object it could not parse, on the stated grounds that such an
+    object could not carry an action. Nothing established that. The contents of an object that
+    will not parse are by definition unknown, and this is the check that decides whether a file
+    goes out to the people who signed it, so it now refuses rather than assumes.
+
+    This is affordable because the check only ever runs on a file this module has just written
+    with ``garbage=4, clean=True``, which rebuilds the cross-reference table. Source documents do
+    carry dangling references - the IRS W-9 has two - and they do not survive the save.
+    """
+
+    def write_pdf(self, data: bytes) -> str:
+        handle = tempfile.NamedTemporaryFile(suffix=".pdf", delete=False)
+        handle.write(data)
+        handle.close()
+        self.addCleanup(lambda: Path(handle.name).unlink(missing_ok=True))
+        return handle.name
+
+    def refuse_one_object(self, xref: int):
+        """Fail to read one object, exactly as MuPDF does for a reference it cannot resolve.
+
+        MuPDF repairs a hand-damaged cross-reference table on open, dropping the entries that
+        point nowhere, so a fixture cannot carry this state into the check. The failure is
+        introduced at the seam it actually arrives through instead.
+        """
+        original = fitz.Document.xref_object
+
+        def read(self, number, *args, **kwargs):
+            if number == xref:
+                raise RuntimeError(f"code=7: cannot find object in xref ({number} 0 R)")
+            return original(self, number, *args, **kwargs)
+
+        return patch.object(fitz.Document, "xref_object", read)
+
+    def test_an_object_that_cannot_be_read_is_reported(self) -> None:
+        path = self.write_pdf(builders.build_flat_pdf())
+        self.assertEqual(find_active_content(path), [], "the fixture must be clean to begin with")
+
+        with self.refuse_one_object(2):
+            findings = find_active_content(path)
+
+        self.assertTrue(any("object 2" in finding and "could not be read" in finding for finding in findings), findings)
+
+    def test_an_unreadable_object_withholds_the_file(self) -> None:
+        path = self.write_pdf(builders.build_flat_pdf())
+
+        with self.refuse_one_object(2), self.assertRaises(PDFSanitizationError):
+            assert_sanitized(path)
+
+    def test_a_readable_document_is_still_passed(self) -> None:
+        """The point of refusing is lost if it refuses everything."""
+        path = self.write_pdf(builders.build_flat_pdf())
+
+        assert_sanitized(path)
+
+    def test_the_catalog_is_cleared_even_when_its_keys_cannot_be_listed(self) -> None:
+        """A catalog that resists inspection used to keep every action it had."""
+        source = self.write_pdf(builders.build_active_content_pdf())
+        cleaned = f"{source}-cleaned.pdf"
+        self.addCleanup(lambda: Path(cleaned).unlink(missing_ok=True))
+
+        with patch("services.pdf_sanitizer._xref_keys", return_value=[]):
+            with fitz.open(source) as document:
+                sanitize_document(document)
+                document.save(cleaned, garbage=4, clean=True, deflate=True)
+
+        self.assertFalse(
+            [finding for finding in find_active_content(cleaned) if "/OpenAction" in finding],
+            find_active_content(cleaned),
+        )
+
+
 @override_settings(
     MEDIA_ROOT=TEST_MEDIA_ROOT,
     EMAIL_BACKEND="django.core.mail.backends.locmem.EmailBackend",
@@ -1580,6 +1662,47 @@ class SignerSignedCopyTests(TestCase):
 
         self.assertEqual(response.status_code, 404)
 
+    def test_an_error_is_data_and_never_a_web_page(self) -> None:
+        """What a browser asks for must not change a download into an HTML file.
+
+        The download was an anchor carrying the download attribute, pointed at this endpoint. A
+        click is a navigation, so it asked for text/html, and every branch that was not the file
+        answered through the browsable renderer with a full HTML page - which the download
+        attribute then saved to disk under the document's name. The signer got an HTML file where
+        their agreement should have been, and nothing said otherwise.
+        """
+        browser = "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
+        self.verify()
+
+        not_ready = self.client.get(f"/api/sign/{self.signing_request.id}/signed/", HTTP_ACCEPT=browser)
+
+        self.assertEqual(not_ready.status_code, 404)
+        self.assertEqual(not_ready["Content-Type"], "application/json")
+        self.assertNotIn(b"<!DOCTYPE html>", not_ready.content)
+
+        self.client.cookies.clear()
+        unverified = self.client.get(f"/api/sign/{self.signing_request.id}/signed/", HTTP_ACCEPT=browser)
+
+        self.assertEqual(unverified.status_code, 403)
+        self.assertEqual(unverified["Content-Type"], "application/json")
+        self.assertNotIn(b"<!DOCTYPE html>", unverified.content)
+
+    def test_the_file_is_served_whatever_the_client_asks_for(self) -> None:
+        """Restricting the renderer must not make the endpoint refuse the request instead.
+
+        Negotiation runs before the handler, so a view that only renders JSON answers 406 to a
+        browser asking for HTML - and to a client asking for a PDF - taking the file with it.
+        """
+        self.sign()
+
+        for accept in ("text/html", "application/pdf", "application/pdf, application/json", "*/*"):
+            with self.subTest(accept=accept):
+                response = self.client.get(f"/api/sign/{self.signing_request.id}/signed/", HTTP_ACCEPT=accept)
+
+                self.assertEqual(response.status_code, 200)
+                self.assertEqual(response["Content-Type"], "application/pdf")
+                self.assertTrue(response.content.startswith(b"%PDF"))
+
     def test_the_context_says_whether_a_copy_is_ready(self) -> None:
         self.verify()
         before = self.client.get(f"/api/sign/{self.signing_request.id}/").json()
@@ -1610,6 +1733,20 @@ class PortalAssetVersionTests(SimpleTestCase):
             versioned_static("signing/portal.css"),
             versioned_static("signing/portal.js"),
         )
+
+    def test_the_favicon_is_a_real_icon_and_is_versioned(self) -> None:
+        """The tab showed a hand-drawn placeholder rather than the product's own mark.
+
+        Versioned like the others: a browser holds on to a favicon harder than anything else it
+        caches, so replacing the file without changing the URL leaves the old mark in place.
+        """
+        url = versioned_static("signing/favicon.ico")
+
+        self.assertIn("signing/favicon.ico", url)
+        self.assertRegex(url, r"\?v=[0-9a-f]{12}$")
+        located = finders.find("signing/favicon.ico")
+        self.assertIsNotNone(located, "the portal's favicon must be a file that ships with the app")
+        self.assertTrue(Path(located).read_bytes().startswith(b"\x00\x00\x01\x00"), "must be a real ICO")
 
     def test_a_missing_asset_still_returns_a_usable_url(self) -> None:
         url = versioned_static("signing/not-a-real-file.css")

@@ -51,6 +51,7 @@
     submitModalList: document.getElementById("submit-modal-list"),
     submitModalTitle: document.getElementById("submit-modal-title"),
     closeSubmitModalButton: document.getElementById("close-submit-modal-button"),
+    modalDownloadButton: document.getElementById("modal-download-button"),
     cancelSubmitButton: document.getElementById("cancel-submit-button"),
     confirmSubmitButton: document.getElementById("confirm-submit-button"),
     documentPanel: document.getElementById("document-panel"),
@@ -204,6 +205,10 @@
   function openSubmitModal() {
     const outstanding = outstandingRequiredFields();
     nodes.submitModalList.innerHTML = "";
+    setModalEyebrow("Before you submit");
+    nodes.modalDownloadButton.hidden = true;
+    nodes.cancelSubmitButton.hidden = false;
+    nodes.closeSubmitModalButton.hidden = false;
 
     if (outstanding.length) {
       nodes.submitModalTitle.textContent = "Some required fields are empty";
@@ -240,6 +245,46 @@
 
   function closeSubmitModal() {
     nodes.submitModal.hidden = true;
+  }
+
+  function setModalEyebrow(text) {
+    const eyebrow = nodes.submitModal?.querySelector(".modal-header .eyebrow");
+    if (eyebrow) eyebrow.textContent = text;
+  }
+
+  /** Hold the dialog open through the request, so pressing Submit visibly does something.
+   *
+   * Confirming used to close the dialog and write the outcome to the notice at the top of the
+   * page. Submitting happens from the bottom, where the button is, so the one thing that said
+   * whether a signature had been accepted was off screen: the page locked and nothing announced
+   * it. The dialog the press came from is where the answer belongs.
+   */
+  function showSubmitProgress() {
+    setModalEyebrow("Submitting");
+    nodes.submitModalTitle.textContent = "Submitting your signature…";
+    nodes.submitModalCopy.textContent = "This takes a moment. Please keep this page open.";
+    nodes.submitModalList.innerHTML = "";
+    nodes.confirmSubmitButton.disabled = true;
+    nodes.confirmSubmitButton.textContent = "Submitting…";
+    nodes.cancelSubmitButton.hidden = true;
+    nodes.closeSubmitModalButton.hidden = true;
+    nodes.modalDownloadButton.hidden = true;
+    nodes.submitModal.hidden = false;
+  }
+
+  function showSubmitOutcome({ title, copy, tone }) {
+    setModalEyebrow(tone === "success" ? "Signed" : "Not submitted");
+    nodes.submitModalTitle.textContent = title;
+    nodes.submitModalCopy.textContent = copy;
+    nodes.submitModalList.innerHTML = "";
+    nodes.confirmSubmitButton.hidden = true;
+    nodes.confirmSubmitButton.disabled = false;
+    nodes.confirmSubmitButton.textContent = "Submit document";
+    nodes.cancelSubmitButton.hidden = false;
+    nodes.cancelSubmitButton.textContent = "Close";
+    nodes.closeSubmitModalButton.hidden = false;
+    nodes.modalDownloadButton.hidden = !(tone === "success" && state.context?.signed_copy_ready);
+    nodes.submitModal.hidden = false;
   }
 
   function focusField(field) {
@@ -467,9 +512,6 @@
       ? "Your signature is recorded. Keep a copy for your records."
       : "Your signature is recorded. The completed copy is being prepared and will be emailed to you.";
     nodes.downloadSignedButton.hidden = !ready;
-    if (ready) {
-      nodes.downloadSignedButton.href = `/api/sign/${app.dataset.signingToken}/signed/`;
-    }
     if (nodes.fieldProgressPanel) {
       nodes.fieldProgressPanel.hidden = true;
     }
@@ -477,6 +519,79 @@
       nodes.fieldRail.hidden = true;
     }
     lockDocument();
+  }
+
+  /** Fetch the completed copy and check it is one before handing it to the browser.
+   *
+   * This was an anchor carrying the download attribute, pointed straight at the API. When the
+   * endpoint answered with anything other than the file - the session had lapsed, or the copy was
+   * not packaged yet - it answered a navigation, so it rendered the error as a web page, and the
+   * download attribute saved that page to disk. The signer got an HTML file named like their
+   * agreement and nothing telling them otherwise. Reading the response first means an error can
+   * be shown as an error and only a PDF is ever saved.
+   */
+  async function downloadSignedCopy(button) {
+    const original = button.textContent;
+    button.disabled = true;
+    button.textContent = "Preparing…";
+    try {
+      const response = await fetch(`/api/sign/${app.dataset.signingToken}/signed/`, {
+        credentials: "same-origin",
+        // Both, deliberately. DRF negotiates before the handler runs, so asking only for a PDF
+        // fails with 406 even when the file is there; the JSON is what an error comes back as.
+        headers: { Accept: "application/pdf, application/json" },
+      });
+      if (!response.ok) {
+        throw new Error(await downloadErrorMessage(response));
+      }
+      const blob = await response.blob();
+      if (!blob.type.includes("application/pdf")) {
+        throw new Error("The completed copy is not ready yet. Please try again shortly.");
+      }
+      saveBlob(blob, filenameFromResponse(response));
+      setNotice("Your signed copy has been downloaded.", "success");
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "The copy could not be downloaded.";
+      showSubmitOutcome({ title: "Could not download your copy", copy: message, tone: "error" });
+      setNotice(message, "error");
+    } finally {
+      button.disabled = false;
+      button.textContent = original;
+    }
+  }
+
+  async function downloadErrorMessage(response) {
+    if (response.status === 403) {
+      return "Your verified session has expired. Reload this page and verify your email to download the copy.";
+    }
+    if (response.status === 404) {
+      return "The completed copy is not ready yet. It will be emailed to you as soon as it is.";
+    }
+    // Anything else may carry a reason worth repeating, but only if it came back as data. An
+    // error page is not a message to a person.
+    if ((response.headers.get("content-type") || "").includes("application/json")) {
+      const payload = await response.json().catch(() => null);
+      if (payload?.detail) return payload.detail;
+    }
+    return "The copy could not be downloaded. Please try again shortly.";
+  }
+
+  function filenameFromResponse(response) {
+    const disposition = response.headers.get("content-disposition") || "";
+    const match = /filename="?([^";]+)"?/i.exec(disposition);
+    return match ? match[1] : "signed-document.pdf";
+  }
+
+  function saveBlob(blob, filename) {
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = filename;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    // Revoked on the next frame; revoking immediately can cancel the save in some browsers.
+    window.setTimeout(() => URL.revokeObjectURL(url), 0);
   }
 
   function lockDocument() {
@@ -827,6 +942,31 @@
     nodes.pagesRoot.classList.toggle("pages-root-plain", !enabled);
   }
 
+  /** Notice that this document moved on while the tab was sitting in the background.
+   *
+   * The page reads its state once, when it loads, and then holds it. A signer who leaves the tab
+   * open keeps whatever was true at that moment: after an administrator asks for a re-sign, the
+   * document is theirs to fill in again, but the tab still reads "This document has already been
+   * signed" over a locked copy, and nothing on the page will ever say otherwise.
+   *
+   * Only a change in status reloads. Nothing is re-rendered while the two agree, so returning to
+   * the tab cannot disturb a half-filled form - and when the status has changed, what was being
+   * filled in could no longer be submitted anyway.
+   */
+  async function refreshIfStale() {
+    if (document.visibilityState !== "visible" || isSubmitting || !state.context) return;
+    try {
+      const latest = await request(app.dataset.contextUrl);
+      if (latest.status !== state.context.status || latest.document_status !== state.context.document_status) {
+        window.location.reload();
+      }
+    } catch (error) {
+      // A failed check is not worth interrupting anyone over; the page is no more wrong than it
+      // already was, and the next look will try again.
+      void error;
+    }
+  }
+
   async function loadContext() {
     state.context = await request(app.dataset.contextUrl);
     nodes.statusBadge.textContent = state.context.status.replaceAll("_", " ");
@@ -841,7 +981,13 @@
     nodes.fieldProgressPanel.hidden = !state.context.is_verified;
     nodes.documentPanel.hidden = !state.context.is_verified;
 
-    if (state.context.access_message) {
+    if (state.context.has_signed) {
+      // "This document has already been signed" is the reason nobody may fill it in, and it was
+      // shown in the colour of a refusal. To the person who just signed it, that reads as their
+      // signature having been rejected - which is what the one visible message said after a
+      // submission that had in fact succeeded.
+      setNotice("You have signed this document. It is now locked.", "success");
+    } else if (state.context.access_message) {
       setNotice(state.context.access_message, "error");
     } else if (state.context.is_verified) {
       setNotice("Email verified. Complete the remaining fields and submit the document.", "success");
@@ -1046,6 +1192,9 @@
 
   async function submitDocument() {
     if (isSubmitting || state.submitted || !state.context || !state.context.is_verified) return;
+    // Set after the guard, so a press that does nothing cannot leave the dialog reading
+    // "Submitting" with its close controls hidden.
+    showSubmitProgress();
     const formData = new FormData();
     // The HttpOnly signer cookie keeps resumed sessions valid after a refresh.
     if (state.sessionToken) {
@@ -1085,15 +1234,25 @@
         void reloadError;
         showSignedState();
       }
+      // After the reload, so the dialog knows whether there is a copy to offer.
+      showSubmitOutcome({
+        title: "Your signature has been recorded",
+        copy: state.context?.signed_copy_ready
+          ? "This document is now locked. You can download your copy, and it has also been emailed to you."
+          : payload.message ||
+            "This document is now locked. Your completed copy is being prepared and will be emailed to you.",
+        tone: "success",
+      });
     } catch (error) {
-      if (error instanceof Error) {
-        setNotice(error.message, "error");
-      }
+      const message = error instanceof Error ? error.message : "The document could not be submitted.";
       try {
         await loadContext();
       } catch (reloadError) {
         void reloadError;
       }
+      // After the reload, which writes a notice of its own and would otherwise bury this one.
+      setNotice(message, "error");
+      showSubmitOutcome({ title: "Your document was not submitted", copy: message, tone: "error" });
     } finally {
       isSubmitting = false;
       if (!state.submitted) {
@@ -1148,8 +1307,13 @@
 
   nodes.submitButton.addEventListener("click", openSubmitModal);
   nodes.confirmSubmitButton?.addEventListener("click", () => {
-    closeSubmitModal();
     void submitDocument();
+  });
+  nodes.downloadSignedButton?.addEventListener("click", () => {
+    void downloadSignedCopy(nodes.downloadSignedButton);
+  });
+  nodes.modalDownloadButton?.addEventListener("click", () => {
+    void downloadSignedCopy(nodes.modalDownloadButton);
   });
   nodes.cancelSubmitButton?.addEventListener("click", closeSubmitModal);
   nodes.closeSubmitModalButton?.addEventListener("click", closeSubmitModal);
@@ -1157,6 +1321,15 @@
     if (event.target instanceof HTMLElement && event.target.dataset.closeSubmitModal === "true") {
       closeSubmitModal();
     }
+  });
+
+  document.addEventListener("visibilitychange", () => {
+    void refreshIfStale();
+  });
+  // Restoring from the back/forward cache does not re-run this script, so the page comes back
+  // exactly as it was left however long ago that was.
+  window.addEventListener("pageshow", (event) => {
+    if (event.persisted) void refreshIfStale();
   });
 
   nodes.closeFieldSheetButton?.addEventListener("click", closeFieldSheet);

@@ -4,6 +4,17 @@ PyMuPDF's ``Document.scrub()`` is deliberately not used: it raises on documents 
 cross-reference entries, and on healthy documents it still leaves ``/AcroForm``, ``/AA`` and
 ``/JS`` in place. Removal here is explicit, and every sanitized file is re-opened and verified
 so completion fails loudly rather than distributing a file with active content.
+
+The split of responsibility between the two halves is what makes that claim hold. Removal is
+best effort: a document can be damaged in ways that defeat an individual edit, and refusing to
+strip anything because one object resisted would help nobody. Verification is total. It is the
+verifier, not the remover, that decides whether a file may be distributed, so it treats an object
+it cannot read as a failure rather than assuming an object nobody can parse must be inert. An
+unreadable object is precisely the one whose contents are unknown.
+
+That is affordable because the verifier only ever inspects a file this module has just written
+with ``garbage=4, clean=True``, which rebuilds the cross-reference table. Source documents do
+carry dangling references - the IRS W-9 has two - and none of them survive into the output.
 """
 
 from __future__ import annotations
@@ -45,10 +56,13 @@ def sanitize_document(document: fitz.Document) -> None:
         for link in list(page.get_links() or []):
             page.delete_link(link)
 
+    # Set unconditionally rather than only where the key was read back. A null value is equivalent
+    # to an absent key (PDF 32000-1, 7.3.9), so writing one that was never there costs nothing,
+    # while reading the catalog first would mean a catalog that resisted inspection kept every
+    # action it had.
     catalog = document.pdf_catalog()
     for key in ACTIVE_CATALOG_KEYS:
-        if key in _xref_keys(document, catalog):
-            document.xref_set_key(catalog, key, "null")
+        document.xref_set_key(catalog, key, "null")
 
     for xref in range(1, document.xref_length()):
         keys = _xref_keys(document, xref)
@@ -61,7 +75,7 @@ def sanitize_document(document: fitz.Document) -> None:
             if key in keys:
                 try:
                     document.xref_set_key(xref, key, "null")
-                except Exception:  # pragma: no cover - malformed object, nothing to strip
+                except Exception:  # pragma: no cover - the verifier decides whether this mattered
                     continue
 
 
@@ -79,7 +93,11 @@ def find_active_content(pdf_path: str | Path) -> list[str]:
         for xref in range(1, document.xref_length()):
             try:
                 obj = document.xref_object(xref, compressed=True)
-            except Exception:  # pragma: no cover - unreadable object cannot carry an action
+            except Exception as error:
+                findings.append(f"object {xref} could not be read to verify it: {error}")
+                continue
+            if not isinstance(obj, str):
+                findings.append(f"object {xref} could not be read to verify it")
                 continue
             findings.extend(
                 f"object {xref} still contains {token}" for token in FORBIDDEN_TOKENS if _has_live_key(obj, token)
@@ -108,14 +126,15 @@ def assert_sanitized(pdf_path: str | Path) -> None:
 
 
 def _is_widget_object(document: fitz.Document, xref: int) -> bool:
+    """Whether this object is a form widget. Both of the following leave removal best effort."""
     try:
         return document.xref_get_key(xref, "Subtype")[1] == "/Widget"
-    except Exception:  # pragma: no cover - unreadable object has no subtype
+    except Exception:  # pragma: no cover - a widget left behind is a finding, not a silent pass
         return False
 
 
 def _xref_keys(document: fitz.Document, xref: int) -> list[str]:
     try:
         return list(document.xref_get_keys(xref) or [])
-    except Exception:  # pragma: no cover - unreadable object has no keys
+    except Exception:  # pragma: no cover - anything left in an object it skips is a finding
         return []
