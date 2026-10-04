@@ -17,6 +17,21 @@ from services.pdf_engine import PDFEngine
 from . import pdf_builders as builders
 
 
+class StubPage:
+    """The two readings of a page this module asks PyMuPDF for, and nothing else."""
+
+    def __init__(self, *, words: list[tuple], chars: list[tuple[tuple[float, ...], str]]) -> None:
+        self._words = words
+        self._chars = chars
+
+    def get_text(self, kind: str):
+        if kind == "words":
+            return self._words
+        return {
+            "blocks": [{"lines": [{"spans": [{"chars": [{"bbox": bbox, "c": char} for bbox, char in self._chars]}]}]}]
+        }
+
+
 class FormShapeDetectionTests(SimpleTestCase):
     def detect(self, data: bytes):
         handle = tempfile.NamedTemporaryFile(suffix=".pdf", delete=False)
@@ -74,6 +89,50 @@ class FormShapeDetectionTests(SimpleTestCase):
         fields = self.detect(builders.build_running_header_pdf(pages=4))
 
         self.assertEqual(len(fields), 4, "one writing line per page, and only that")
+
+    def test_a_tick_box_is_split_from_the_label_stuck_to_it(self) -> None:
+        """A page laid out with CSS leaves no space between the box and its option.
+
+        The box then arrives as part of the first word of the label - "☐Less" rather than "☐" -
+        and matches nothing looking for a box. The survey that found this carried seventy-four and
+        offered five, those five being the only ones whose labels sat below rather than beside.
+
+        Driven through a stand-in for the page rather than a rendered document: none of the fonts
+        PyMuPDF can draw with carries U+2610, which is why the tick boxes in these builders are
+        drawn as rectangles. What is being checked is this module's own splitting, not PyMuPDF's
+        extraction.
+        """
+        page = StubPage(
+            words=[(56.7, 342.4, 92.9, 356.0, "\u2610Less", 0, 0, 0)],
+            chars=[((56.7, 343.0, 67.5, 356.0), "\u2610")],
+        )
+
+        split = PDFEngine()._split_leading_checkboxes(page)
+
+        self.assertEqual([word[4] for word in split], ["\u2610", "Less"])
+
+    def test_the_box_keeps_its_own_width(self) -> None:
+        """Taking the word's width would lay the field over the label beside it."""
+        page = StubPage(
+            words=[(56.7, 342.4, 92.9, 356.0, "\u2610Less", 0, 0, 0)],
+            chars=[((56.7, 343.0, 67.5, 356.0), "\u2610")],
+        )
+
+        box, label = PDFEngine()._split_leading_checkboxes(page)
+
+        self.assertAlmostEqual(box[2] - box[0], 10.8, delta=0.1)
+        self.assertAlmostEqual(label[0], 67.5, delta=0.1)
+
+    def test_a_word_whose_glyph_cannot_be_placed_is_left_alone(self) -> None:
+        """Without the glyph's own box there is no honest width, and a guess moves the field."""
+        page = StubPage(words=[(56.7, 342.4, 92.9, 356.0, "\u2610Less", 0, 0, 0)], chars=[])
+
+        self.assertEqual([word[4] for word in PDFEngine()._split_leading_checkboxes(page)], ["\u2610Less"])
+
+    def test_an_ordinary_word_is_untouched(self) -> None:
+        page = StubPage(words=[(72.0, 100.0, 120.0, 112.0, "Signature", 0, 0, 0)], chars=[])
+
+        self.assertEqual([word[4] for word in PDFEngine()._split_leading_checkboxes(page)], ["Signature"])
 
     def test_a_short_document_keeps_everything(self) -> None:
         """Two pages are not enough to tell a repeat from a coincidence."""

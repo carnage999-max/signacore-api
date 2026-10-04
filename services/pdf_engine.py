@@ -588,9 +588,67 @@ class PDFEngine:
 
     def _collect_line_words(self, page: fitz.Page) -> list[list[tuple[Any, ...]]]:
         grouped: dict[tuple[int, int], list[tuple[Any, ...]]] = {}
-        for word in page.get_text("words"):
+        for word in self._split_leading_checkboxes(page):
             grouped.setdefault((int(word[5]), int(word[6])), []).append(word)
         return [sorted(words, key=lambda item: (item[1], item[0])) for _, words in sorted(grouped.items())]
+
+    def _split_leading_checkboxes(self, page: fitz.Page) -> list[tuple[Any, ...]]:
+        """Separate a tick box from the label stuck to it.
+
+        A word is whatever sits between two spaces, and a page laid out with CSS has no space
+        between a box and the option beside it - the gap is margin, which leaves no character. The
+        box therefore arrives as part of the first word of its label: not "☐" but "☐Less", which
+        matches nothing looking for a box. A four-page survey carried seventy-four of them and
+        offered five, those five being the only ones whose labels sat underneath rather than
+        beside.
+
+        The box is given back its own word, with the width the glyph actually occupies rather than
+        a guess, so what follows reads the geometry of the box and not of the box and its label
+        together.
+        """
+        boxes = self._checkbox_glyph_boxes(page)
+        words: list[tuple[Any, ...]] = []
+        for word in page.get_text("words"):
+            token = str(word[4] or "")
+            if len(token) < 2 or token[0] not in self.checkbox_chars:
+                words.append(word)
+                continue
+
+            x0, y0, x1, y1 = map(float, word[:4])
+            glyph = self._glyph_at(boxes, x0, y0, y1)
+            # Without the glyph's own box there is no honest width for it, and inventing one would
+            # put the field somewhere the box is not.
+            if glyph is None:
+                words.append(word)
+                continue
+
+            words.append((glyph.x0, glyph.y0, glyph.x1, glyph.y1, token[0], word[5], word[6], word[7]))
+            words.append((glyph.x1, y0, x1, y1, token[1:], word[5], word[6], word[7]))
+        return words
+
+    def _checkbox_glyph_boxes(self, page: fitz.Page) -> list[fitz.Rect]:
+        """Where each tick box sits, read a character at a time rather than a word at a time."""
+        found: list[fitz.Rect] = []
+        for block in page.get_text("rawdict").get("blocks", []):
+            for line in block.get("lines", []):
+                for span in line.get("spans", []):
+                    for char in span.get("chars", []):
+                        if char.get("c") in self.checkbox_chars:
+                            found.append(fitz.Rect(char["bbox"]))
+        return found
+
+    @staticmethod
+    def _glyph_at(boxes: list[fitz.Rect], x0: float, y0: float, y1: float) -> fitz.Rect | None:
+        """The box that opens this word.
+
+        Matched by where it starts and by sharing the word's line rather than by an exact
+        position: a character's box and the box of the word containing it are measured from
+        different things and differ by a fraction of a point.
+        """
+        for rect in boxes:
+            if abs(rect.x0 - x0) <= 1.0 and rect.y0 < y1 and rect.y1 > y0:
+                return rect
+        return None
 
     def _extract_underscore_fields(
         self,
