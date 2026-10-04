@@ -30,6 +30,7 @@ from tasks.notifications import (
     send_account_verification,
     send_account_welcome,
     send_organization_invitation,
+    send_password_reset,
     sync_organization_seat_quantity,
 )
 from utils.email_verification import check_email_verification_token
@@ -50,10 +51,13 @@ from .serializers import (
     AccountSigningRequestSerializer,
     EmailLoginSerializer,
     EmailRegistrationSerializer,
+    EmailVerificationResendSerializer,
     EmailVerificationSerializer,
     OAuthExchangeSerializer,
     OrganizationInvitationSerializer,
     OrganizationMemberSerializer,
+    PasswordResetConfirmSerializer,
+    PasswordResetRequestSerializer,
 )
 
 DUMMY_PASSWORD_HASH = make_password(None)
@@ -275,6 +279,140 @@ class EmailRegistrationView(APIView):
         )
 
 
+class PasswordResetRequestView(APIView):
+    """Ask for a link that sets a password.
+
+    It answers the same way whatever the address, because anyone can post any address here and
+    saying which ones have accounts would turn this into a way of asking.
+    """
+
+    authentication_classes = []
+    permission_classes = [HasValidSignacoreSecret]
+    throttle_classes = [SignacoreRateThrottle]
+    throttle_scope = "email_auth"
+    serializer_class = PasswordResetRequestSerializer
+
+    def post(self, request):
+        serializer = PasswordResetRequestSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        profile = (
+            AccountProfile.objects.select_related("user")
+            .filter(email_hash=email_digest(serializer.validated_data["email"]))
+            .first()
+        )
+        if profile is not None:
+            enqueue_task(send_password_reset, profile.user.id)
+
+        return Response(
+            {"detail": "If that address has an account, a link to choose a password is on its way."},
+            status=status.HTTP_200_OK,
+        )
+
+
+class PasswordResetConfirmView(APIView):
+    """Set the password the link was issued for.
+
+    The token is Django's own, which mixes the current password hash and last sign-in into its
+    signature. That makes it single use without anything needing to be stored: the moment the
+    password is set the token that set it stops verifying, so a link read out of an old email
+    cannot be used a second time.
+
+    It works for an account that has never had a password. Those made through Google or Apple are
+    given an unusable one, so there is nothing to reset and no second way in - losing the provider
+    account lost the SignaCore account outright. Setting a first password is the same operation.
+    """
+
+    authentication_classes = []
+    permission_classes = [HasValidSignacoreSecret]
+    throttle_classes = [SignacoreRateThrottle]
+    throttle_scope = "email_auth"
+    serializer_class = PasswordResetConfirmSerializer
+
+    def post(self, request):
+        serializer = PasswordResetConfirmSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        values = serializer.validated_data
+
+        try:
+            user_id = urlsafe_base64_decode(values["uid"]).decode()
+        except (ValueError, TypeError, OverflowError, UnicodeDecodeError):
+            user_id = ""
+
+        with transaction.atomic():
+            user = (
+                get_user_model()
+                .objects.select_for_update(of=("self",))
+                .select_related("signacore_profile")
+                .filter(pk=user_id)
+                .first()
+            )
+            if user is None or not default_token_generator.check_token(user, values["token"]):
+                return Response(
+                    {"detail": "This link is invalid or has already been used."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+            had_password = user.has_usable_password()
+            user.set_password(values["password"])
+            # Opening the link proves the address receives mail, which is the whole of what
+            # verification establishes, so an account still waiting on it is let in rather than
+            # being sent round again for the same proof.
+            was_inactive = not user.is_active
+            user.is_active = True
+            user.save(update_fields=["password", "is_active"])
+
+            log_account_event(
+                request,
+                user,
+                AdminAuditLog.ActionEnum.EMAIL_LOGIN,
+                "Set a new password." if had_password else "Set a password for the first time.",
+            )
+
+        if was_inactive:
+            enqueue_task(send_account_welcome, user.id)
+
+        return Response(
+            {"detail": "Your password is set. Sign in with it now."},
+            status=status.HTTP_200_OK,
+        )
+
+
+class EmailVerificationResendView(APIView):
+    """Send the verification link again.
+
+    The page that says to check your email already existed, but only the moment an account was
+    made. Somebody who closed that tab, or whose link expired, had one way back: register again
+    with exactly the same password and the same role, which nobody would guess and which fails if
+    any of it has been forgotten.
+
+    It answers the same way whether or not the address has an account. Anyone can post any address
+    here, so saying which ones exist would turn this into a way of asking.
+    """
+
+    authentication_classes = []
+    permission_classes = [HasValidSignacoreSecret]
+    throttle_classes = [SignacoreRateThrottle]
+    throttle_scope = "email_auth"
+    serializer_class = EmailVerificationResendSerializer
+
+    def post(self, request):
+        serializer = EmailVerificationResendSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        email = serializer.validated_data["email"]
+
+        profile = AccountProfile.objects.select_related("user").filter(email_hash=email_digest(email)).first()
+        # Only an account still waiting to be verified has anything to send. One already verified
+        # is left alone rather than being mailed a link it does not need.
+        if profile is not None and not profile.user.is_active:
+            enqueue_task(send_account_verification, profile.user.id)
+
+        return Response(
+            {"detail": "If that address has an account waiting to be verified, a new link is on its way."},
+            status=status.HTTP_200_OK,
+        )
+
+
 class EmailVerificationView(APIView):
     authentication_classes = []
     permission_classes = [HasValidSignacoreSecret]
@@ -341,16 +479,25 @@ class EmailLoginView(APIView):
         values = serializer.validated_data
         profile = AccountProfile.objects.select_related("user").filter(email_hash=email_digest(values["email"])).first()
         encoded_password = profile.user.password if profile is not None else DUMMY_PASSWORD_HASH
+        # Checked even when no account was found, so that a missing email and a wrong password take
+        # the same time to answer and cannot be told apart by how long they took.
         password_matches = check_password(values["password"], encoded_password)
-        if (
-            profile is None
-            or not password_matches
-            or not profile.user.is_active
-            or profile.account_type != values["account_type"]
-        ):
+        if profile is None or not password_matches:
             return Response(
                 {"detail": "The email or password is incorrect."},
                 status=status.HTTP_401_UNAUTHORIZED,
+            )
+
+        if not profile.user.is_active:
+            # Said plainly, and only to somebody who has just proved they know the password - which
+            # is what makes it safe to say. It used to be answered as a wrong password, so the one
+            # person who could do something about it was told the one thing that was not true.
+            return Response(
+                {
+                    "detail": "This account has not been verified yet. Check your email for the link, or ask for a new one.",
+                    "code": "EMAIL_NOT_VERIFIED",
+                },
+                status=status.HTTP_403_FORBIDDEN,
             )
 
         user = profile.user
@@ -427,12 +574,12 @@ class OAuthExchangeView(APIView):
                 .filter(email_hash=email_digest(verified_identity.email))
                 .first()
             )
-            if linked_profile is not None and linked_profile.account_type != values["account_type"]:
-                return Response(
-                    {"detail": "This email is already connected to another SignaCore account."},
-                    status=status.HTTP_409_CONFLICT,
-                )
             if linked_profile is not None:
+                # The account this email already has, whatever kind it is. Refusing because the
+                # page offered a different one turned a sign-in into a dead end: the advice given
+                # was to use the method originally chosen, while the actual obstacle was which of
+                # the two role pages had been opened - and a platform account matched neither, so
+                # no page could let it in.
                 is_new = False
 
         if identity is None and linked_profile is None and values["intent"] == OAuthIntentEnum.LOGIN:
