@@ -1353,6 +1353,11 @@ class PDFEngine:
         words = label.split()
         if not words:
             return False
+        # A question put just before a writing line is the form asking for something, however it
+        # is worded. "If something is missing, what is it?" opens on a joining word and reads as a
+        # clause by every other measure here, and it is still a question with a line to answer it.
+        if label.rstrip().endswith("?"):
+            return True
         return words[0].lower() not in CLAUSE_WORDS and words[-1].lower() not in CLAUSE_WORDS
 
     def _is_table_border(self, rect: fitz.Rect, vertical_lines: list[fitz.Rect]) -> bool:
