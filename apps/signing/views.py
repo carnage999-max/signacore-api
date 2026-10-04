@@ -7,7 +7,7 @@ from pathlib import Path
 import fitz
 from django.conf import settings
 from django.db import transaction
-from django.http import Http404, HttpResponse
+from django.http import Http404, HttpResponse, HttpResponseNotModified
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from django.utils.text import slugify
@@ -25,7 +25,13 @@ from services.pdf_sanitizer import PDFSanitizationError
 from tasks.notifications import notify_admin_progress, send_completion_emails, send_otp_email
 from utils.file_storage import temporary_plaintext_file
 from utils.otp import generate_otp, hash_otp, verify_otp
-from utils.pdf_preview import build_preview_matrix, prepare_page_for_preview
+from utils.pdf_preview import (
+    build_preview_matrix,
+    prepare_page_for_preview,
+    preview_etag,
+    preview_is_unchanged,
+    with_preview_caching,
+)
 from utils.signer_session import build_signer_session_token, verify_signer_session_token
 from utils.static_assets import versioned_static
 from utils.task_dispatch import enqueue_task
@@ -196,15 +202,23 @@ class SignerPagePreviewView(APIView):
                 {"detail": "Verify your email before viewing this document."},
                 status=status.HTTP_403_FORBIDDEN,
             )
+
+        # After the session check, never before it: a reader who may not see this page must not
+        # learn from a 304 that it exists and is unchanged.
+        requested_width = request.query_params.get("width")
+        etag = preview_etag(signing_request.document, page_number, requested_width)
+        if preview_is_unchanged(request, etag):
+            return with_preview_caching(HttpResponseNotModified(), etag)
+
         with temporary_plaintext_file(signing_request.document.original_pdf, suffix=".pdf") as pdf_path:
             with fitz.open(pdf_path) as pdf_document:
                 if page_number < 1 or page_number > pdf_document.page_count:
                     raise Http404("Page not found.")
                 page = pdf_document[page_number - 1]
                 prepare_page_for_preview(page)
-                matrix = build_preview_matrix(page, request.query_params.get("width"))
+                matrix = build_preview_matrix(page, requested_width)
                 pixmap = page.get_pixmap(matrix=matrix, alpha=False)
-        return HttpResponse(pixmap.tobytes("png"), content_type="image/png")
+        return with_preview_caching(HttpResponse(pixmap.tobytes("png"), content_type="image/png"), etag)
 
 
 class SignerSignedCopyView(APIView):
