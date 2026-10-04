@@ -77,6 +77,24 @@ class OrganizationInvitationSerializer(serializers.Serializer):
         return value.strip().lower()
 
 
+class PasswordResetRequestSerializer(serializers.Serializer):
+    email = serializers.EmailField(max_length=254)
+
+    def validate_email(self, value: str) -> str:
+        return value.strip().lower()
+
+
+class PasswordResetConfirmSerializer(serializers.Serializer):
+    uid = serializers.CharField(max_length=64)
+    token = serializers.CharField(max_length=128)
+    password = serializers.CharField(max_length=128, trim_whitespace=False, write_only=True)
+
+    def validate_password(self, value: str) -> str:
+        # The same rules a password gets anywhere else. A reset is not a way round them.
+        validate_password(value)
+        return value
+
+
 class EmailVerificationResendSerializer(serializers.Serializer):
     email = serializers.EmailField(max_length=254)
 

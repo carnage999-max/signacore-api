@@ -30,6 +30,7 @@ from tasks.notifications import (
     send_account_verification,
     send_account_welcome,
     send_organization_invitation,
+    send_password_reset,
     sync_organization_seat_quantity,
 )
 from utils.email_verification import check_email_verification_token
@@ -55,6 +56,8 @@ from .serializers import (
     OAuthExchangeSerializer,
     OrganizationInvitationSerializer,
     OrganizationMemberSerializer,
+    PasswordResetConfirmSerializer,
+    PasswordResetRequestSerializer,
 )
 
 DUMMY_PASSWORD_HASH = make_password(None)
@@ -273,6 +276,105 @@ class EmailRegistrationView(APIView):
         return Response(
             {"detail": "Check your email to verify your account."},
             status=status.HTTP_201_CREATED,
+        )
+
+
+class PasswordResetRequestView(APIView):
+    """Ask for a link that sets a password.
+
+    It answers the same way whatever the address, because anyone can post any address here and
+    saying which ones have accounts would turn this into a way of asking.
+    """
+
+    authentication_classes = []
+    permission_classes = [HasValidSignacoreSecret]
+    throttle_classes = [SignacoreRateThrottle]
+    throttle_scope = "email_auth"
+    serializer_class = PasswordResetRequestSerializer
+
+    def post(self, request):
+        serializer = PasswordResetRequestSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        profile = (
+            AccountProfile.objects.select_related("user")
+            .filter(email_hash=email_digest(serializer.validated_data["email"]))
+            .first()
+        )
+        if profile is not None:
+            enqueue_task(send_password_reset, profile.user.id)
+
+        return Response(
+            {"detail": "If that address has an account, a link to choose a password is on its way."},
+            status=status.HTTP_200_OK,
+        )
+
+
+class PasswordResetConfirmView(APIView):
+    """Set the password the link was issued for.
+
+    The token is Django's own, which mixes the current password hash and last sign-in into its
+    signature. That makes it single use without anything needing to be stored: the moment the
+    password is set the token that set it stops verifying, so a link read out of an old email
+    cannot be used a second time.
+
+    It works for an account that has never had a password. Those made through Google or Apple are
+    given an unusable one, so there is nothing to reset and no second way in - losing the provider
+    account lost the SignaCore account outright. Setting a first password is the same operation.
+    """
+
+    authentication_classes = []
+    permission_classes = [HasValidSignacoreSecret]
+    throttle_classes = [SignacoreRateThrottle]
+    throttle_scope = "email_auth"
+    serializer_class = PasswordResetConfirmSerializer
+
+    def post(self, request):
+        serializer = PasswordResetConfirmSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        values = serializer.validated_data
+
+        try:
+            user_id = urlsafe_base64_decode(values["uid"]).decode()
+        except (ValueError, TypeError, OverflowError, UnicodeDecodeError):
+            user_id = ""
+
+        with transaction.atomic():
+            user = (
+                get_user_model()
+                .objects.select_for_update(of=("self",))
+                .select_related("signacore_profile")
+                .filter(pk=user_id)
+                .first()
+            )
+            if user is None or not default_token_generator.check_token(user, values["token"]):
+                return Response(
+                    {"detail": "This link is invalid or has already been used."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+            had_password = user.has_usable_password()
+            user.set_password(values["password"])
+            # Opening the link proves the address receives mail, which is the whole of what
+            # verification establishes, so an account still waiting on it is let in rather than
+            # being sent round again for the same proof.
+            was_inactive = not user.is_active
+            user.is_active = True
+            user.save(update_fields=["password", "is_active"])
+
+            log_account_event(
+                request,
+                user,
+                AdminAuditLog.ActionEnum.EMAIL_LOGIN,
+                "Set a new password." if had_password else "Set a password for the first time.",
+            )
+
+        if was_inactive:
+            enqueue_task(send_account_welcome, user.id)
+
+        return Response(
+            {"detail": "Your password is set. Sign in with it now."},
+            status=status.HTTP_200_OK,
         )
 
 

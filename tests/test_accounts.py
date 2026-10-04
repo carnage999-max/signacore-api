@@ -662,3 +662,141 @@ class SignInWithoutGuessingAccountTypeTests(TestCase):
         self.client.post("/api/auth/email/verify/resend/", {"email": "owner@example.com"}, format="json")
 
         self.assertEqual(len(mail.outbox), 0)
+
+
+@override_settings(
+    SIGNACORE_SHARED_SECRET="test-signacore-secret",
+    SIGNACORE_APP_URL="https://mysignacore.com",
+    EMAIL_BACKEND="django.core.mail.backends.locmem.EmailBackend",
+    CELERY_TASK_ALWAYS_EAGER=True,
+    CELERY_TASK_EAGER_PROPAGATES=True,
+)
+class PasswordResetTests(TestCase):
+    """A way back in, and for an account made through a provider, a second way in at all.
+
+    There was none. An account created through Google or Apple is given an unusable password, so
+    losing the provider account lost the SignaCore account outright, with nothing anybody could do
+    from the product.
+    """
+
+    password = "Correct-horse-battery-staple-93!"
+    replacement = "Rhubarb-cartwheel-lantern-77?"
+
+    def setUp(self) -> None:
+        cache.clear()
+        self.client = APIClient()
+        self.client.credentials(HTTP_X_SIGNACORE_SECRET="test-signacore-secret")
+
+    def make_account(self, *, with_password: bool = True, active: bool = True):
+        user = get_user_model().objects.create_user(
+            username="owner", email="", password=self.password if with_password else None, is_active=active
+        )
+        if not with_password:
+            user.set_unusable_password()
+            user.save(update_fields=["password"])
+        AccountProfile.objects.create(
+            user=user,
+            account_type=AccountProfile.AccountTypeEnum.COMPANY,
+            email="owner@example.com",
+            display_name="Avery Owner",
+        )
+        return user
+
+    def link_values(self) -> dict[str, str]:
+        from urllib.parse import parse_qs, urlparse
+
+        url = next(
+            line.removeprefix("Link: ") for line in mail.outbox[-1].body.splitlines() if line.startswith("Link: ")
+        )
+        return {key: values[0] for key, values in parse_qs(urlparse(url).query).items()}
+
+    def request_reset(self, email: str = "owner@example.com"):
+        return self.client.post("/api/auth/password/reset/", {"email": email}, format="json")
+
+    def confirm(self, *, password: str | None = None, **overrides):
+        values = {**self.link_values(), "password": password or self.replacement, **overrides}
+        return self.client.post("/api/auth/password/reset/confirm/", values, format="json")
+
+    def sign_in(self, password: str):
+        self.client.credentials(HTTP_X_SIGNACORE_SECRET="test-signacore-secret")
+        return self.client.post(
+            "/api/auth/email/login/",
+            {"email": "owner@example.com", "password": password, "account_type": "COMPANY"},
+            format="json",
+        )
+
+    def test_a_password_can_be_replaced(self) -> None:
+        self.make_account()
+        self.request_reset()
+
+        self.assertEqual(self.confirm().status_code, 200)
+        cache.clear()
+        self.assertEqual(self.sign_in(self.replacement).status_code, 200)
+        cache.clear()
+        self.assertEqual(self.sign_in(self.password).status_code, 401, "the old password must stop working")
+
+    def test_an_account_made_through_a_provider_can_be_given_a_password(self) -> None:
+        """The case there was no answer to at all."""
+        user = self.make_account(with_password=False)
+        self.assertFalse(user.has_usable_password())
+        self.request_reset()
+
+        self.assertEqual(self.confirm().status_code, 200)
+        cache.clear()
+        self.assertEqual(self.sign_in(self.replacement).status_code, 200)
+
+    def test_the_email_says_which_of_the_two_is_happening(self) -> None:
+        self.make_account(with_password=False)
+        self.request_reset()
+
+        self.assertIn("Set a SignaCore password", mail.outbox[-1].subject)
+        self.assertIn("Google or Apple", mail.outbox[-1].body)
+
+    def test_a_link_cannot_be_used_twice(self) -> None:
+        """A reset link read out of an old mailbox must not change the password again."""
+        self.make_account()
+        self.request_reset()
+        values = self.link_values()
+
+        first = self.client.post(
+            "/api/auth/password/reset/confirm/", {**values, "password": self.replacement}, format="json"
+        )
+        second = self.client.post(
+            "/api/auth/password/reset/confirm/", {**values, "password": "Another-one-entirely-41!"}, format="json"
+        )
+
+        self.assertEqual(first.status_code, 200)
+        self.assertEqual(second.status_code, 400)
+
+    def test_setting_a_password_verifies_an_account_still_waiting(self) -> None:
+        """Opening the link proves the address receives mail, which is what verification is for."""
+        user = self.make_account(active=False)
+        self.request_reset()
+
+        self.assertEqual(self.confirm().status_code, 200)
+        user.refresh_from_db()
+        self.assertTrue(user.is_active)
+
+    def test_a_weak_password_is_refused(self) -> None:
+        self.make_account()
+        self.request_reset()
+
+        self.assertEqual(self.confirm(password="password").status_code, 400)
+
+    def test_a_tampered_token_is_refused(self) -> None:
+        self.make_account()
+        self.request_reset()
+
+        self.assertEqual(self.confirm(token="not-the-token").status_code, 400)
+
+    def test_asking_does_not_say_who_has_an_account(self) -> None:
+        self.make_account()
+        mail.outbox.clear()
+
+        known = self.request_reset()
+        cache.clear()
+        unknown = self.request_reset("nobody@example.com")
+
+        self.assertEqual(known.status_code, unknown.status_code)
+        self.assertEqual(known.json()["detail"], unknown.json()["detail"])
+        self.assertEqual(len(mail.outbox), 1, "only the address with an account is mailed")

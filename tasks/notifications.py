@@ -13,6 +13,7 @@ from apps.notifications.services import (
 from apps.notifications.services import send_organization_invitation as send_organization_invitation_email
 from apps.notifications.services import (
     send_otp_email_message,
+    send_password_reset_email,
     send_progress_email,
     send_subscription_activated_email,
 )
@@ -169,4 +170,16 @@ def sync_organization_seat_quantity(organization_id: str) -> None:
             1,
         )
     StripeAPIClient().update_subscription_quantity(subscription.stripe_subscription_id, quantity)
+    return None
+
+
+@shared_task(name="tasks.notifications.send_password_reset")
+def send_password_reset(user_id: int) -> None:
+    from django.contrib.auth import get_user_model
+
+    user = get_user_model().objects.select_related("signacore_profile").filter(pk=user_id).first()
+    if user is None:
+        return None
+
+    send_password_reset_email(user, has_password=user.has_usable_password())
     return None

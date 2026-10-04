@@ -1,4 +1,5 @@
 from django.conf import settings
+from django.contrib.auth.tokens import default_token_generator
 from django.core.exceptions import ObjectDoesNotExist
 from django.core.mail import EmailMultiAlternatives
 from django.utils.encoding import force_bytes
@@ -398,6 +399,46 @@ def send_account_verification_email(user) -> None:
         action_label="Verify email",
         action_url=verification_url,
         footer="If you did not create this account, you can ignore this email.",
+    )
+    send_email(subject, body, [profile.email], html_body=html_body)
+
+
+def send_password_reset_email(user, *, has_password: bool) -> None:
+    """The way back in, and for an account made through Google or Apple, the way in at all.
+
+    An account created through a provider is given an unusable password, so there is nothing to
+    reset and no second way to sign in: losing the provider account lost the SignaCore account
+    outright. The same link therefore sets a first password as readily as it replaces one, and the
+    wording follows which of the two is happening rather than assuming a password exists.
+    """
+    profile = user.signacore_profile
+    uid = urlsafe_base64_encode(force_bytes(user.pk))
+    token = default_token_generator.make_token(user)
+    reset_url = f"{settings.SIGNACORE_APP_URL.rstrip('/')}/reset?uid={uid}&token={token}"
+
+    subject = "Reset your SignaCore password" if has_password else "Set a SignaCore password"
+    opening = (
+        "Choose a new password for your SignaCore account."
+        if has_password
+        else "Your account signs in through Google or Apple. Set a password to sign in that way too."
+    )
+    body = (
+        f"Hello {profile.display_name or 'there'},\n\n"
+        f"{opening}\n\n"
+        f"Link: {reset_url}\n\n"
+        "The link can be used once and expires. If you did not ask for this, ignore this email - "
+        "nothing has changed.\n"
+    )
+    html_body = build_branded_email_html(
+        name=profile.display_name or "there",
+        title="Reset your password" if has_password else "Set a password",
+        message=opening,
+        action_label="Choose a password",
+        action_url=reset_url,
+        footer=(
+            "The link can be used once and expires. If you did not ask for this, ignore this "
+            "email - nothing has changed."
+        ),
     )
     send_email(subject, body, [profile.email], html_body=html_body)
 
