@@ -787,3 +787,40 @@ def build_running_header_pdf(pages: int = 4) -> bytes:
         asked.finish(width=0.8)
         asked.commit()
     return _to_bytes(document)
+
+
+def build_two_fields_on_one_row_pdf() -> bytes:
+    """Two captions and two rules on a row, as a form packs short answers together.
+
+    The extractor treats the two halves as separate text lines, so both captions are the same
+    distance above the second rule and height alone cannot tell them apart.
+    """
+    document, page = _new_document()
+    page.insert_text((57, 200), "Full name:", fontsize=10)
+    page.insert_text((300, 200), "Team:", fontsize=10)
+    for start, end in (((134, 204), (288, 204)), ((348, 204), (538, 204))):
+        shape = page.new_shape()
+        shape.draw_line(start, end)
+        shape.finish(width=0.8)
+        shape.commit()
+    return _to_bytes(document)
+
+
+def build_caption_in_the_next_column_pdf() -> bytes:
+    """A rule whose own caption precedes it, with another column's caption to its right.
+
+    A payroll table does this: the heading of the next column along begins before the rule being
+    named ends, and must not outrank the caption that actually precedes it.
+    """
+    document, page = _new_document()
+    page.insert_text((99, 200), "July 24", fontsize=9)
+    # Begins inside the first rule's span, so it is a candidate for naming it and has to lose.
+    page.insert_text((280, 200), "July 25-31", fontsize=9)
+    # Set well below the captions: a rule a point or two under text is underlining it, not asking
+    # for anything.
+    for start, end in (((180, 214), (350, 214)), ((380, 214), (520, 214))):
+        shape = page.new_shape()
+        shape.draw_line(start, end)
+        shape.finish(width=0.8)
+        shape.commit()
+    return _to_bytes(document)
