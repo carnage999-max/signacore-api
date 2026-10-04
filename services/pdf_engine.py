@@ -38,6 +38,12 @@ ABOVE_CAPTION_GAP = 18.0
 # How far to the left of a rule a caption written above it may end. A caption beside a rule is not
 # held to this, because a form's label column can sit well clear of the space it labels.
 BESIDE_CAPTION_BAND = 14.0
+# A caption written under its rule, as a signature block does, and starting where the rule starts.
+BELOW_CAPTION_GAP = 10.0
+BELOW_CAPTION_ALIGNMENT = 12.0
+# How far down a running header can sit. Only applied to something that also repeats on every
+# page, so it does not have to be tight enough to identify a header on its own.
+RUNNING_HEADER_BAND = 120.0
 # A space wider than this between two words of a row separates one column from the next rather
 # than one word of a caption from the next.
 CAPTION_WORD_GAP = 26.0
@@ -314,11 +320,13 @@ class PDFEngine:
         self, document: fitz.Document, skip_pages: frozenset[int] = frozenset()
     ) -> list[DetectedField]:
         detected_fields: list[DetectedField] = []
+        page_heights: dict[int, float] = {}
         order = 1
         for page_index, page in enumerate(document, start=1):
             if page_index in skip_pages:
                 continue
             page_height = page.rect.height
+            page_heights[page_index] = page_height
             line_words = self._collect_line_words(page)
             drawings = page.get_drawings()
             page_candidates: list[DetectedField] = []
@@ -387,7 +395,50 @@ class PDFEngine:
                 candidate.order = index
             detected_fields.extend(deduped_candidates)
             order = len(detected_fields) + 1
-        return detected_fields
+        return self._drop_page_furniture(self._renumber(detected_fields), len(document) - len(skip_pages), page_heights)
+
+    @staticmethod
+    def _drop_page_furniture(
+        fields: list[DetectedField], page_count: int, page_heights: dict[int, float]
+    ) -> list[DetectedField]:
+        """Remove what the top of every page repeats rather than asks for.
+
+        A running header is a rule across the width of the page with the document's title beside
+        it, which is the same shape as a writing line with a caption. Two things together tell
+        them apart, and neither is enough alone.
+
+        Repetition: a question is asked once, while a header appears in the same place on every
+        page. On its own that would also describe a contract asking for initials on each page,
+        which is a real and important thing to ask for.
+
+        Height: a header sits above the body. On its own that is only a distance from the edge,
+        and a margin wide enough to catch this one - the rule was 76pt down - would swallow the
+        first question of documents with a shallower top margin.
+
+        Requiring both leaves a repeated question in the body alone, and an initials line at the
+        foot of every page, while removing the furniture at the top.
+        """
+        if page_count < 3:
+            return fields
+
+        seen: dict[tuple[int, int, int], set[int]] = {}
+        for field in fields:
+            seen.setdefault((round(field.x), round(field.y), round(field.width)), set()).add(field.page)
+
+        kept = []
+        for field in fields:
+            repeated = len(seen[(round(field.x), round(field.y), round(field.width))]) >= page_count
+            from_top = page_heights.get(field.page, 0.0) - (field.y + field.height)
+            if repeated and from_top <= RUNNING_HEADER_BAND:
+                continue
+            kept.append(field)
+        return PDFEngine._renumber(kept)
+
+    @staticmethod
+    def _renumber(fields: list[DetectedField]) -> list[DetectedField]:
+        for index, field in enumerate(fields, start=1):
+            field.order = index
+        return fields
 
     def flatten(self, source_pdf: str | Path, output_pdf: str | Path, submissions: list[dict[str, Any]]) -> None:
         document = fitz.open(source_pdf)
@@ -834,6 +885,8 @@ class PDFEngine:
 
         fields: list[DetectedField] = []
         order = order_start
+        # The headings of the table currently being read, if it began with a row of them.
+        column_headings: list[tuple[float, str]] = []
         for top, bottom in zip(rows, rows[1:]):
             if not MIN_CELL_HEIGHT <= bottom - top <= MAX_CELL_HEIGHT:
                 continue
@@ -856,9 +909,28 @@ class PDFEngine:
                 if right - left >= MIN_CELL_WIDTH
             ]
             captions = [text for _, _, text in cells if text]
-            if not captions or len(captions) == len(cells):
-                # Nothing names the row, or the row is full and is presenting information.
+
+            if len(captions) == len(cells):
+                # Every cell is full. Either the table is presenting information, or this is the
+                # row of column headings above a table meant to be filled in - which is the
+                # commonest form a table on a paper form takes, and which produced nothing at all
+                # while a row had to be part full to be read.
+                headings = [self._clean_label(text) for _, _, text in cells]
+                if all(self._is_caption(heading) for heading in headings):
+                    column_headings = list(zip((left for left, _, _ in cells), headings))
                 continue
+
+            if not captions:
+                # Nothing names the row. If a row of headings stands above it, each empty cell is
+                # asking for what its own column was named.
+                for left, right, _ in cells:
+                    heading = self._heading_for_column(column_headings, left)
+                    if not heading:
+                        continue
+                    fields.append(self._cell_field(heading, left, right, top, bottom, page_height, page_index, order))
+                    order += 1
+                continue
+
             label = self._clean_label(captions[0])
             if not self._is_caption(label):
                 continue
@@ -866,22 +938,41 @@ class PDFEngine:
             for left, right, text in cells:
                 if text:
                     continue
-                fields.append(
-                    DetectedField(
-                        field_type=self._heuristic_type_for_text(label.lower()) or DocumentField.FieldTypeEnum.TEXT,
-                        label=self._normalize_label(label),
-                        page=page_index,
-                        x=left + CELL_PADDING,
-                        y=page_height - bottom + CELL_PADDING,
-                        width=right - left - CELL_PADDING * 2,
-                        height=bottom - top - CELL_PADDING * 2,
-                        is_required=True,
-                        detection_source=DocumentField.DetectionSourceEnum.HEURISTIC,
-                        order=order,
-                    )
-                )
+                fields.append(self._cell_field(label, left, right, top, bottom, page_height, page_index, order))
                 order += 1
         return fields
+
+    @staticmethod
+    def _heading_for_column(headings: list[tuple[float, str]], left: float) -> str:
+        """The heading of the column this cell sits in, matched by where the column starts."""
+        for heading_left, heading in headings:
+            if abs(heading_left - left) <= GRID_LINE_TOLERANCE:
+                return heading
+        return ""
+
+    def _cell_field(
+        self,
+        label: str,
+        left: float,
+        right: float,
+        top: float,
+        bottom: float,
+        page_height: float,
+        page_index: int,
+        order: int,
+    ) -> DetectedField:
+        return DetectedField(
+            field_type=self._heuristic_type_for_text(label.lower()) or DocumentField.FieldTypeEnum.TEXT,
+            label=self._normalize_label(label),
+            page=page_index,
+            x=left + CELL_PADDING,
+            y=page_height - bottom + CELL_PADDING,
+            width=right - left - CELL_PADDING * 2,
+            height=bottom - top - CELL_PADDING * 2,
+            is_required=True,
+            detection_source=DocumentField.DetectionSourceEnum.HEURISTIC,
+            order=order,
+        )
 
     @staticmethod
     def _is_grid_rule(rect: fitz.Rect | None, *, vertical: bool) -> bool:
@@ -981,9 +1072,11 @@ class PDFEngine:
         line_center_y = (rect.y0 + rect.y1) / 2
         above: list[tuple[float, str]] = []
         beside: list[tuple[float, str]] = []
+        beneath: list[tuple[float, str]] = []
         for words in line_words:
             alongside: list[tuple[float, float, float, float, str]] = []
             overhead: list[tuple[float, float, float, float, str]] = []
+            underneath: list[tuple[float, float, float, float, str]] = []
             for word in words:
                 x0, y0, x1, y1 = map(float, word[:4])
                 gap = rect.y0 - y1
@@ -998,6 +1091,16 @@ class PDFEngine:
                 # baseline; the closest caption still wins, so admitting more costs nothing.
                 if abs((y0 + y1) / 2 - line_center_y) <= BESIDE_CAPTION_BAND and x1 <= rect.x0 + 8.0:
                     alongside.append((x0, y0, x1, y1, str(word[4])))
+                # Written under the rule and starting where it starts, which is how a signature
+                # block names its lines. Alignment is what identifies it rather than distance:
+                # the caption of the row below also sits under a rule, but begins at the margin
+                # rather than at the rule, so the two do not look alike.
+                if (
+                    0.0 <= y0 - rect.y1 <= BELOW_CAPTION_GAP
+                    and abs(x0 - rect.x0) <= BELOW_CAPTION_ALIGNMENT
+                    and x0 <= rect.x1
+                ):
+                    underneath.append((x0, y0, x1, y1, str(word[4])))
 
             overhead_run = self._caption_run(overhead)
             if overhead_run:
@@ -1010,7 +1113,15 @@ class PDFEngine:
                 centre = (min(word[1] for word in beside_run) + max(word[3] for word in beside_run)) / 2
                 beside.append((abs(centre - line_center_y), " ".join(word[4] for word in beside_run)))
 
-        ranked = sorted(above) or sorted(beside)
+            if underneath:
+                run = sorted(underneath, key=lambda word: word[0])
+                beneath.append((run[0][1] - rect.y1, " ".join(word[4] for word in run)))
+
+        # A caption under the rule and aligned to it is unambiguous, so it settles the matter
+        # before anything to the left is considered. Without that, a rule takes the caption of the
+        # line to its left however far away it is - which is how "Signature" came to name the date
+        # line two columns over, leaving the line people actually sign on unnamed.
+        ranked = sorted(above) or sorted(beneath) or sorted(beside)
         return self._clean_label(ranked[0][1]) if ranked else ""
 
     @staticmethod

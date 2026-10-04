@@ -721,3 +721,69 @@ def build_optional_tick_boxes_pdf() -> bytes:
     rule.finish(width=0.8)
     rule.commit()
     return _to_bytes(document)
+
+
+def build_column_headed_table_pdf() -> bytes:
+    """A table named by its columns, with empty rows beneath to fill in.
+
+    The commonest shape a table takes on a paper form, and one that produced nothing while a row
+    had to be part full to be read: the heading row is wholly full and every row under it is
+    wholly empty, so neither qualified.
+    """
+    document, page = _new_document()
+    page.insert_text((72, 90), "What are the main things on your plate right now?", fontsize=10)
+    columns = (72.0, 250.0, 380.0, 520.0)
+    rows = (110.0, 134.0, 158.0, 182.0, 206.0)
+
+    # One path per rule, as a renderer emits them. Committed together they become a single path
+    # whose bounding box is the whole table, which is nothing like a rule.
+    def rule(start, end):
+        shape = page.new_shape()
+        shape.draw_line(start, end)
+        shape.finish(width=0.8)
+        shape.commit()
+
+    for top in rows:
+        for left, right in zip(columns, columns[1:]):
+            rule((left, top), (right, top))
+    for left in columns:
+        for top, bottom in zip(rows, rows[1:]):
+            rule((left, top), (left, bottom))
+    for left, heading in zip(columns, ("Project", "How is it going?", "Anything blocked?")):
+        page.insert_text((left + 4, 126), heading, fontsize=9)
+    return _to_bytes(document)
+
+
+def build_captions_under_rules_pdf() -> bytes:
+    """A signature block: three rules in a row, each named by the word beneath it."""
+    document, page = _new_document()
+    page.insert_text((72, 120), "Please sign below to confirm these are your responses.", fontsize=10)
+    for start, end in (((72, 200), (300, 200)), ((330, 200), (430, 200)), ((460, 200), (540, 200))):
+        shape = page.new_shape()
+        shape.draw_line(start, end)
+        shape.finish(width=0.8)
+        shape.commit()
+    page.insert_text((72, 212), "Signature", fontsize=8)
+    page.insert_text((330, 212), "Date", fontsize=8)
+    page.insert_text((460, 212), "Initials", fontsize=8)
+    return _to_bytes(document)
+
+
+def build_running_header_pdf(pages: int = 4) -> bytes:
+    """A rule under a repeated page header, which looks exactly like a writing line."""
+    document = fitz.open()
+    for number in range(1, pages + 1):
+        page = document.new_page(width=595, height=842)
+        page.insert_text((57, 64), "Se7en Equity Holdings Inc. - Employee Survey", fontsize=9)
+        page.insert_text((470, 64), f"Page {number} of {pages}", fontsize=9)
+        shape = page.new_shape()
+        shape.draw_line((57, 76), (538, 76))
+        shape.finish(width=0.8)
+        shape.commit()
+        # The caption stands to the left of its rule, so the rule is not underlining it.
+        page.insert_text((72, 300), "Your name:", fontsize=10)
+        asked = page.new_shape()
+        asked.draw_line((160, 303), (420, 303))
+        asked.finish(width=0.8)
+        asked.commit()
+    return _to_bytes(document)
