@@ -1128,7 +1128,8 @@ class PDFEngine:
         with the name of the line below it.
         """
         line_center_y = (rect.y0 + rect.y1) / 2
-        above: list[tuple[float, str]] = []
+        # Each is (how far above, whether it precedes the rule, how far from it, the words).
+        above: list[tuple[float, int, float, str]] = []
         beside: list[tuple[float, str]] = []
         beneath: list[tuple[float, str]] = []
         for words in line_words:
@@ -1162,8 +1163,22 @@ class PDFEngine:
 
             overhead_run = self._caption_run(overhead)
             if overhead_run:
+                # Two captions can sit the same distance above one rule: "Full name:" and "Team:"
+                # share a row, are separate text lines to the extractor, and are both above the
+                # rule that belongs to the second of them. Height alone cannot separate them, and
+                # the tie was going to whichever sorted first, which put "Full name" on the field
+                # meant for the team.
+                #
+                # So how far along the row each one ends decides it. Nothing is measured against a
+                # fixed distance, which cannot work here - a label column runs 174pt wide in one
+                # document and a heading that means something else sits 169pt away in another -
+                # only which of the captions competing for this rule is nearer to it.
                 above.append(
-                    (rect.y0 - max(word[3] for word in overhead_run), " ".join(word[4] for word in overhead_run))
+                    (
+                        rect.y0 - max(word[3] for word in overhead_run),
+                        *self._caption_reach(rect, overhead_run),
+                        " ".join(word[4] for word in overhead_run),
+                    )
                 )
 
             beside_run = self._caption_run(alongside)
@@ -1179,8 +1194,29 @@ class PDFEngine:
         # before anything to the left is considered. Without that, a rule takes the caption of the
         # line to its left however far away it is - which is how "Signature" came to name the date
         # line two columns over, leaving the line people actually sign on unnamed.
-        ranked = sorted(above) or sorted(beneath) or sorted(beside)
+        if above:
+            return self._clean_label(sorted(above)[0][3])
+        ranked = sorted(beneath) or sorted(beside)
         return self._clean_label(ranked[0][1]) if ranked else ""
+
+    @staticmethod
+    def _caption_reach(rect: fitz.Rect, run: list[tuple[float, float, float, float, str]]) -> tuple[int, float]:
+        """How well a caption reaches this rule, for choosing between several that could.
+
+        A caption ending before the rule begins is the ordinary arrangement - a name, then the
+        space to answer it - and the nearest such caption is the one being answered. One running
+        past where the rule starts is either written across it or belongs to the next column
+        along, and neither should outrank a caption that simply precedes it: the first version of
+        this scored anything overlapping as perfect, and a field in a payroll table took the
+        heading of the column to its right.
+
+        Nothing is compared against a fixed distance, only against the other captions competing
+        for the same rule.
+        """
+        right = max(word[2] for word in run)
+        if right <= rect.x0:
+            return 0, rect.x0 - right
+        return 1, min(word[0] for word in run) - rect.x0
 
     @staticmethod
     def _caption_run(

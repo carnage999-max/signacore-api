@@ -134,6 +134,26 @@ class FormShapeDetectionTests(SimpleTestCase):
 
         self.assertEqual([word[4] for word in PDFEngine()._split_leading_checkboxes(page)], ["Signature"])
 
+    def test_two_fields_on_one_row_get_their_own_names(self) -> None:
+        """Both captions sit the same distance above the second rule, so height cannot choose.
+
+        The tie used to go to whichever sorted first alphabetically, which put "Full name" on the
+        field meant for the team.
+        """
+        fields = self.detect(builders.build_two_fields_on_one_row_pdf())
+
+        by_x = {round(field.x): field.label for field in fields}
+        self.assertEqual(by_x[134], "Full name")
+        self.assertEqual(by_x[348], "Team")
+
+    def test_a_caption_to_the_right_does_not_win(self) -> None:
+        """One running past where the rule starts belongs to the next column, not to this rule."""
+        fields = self.detect(builders.build_caption_in_the_next_column_pdf())
+
+        by_x = {round(field.x): field.label for field in fields}
+        self.assertEqual(by_x[180], "July 24")
+        self.assertEqual(by_x[380], "July 25-31")
+
     def test_a_short_document_keeps_everything(self) -> None:
         """Two pages are not enough to tell a repeat from a coincidence."""
         fields = self.detect(builders.build_running_header_pdf(pages=2))
