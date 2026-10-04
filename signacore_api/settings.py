@@ -191,6 +191,16 @@ if "test" in sys.argv:
 
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
+
+def throttle_rate(scope: str, default: str) -> str:
+    """A rate that can be changed without a release.
+
+    These were literals, so the limits could not be relaxed on staging - for a load test, say -
+    or tightened in production under abuse, without editing code and deploying it.
+    """
+    return (env(f"SIGNACORE_THROTTLE_{scope.upper()}", default) or default).strip()
+
+
 REST_FRAMEWORK = {
     "DEFAULT_AUTHENTICATION_CLASSES": (
         "rest_framework.authentication.SessionAuthentication",
@@ -199,16 +209,20 @@ REST_FRAMEWORK = {
     "DEFAULT_PERMISSION_CLASSES": ("rest_framework.permissions.IsAuthenticated",),
     "DEFAULT_SCHEMA_CLASS": "drf_spectacular.openapi.AutoSchema",
     "DEFAULT_THROTTLE_RATES": {
-        "admin_auth": "5/minute",
-        "email_auth": "10/minute",
-        "oauth_exchange": "10/minute",
-        "account_data": "60/minute",
-        "signer_context": "60/minute",
-        "signer_preview": "60/minute",
-        "signer_otp_send": "5/minute",
-        "signer_otp_verify": "10/minute",
-        "signer_submit": "10/minute",
-        "document_import": "10/minute",
+        "admin_auth": throttle_rate("admin_auth", "5/minute"),
+        "email_auth": throttle_rate("email_auth", "10/minute"),
+        "oauth_exchange": throttle_rate("oauth_exchange", "10/minute"),
+        "account_data": throttle_rate("account_data", "60/minute"),
+        "signer_context": throttle_rate("signer_context", "60/minute"),
+        # Reading a document costs one request per page, plus a thumbnail of each. A 31-page
+        # packet is 62 requests to read through once, so the old 60 a minute was less than one
+        # pass: a signer could run out of allowance on their own document, and see the rest of it
+        # as broken images.
+        "signer_preview": throttle_rate("signer_preview", "120/minute"),
+        "signer_otp_send": throttle_rate("signer_otp_send", "5/minute"),
+        "signer_otp_verify": throttle_rate("signer_otp_verify", "10/minute"),
+        "signer_submit": throttle_rate("signer_submit", "10/minute"),
+        "document_import": throttle_rate("document_import", "10/minute"),
     },
 }
 
