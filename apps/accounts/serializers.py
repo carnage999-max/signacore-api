@@ -77,15 +77,26 @@ class OrganizationInvitationSerializer(serializers.Serializer):
         return value.strip().lower()
 
 
+class EmailVerificationResendSerializer(serializers.Serializer):
+    email = serializers.EmailField(max_length=254)
+
+    def validate_email(self, value: str) -> str:
+        return value.strip().lower()
+
+
 class EmailLoginSerializer(serializers.Serializer):
+    """What is needed to sign in: who you are and what you know.
+
+    ``account_type`` is still accepted because the sign-in page sends it, and is deliberately
+    ignored. Signing in used to require naming the kind of account you were signing in to, and
+    getting it wrong was refused as though the password were wrong. The page can only offer
+    company or signer, so a platform account could not sign in from anywhere at all. What kind of
+    account somebody has is something to be told, not something to be guessed before being let in.
+    """
+
     email = serializers.EmailField(max_length=254)
     password = serializers.CharField(max_length=128, trim_whitespace=False, write_only=True)
-    account_type = serializers.ChoiceField(
-        choices=(
-            AccountProfile.AccountTypeEnum.COMPANY,
-            AccountProfile.AccountTypeEnum.SIGNER,
-        )
-    )
+    account_type = serializers.CharField(required=False, allow_blank=True)
 
     def validate_email(self, value: str) -> str:
         return value.strip().lower()
