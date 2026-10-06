@@ -48,7 +48,6 @@ from .models import (
 )
 from .serializers import (
     AccountSessionSerializer,
-    AccountSigningRequestSerializer,
     EmailLoginSerializer,
     EmailRegistrationSerializer,
     EmailVerificationResendSerializer,
@@ -197,7 +196,7 @@ class EmailRegistrationView(APIView):
                 {"detail": "This workspace invitation is invalid or expired."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
-        if invitation is not None and values["account_type"] != AccountProfile.AccountTypeEnum.COMPANY:
+        if invitation is not None and AccountProfile.AccountTypeEnum.COMPANY != AccountProfile.AccountTypeEnum.COMPANY:
             return Response(
                 {"detail": "This invitation is for a company workspace account."},
                 status=status.HTTP_400_BAD_REQUEST,
@@ -207,7 +206,7 @@ class EmailRegistrationView(APIView):
             existing_user = existing_profile.user
             if (
                 not existing_user.is_active
-                and existing_profile.account_type == values["account_type"]
+                and existing_profile.account_type == AccountProfile.AccountTypeEnum.COMPANY
                 and existing_user.check_password(values["password"])
             ):
                 enqueue_task(send_account_verification, existing_user.id)
@@ -222,7 +221,7 @@ class EmailRegistrationView(APIView):
 
         try:
             with transaction.atomic():
-                account_type = values["account_type"]
+                account_type = AccountProfile.AccountTypeEnum.COMPANY
                 user = get_user_model().objects.create_user(
                     username=f"email_{digest[:24]}",
                     email="",
@@ -532,7 +531,7 @@ class OAuthExchangeView(APIView):
                 {"detail": "This workspace invitation is invalid or expired."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
-        if invitation is not None and values["account_type"] != AccountProfile.AccountTypeEnum.COMPANY:
+        if invitation is not None and AccountProfile.AccountTypeEnum.COMPANY != AccountProfile.AccountTypeEnum.COMPANY:
             return Response(
                 {"detail": "This invitation is for a company workspace account."},
                 status=status.HTTP_400_BAD_REQUEST,
@@ -590,7 +589,7 @@ class OAuthExchangeView(APIView):
 
         if (
             is_new
-            and values["account_type"] == AccountProfile.AccountTypeEnum.COMPANY
+            and AccountProfile.AccountTypeEnum.COMPANY == AccountProfile.AccountTypeEnum.COMPANY
             and invitation is None
             and not values.get("company_name", "").strip()
         ):
@@ -626,7 +625,7 @@ class OAuthExchangeView(APIView):
                     invitation.save(update_fields=["accepted_at"])
                     enqueue_task(sync_organization_seat_quantity, str(invitation.organization_id))
             elif identity is None:
-                account_type = values["account_type"]
+                account_type = AccountProfile.AccountTypeEnum.COMPANY
                 username = f"oauth_{verified_identity.provider.lower()}_{digest[:24]}"
                 user = get_user_model().objects.create_user(
                     username=username,
@@ -897,32 +896,3 @@ class OrganizationMembersCollectionView(OrganizationMembersView):
 )
 class OrganizationMemberDetailView(OrganizationMembersView):
     http_method_names = ["delete", "options"]
-
-
-class AccountSigningRequestsView(APIView):
-    authentication_classes = []
-    permission_classes = [HasValidSignacoreSecret]
-    throttle_classes = [SignacoreRateThrottle]
-    throttle_scope = "account_data"
-    serializer_class = AccountSigningRequestSerializer
-
-    def get(self, request):
-        account_id = request.headers.get("X-Signacore-Account-Id", "").strip()
-        user = get_user_model().objects.filter(pk=account_id, is_active=True).first()
-        if not user or not hasattr(user, "signacore_profile"):
-            return Response({"detail": "Account access is required."}, status=status.HTTP_403_FORBIDDEN)
-        requests = SigningRequest.objects.select_related("document__organization").filter(
-            signer_user=user,
-        )[:100]
-        payload = [
-            {
-                "id": signing_request.id,
-                "document_title": signing_request.document.title,
-                "company_name": signing_request.document.organization.name,
-                "status": signing_request.status,
-                "expires_at": signing_request.expires_at,
-                "signed_at": signing_request.signed_at,
-            }
-            for signing_request in requests
-        ]
-        return Response({"items": AccountSigningRequestSerializer(payload, many=True).data})

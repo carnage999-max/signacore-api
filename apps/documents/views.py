@@ -36,7 +36,6 @@ from tasks.notifications import (
     send_invitation_email_for_request,
 )
 from utils.file_storage import temporary_plaintext_file
-from utils.identity import email_digest
 from utils.pdf_preview import (
     build_preview_matrix,
     prepare_page_for_preview,
@@ -853,15 +852,6 @@ class AdminDocumentSendView(APIView):
                     document=document,
                     signer_email=item["signer_email"],
                     signer_name=item.get("signer_name") or "",
-                    signer_user_id=(
-                        AccountProfile.objects.filter(
-                            email_hash=email_digest(item["signer_email"]),
-                            account_type=AccountProfile.AccountTypeEnum.SIGNER,
-                            user__is_active=True,
-                        )
-                        .values_list("user", flat=True)
-                        .first()
-                    ),
                     expires_at=expiry,
                 )
                 for item in serializer.validated_data["signers"]

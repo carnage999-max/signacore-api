@@ -507,7 +507,7 @@ def build_account_notice_html(
 
 def send_account_welcome_email(user) -> None:
     profile = user.signacore_profile
-    destination = "/account" if profile.account_type == profile.AccountTypeEnum.SIGNER else "/admin"
+    destination = "/admin"
     account_url = f"{settings.SIGNACORE_APP_URL.rstrip('/')}{destination}"
     subject = "Welcome to SignaCore"
     body = (

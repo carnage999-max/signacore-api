@@ -132,7 +132,6 @@ class SignerPortalView(TemplateView):
         # Versioned like the rest: a browser holds on to a favicon harder than anything else
         # it caches, so replacing one without a new URL leaves the old mark on the tab.
         context["signer_portal_icon_url"] = versioned_static("signing/favicon.ico")
-        context["signer_account_url"] = f"{settings.SIGNACORE_APP_URL.rstrip('/')}/register?role=signer"
         return context
 
 
