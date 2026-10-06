@@ -22,6 +22,16 @@ def original_pdf_upload_to(instance, filename: str) -> str:
     return f"signacore/originals/{uuid.uuid4()}.pdf"
 
 
+def signer_copy_upload_to(instance, filename: str) -> str:
+    """Where one signer's own completed copy is kept, apart from every other signer's.
+
+    Named by the signing request alone, which is already unique. Nesting it under the document as
+    well put the path past the hundred characters a file field allows by default, and Django
+    answers that with a bare 400 rather than anything that says what is wrong.
+    """
+    return f"signacore/signed/{instance.id}.pdf"
+
+
 def signed_pdf_upload_to(instance, filename: str) -> str:
     return f"signacore/signed/{uuid.uuid4()}.pdf"
 

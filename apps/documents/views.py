@@ -16,6 +16,7 @@ from django.db.models import Count, Q
 from django.http import FileResponse, HttpResponse, HttpResponseNotModified
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
+from django.utils.text import slugify
 from drf_spectacular.utils import extend_schema
 from rest_framework import status
 from rest_framework.exceptions import PermissionDenied, ValidationError
@@ -945,6 +946,47 @@ class AdminDocumentPagePreviewView(APIView):
             )
         record_view()
         return with_preview_caching(HttpResponse(pixmap.tobytes("png"), content_type="image/png"), etag)
+
+
+class AdminSignerCopyDownloadView(APIView):
+    """One signer's completed copy, which is theirs alone.
+
+    The document-wide download served the same file for every row, because a document used to
+    hold a single copy flattened from everybody's answers at once. Each signer now has their own,
+    and a row downloads the copy belonging to that row.
+    """
+
+    authentication_classes = []
+    permission_classes = [HasValidSignacoreSecret]
+    serializer_class = AdminDocumentDetailSerializer
+
+    def get(self, request, document_id, signing_request_id):
+        document = get_scoped_document(request, document_id)
+        signing_request = get_object_or_404(
+            SigningRequest,
+            pk=signing_request_id,
+            document_id=document_id,
+            document__organization=document.organization,
+        )
+        if not signing_request.signed_pdf:
+            return Response(
+                {"detail": "This signer has no completed copy yet."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        log_admin_event(
+            request,
+            AdminAuditLog.ActionEnum.DOCUMENT_DOWNLOAD,
+            f"Downloaded {signing_request.signer_name or 'a signer'}'s copy of: {document.title}.",
+            target_type="signing_request",
+            target_id=signing_request.id,
+        )
+        return FileResponse(
+            signing_request.signed_pdf.open("rb"),
+            content_type="application/pdf",
+            as_attachment=True,
+            filename=f"{slugify(document.title) or 'document'}-{slugify(signing_request.signer_name) or 'signer'}.pdf",
+        )
 
 
 class AdminSigningRequestResendView(APIView):

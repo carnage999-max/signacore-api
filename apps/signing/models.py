@@ -5,7 +5,7 @@ from django.db import models
 
 from apps.documents.models import Document, DocumentField
 from utils.encryption import EncryptedEmailField, EncryptedTextField
-from utils.file_storage import encrypted_file_storage, signature_image_upload_to
+from utils.file_storage import encrypted_file_storage, signature_image_upload_to, signer_copy_upload_to
 from utils.identity import email_digest
 
 
@@ -32,6 +32,20 @@ class SigningRequest(models.Model):
     otp_hash = models.CharField(max_length=128, null=True, blank=True)
     otp_expires_at = models.DateTimeField(null=True, blank=True)
     otp_last_sent_at = models.DateTimeField(null=True, blank=True)
+    # This signer's own completed copy, carrying their answers and nobody else's.
+    #
+    # A document used to hold one copy for everybody, flattened from every signer's submissions at
+    # once. That is right for a contract several parties put their names to and wrong for anything
+    # sent to a group to fill in separately: eight people answering the same survey produced one
+    # page with eight sets of answers drawn over each other, which every one of them then received.
+    signed_pdf = models.FileField(
+        storage=encrypted_file_storage,
+        upload_to=signer_copy_upload_to,
+        # Well clear of the default hundred, so a longer path can never be refused as suspicious.
+        max_length=255,
+        null=True,
+        blank=True,
+    )
     signed_at = models.DateTimeField(null=True, blank=True)
     ip_address = EncryptedTextField(null=True, blank=True)
     user_agent = EncryptedTextField(null=True, blank=True)

@@ -352,9 +352,10 @@ class SignerFlowTests(TestCase):
         self.assertEqual(self.signing_request.status, SigningRequest.StatusEnum.SIGNED)
         self.assertEqual(self.signing_request.ip_address, "198.51.100.5")
         self.assertEqual(self.document.status, Document.StatusEnum.COMPLETED)
-        self.assertTrue(self.document.signed_pdf.name.endswith(".pdf"))
+        # The copy belongs to the signer who made it, not to the document.
+        self.assertTrue(self.signing_request.signed_pdf.name.endswith(".pdf"))
         self.assertEqual(FieldSubmission.objects.count(), 3)
-        signed_payload = (Path(TEST_MEDIA_ROOT) / self.document.signed_pdf.name).read_bytes()
+        signed_payload = (Path(TEST_MEDIA_ROOT) / self.signing_request.signed_pdf.name).read_bytes()
         signature_submission = FieldSubmission.objects.get(value_type=FieldSubmission.ValueTypeEnum.SIGNATURE_PNG)
         signature_payload = (Path(TEST_MEDIA_ROOT) / signature_submission.image_value.name).read_bytes()
         self.assertTrue(signed_payload.startswith(ENCRYPTED_FILE_HEADER))

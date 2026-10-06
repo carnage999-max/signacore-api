@@ -15,6 +15,7 @@ from apps.notifications.services import (
     send_otp_email_message,
     send_password_reset_email,
     send_progress_email,
+    send_signed_copy_email,
     send_subscription_activated_email,
 )
 from apps.signing.models import SigningRequest
@@ -70,6 +71,16 @@ def send_completion_emails(document_id: str) -> None:
         return None
 
     send_completion_email(document)
+    return None
+
+
+@shared_task(name="tasks.notifications.send_signed_copy")
+def send_signed_copy(signing_request_id: str) -> None:
+    signing_request = SigningRequest.objects.select_related("document").filter(pk=signing_request_id).first()
+    if signing_request is None:
+        return None
+
+    send_signed_copy_email(signing_request)
     return None
 
 

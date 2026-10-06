@@ -239,6 +239,50 @@ def send_otp_email_message(signing_request: SigningRequest, otp_code: str) -> No
     )
 
 
+def send_signed_copy_email(signing_request) -> None:
+    """Give the signer the copy of what they just put their name to.
+
+    Sent when they sign rather than when everybody has, because it is made of their own answers
+    and there is nothing to wait for. A signer on a document sent to a group used to receive
+    nothing at all until the last of the others finished, which could be never.
+    """
+    if not signing_request.signed_pdf or not signing_request.signer_email:
+        return
+
+    document = signing_request.document
+    with signing_request.signed_pdf.open("rb") as handle:
+        attachment = handle.read()
+
+    name = signing_request.signer_name or "there"
+    subject = f"Your signed copy: {document.title}"
+    body = (
+        f"Hello {name},\n\n"
+        f"Thank you for signing {document.title}. Your completed copy is attached.\n\n"
+        "Keep it for your records - this email is the copy.\n"
+    )
+    send_email(
+        subject,
+        body,
+        [signing_request.signer_email],
+        attachments=[
+            (
+                f"{document.title.replace(' ', '-').lower()}-signed.pdf",
+                attachment,
+                "application/pdf",
+            )
+        ],
+        html_body=build_branded_email_html(
+            name=name,
+            title="Your signed copy",
+            message=(
+                f"Thank you for signing {document.title}. Your completed copy is attached - keep "
+                "it for your records."
+            ),
+            footer="This copy carries your own answers. It was sent to you alone.",
+        ),
+    )
+
+
 def send_completion_email(document: Document) -> None:
     if not document.signed_pdf:
         return

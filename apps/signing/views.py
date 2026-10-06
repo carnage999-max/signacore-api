@@ -20,9 +20,9 @@ from rest_framework.views import APIView
 
 from apps.documents.models import Document, DocumentField
 from apps.documents.serializers import DocumentFieldSerializer
-from services.document_completion import issue_completed_document
+from services.document_completion import issue_signed_copy, refresh_document_status
 from services.pdf_sanitizer import PDFSanitizationError
-from tasks.notifications import notify_admin_progress, send_completion_emails, send_otp_email
+from tasks.notifications import notify_admin_progress, send_otp_email, send_signed_copy
 from utils.file_storage import temporary_plaintext_file
 from utils.otp import generate_otp, hash_otp, verify_otp
 from utils.pdf_preview import (
@@ -181,9 +181,8 @@ class SignerContextView(APIView):
             # A document is not editable once signed, and the copy can lag the signature when the
             # packaging had to be retried.
             "has_signed": signing_request.status == SigningRequest.StatusEnum.SIGNED,
-            "signed_copy_ready": bool(
-                signing_request.document.status == Document.StatusEnum.COMPLETED and signing_request.document.signed_pdf
-            ),
+            # This signer's copy, which does not depend on anybody else having signed.
+            "signed_copy_ready": bool(signing_request.signed_pdf),
         }
         return Response(payload, status=status.HTTP_200_OK)
 
@@ -256,13 +255,13 @@ class SignerSignedCopyView(APIView):
             )
 
         document = signing_request.document
-        if document.status != Document.StatusEnum.COMPLETED or not document.signed_pdf:
+        if not signing_request.signed_pdf:
             return Response(
-                {"detail": "The completed copy is not ready yet."},
+                {"detail": "Your copy is not ready yet. It will be emailed to you as soon as it is."},
                 status=status.HTTP_404_NOT_FOUND,
             )
 
-        with temporary_plaintext_file(document.signed_pdf, suffix=".pdf") as signed_path:
+        with temporary_plaintext_file(signing_request.signed_pdf, suffix=".pdf") as signed_path:
             payload = Path(signed_path).read_bytes()
 
         response = HttpResponse(payload, content_type="application/pdf")
@@ -447,54 +446,53 @@ class SignerSubmitView(APIView):
             signing_request.save(update_fields=["status", "signed_at", "ip_address", "user_agent", "updated_at"])
 
             document = signing_request.document
-            remaining = document.signing_requests.exclude(status=SigningRequest.StatusEnum.SIGNED).exists()
-            if remaining:
-                document.status = Document.StatusEnum.PARTIALLY_SIGNED
-                document.save(update_fields=["status", "updated_at"])
+
+            try:
+                # Made from this signer's own answers, so it is ready the moment they finish and
+                # does not wait on people they have never met.
+                issue_signed_copy(signing_request)
+            except PDFSanitizationError:
+                # The signature is kept; only the unsafe file is withheld. The reconciler tries
+                # again, which is what recovers a copy whose failure was later fixed.
+                logger.exception(
+                    "Signed copy failed sanitization",
+                    extra={
+                        "document_id": str(document.id),
+                        "signing_request_id": str(signing_request.id),
+                    },
+                )
                 transaction.on_commit(
-                    lambda document_id=str(document.id), signing_request_id=str(signing_request.id): enqueue_task(
-                        notify_admin_progress,
-                        document_id,
-                        signing_request_id,
+                    lambda document_id=str(document.id), request_id=str(signing_request.id): enqueue_task(
+                        notify_admin_progress, document_id, request_id
                     )
                 )
                 return Response(
-                    {"status": Document.StatusEnum.PARTIALLY_SIGNED, "message": "Signature submitted."},
-                    status=status.HTTP_200_OK,
-                )
-
-            try:
-                issue_completed_document(document)
-            except PDFSanitizationError:
-                # The signature is kept; only the unsafe packaged file is withheld, and the
-                # document stays un-completed so the sender can act on it. The reconciler will
-                # try again, which is what recovers a document whose failure was later fixed.
-                logger.exception(
-                    "Completed PDF failed sanitization",
-                    extra={"document_id": str(document.id)},
-                )
-                document.status = Document.StatusEnum.PARTIALLY_SIGNED
-                document.save(update_fields=["status", "updated_at"])
-                return Response(
                     {
-                        "status": Document.StatusEnum.PARTIALLY_SIGNED,
+                        "status": document.status,
                         "message": (
-                            "Your signature was recorded. This document needs attention from "
-                            "the sender before the final copy can be issued."
+                            "Your signature was recorded. Your copy needs attention from the "
+                            "sender before it can be issued."
                         ),
                     },
                     status=status.HTTP_202_ACCEPTED,
                 )
 
+            refresh_document_status(document)
+
+            # The signer gets their copy and the sender is told, both now rather than when the
+            # last of the other signers happens to finish.
+            transaction.on_commit(lambda request_id=str(signing_request.id): enqueue_task(send_signed_copy, request_id))
             transaction.on_commit(
-                lambda document_id=str(document.id): enqueue_task(
-                    send_completion_emails,
-                    document_id,
+                lambda document_id=str(document.id), request_id=str(signing_request.id): enqueue_task(
+                    notify_admin_progress, document_id, request_id
                 )
             )
 
         return Response(
-            {"status": Document.StatusEnum.COMPLETED, "message": "Document signed successfully."},
+            {
+                "status": document.status,
+                "message": "Document signed successfully. Your copy is on its way by email.",
+            },
             status=status.HTTP_200_OK,
         )
 
