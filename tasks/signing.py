@@ -4,8 +4,12 @@ from celery import shared_task
 from django.utils import timezone
 
 from apps.signing.models import SigningRequest
-from services.document_completion import documents_awaiting_their_copy, issue_completed_document
-from tasks.notifications import send_completion_emails
+from services.document_completion import (
+    issue_signed_copy,
+    refresh_document_status,
+    signers_awaiting_their_copy,
+)
+from tasks.notifications import send_signed_copy
 from utils.task_dispatch import enqueue_task
 
 logger = logging.getLogger(__name__)
@@ -29,29 +33,33 @@ def expire_signing_links() -> None:
 
 @shared_task(name="tasks.signing.issue_outstanding_completed_documents")
 def issue_outstanding_completed_documents() -> int:
-    """Finish documents that everyone signed but which never got their completed copy.
+    """Make the copies of signers who finished but whose copy was never produced.
 
-    The copy is produced in the request carrying the last signature, and anything interrupting
-    that leaves the signatures stored with nothing to show for them: no copy to download, and no
-    completion email, because that is sent only once a copy exists. Nothing noticed, because
-    nothing was watching. This is what watches.
+    A copy is flattened in the request that carries the signature, and anything interrupting that
+    leaves the signature stored with nothing to show for it: nothing to download, and no email,
+    because the email carries the copy. Nothing noticed, because nothing was watching. This is
+    what watches.
 
-    One document failing does not stop the others; it is logged and tried again next time.
+    One failing does not stop the others; it is logged and tried again next time.
     """
     issued = 0
-    for document in documents_awaiting_their_copy():
+    for signing_request in signers_awaiting_their_copy():
         try:
-            issue_completed_document(document)
+            issue_signed_copy(signing_request)
         except Exception:
             logger.exception(
-                "Could not issue completed document",
-                extra={"document_id": str(document.id)},
+                "Could not issue a signer's copy",
+                extra={
+                    "document_id": str(signing_request.document_id),
+                    "signing_request_id": str(signing_request.id),
+                },
             )
             continue
 
-        enqueue_task(send_completion_emails, str(document.id))
+        refresh_document_status(signing_request.document)
+        enqueue_task(send_signed_copy, str(signing_request.id))
         issued += 1
 
     if issued:
-        logger.info("Issued %s completed document(s) that had been left without one", issued)
+        logger.info("Issued %s signed copy(ies) that had been left unmade", issued)
     return issued

@@ -342,9 +342,10 @@ class CompletedPDFSanitizationTests(TestCase):
         self.assertEqual(response.status_code, 200, response.json())
         self.document.refresh_from_db()
         self.assertEqual(self.document.status, Document.StatusEnum.COMPLETED)
-        self.assertTrue(self.document.signed_pdf)
+        self.signing_request.refresh_from_db()
+        self.assertTrue(self.signing_request.signed_pdf)
 
-        with temporary_plaintext_file(self.document.signed_pdf, suffix=".pdf") as signed_path:
+        with temporary_plaintext_file(self.signing_request.signed_pdf, suffix=".pdf") as signed_path:
             self.assertEqual(find_active_content(signed_path), [])
             with fitz.open(signed_path) as signed:
                 self.assertFalse(signed.is_form_pdf)
@@ -1525,24 +1526,25 @@ class OutstandingCompletionTests(TestCase):
                     },
                     format="multipart",
                 )
-        self.document.refresh_from_db()
-        self.assertFalse(self.document.signed_pdf)
+        self.signing_request.refresh_from_db()
+        self.assertFalse(self.signing_request.signed_pdf)
 
-    def test_a_stranded_document_is_completed_on_the_next_sweep(self) -> None:
+    def test_a_stranded_signer_gets_their_copy_on_the_next_sweep(self) -> None:
         self.strand()
         mail.outbox.clear()
 
         self.assertEqual(issue_outstanding_completed_documents(), 1)
 
+        self.signing_request.refresh_from_db()
         self.document.refresh_from_db()
+        self.assertTrue(self.signing_request.signed_pdf)
         self.assertEqual(self.document.status, Document.StatusEnum.COMPLETED)
-        self.assertTrue(self.document.signed_pdf)
-        # The email is the point of finishing it: neither party heard anything the first time.
+        # The email is the point of finishing it: the signer heard nothing the first time.
         self.assertEqual(len(mail.outbox), 1)
         self.assertIn("jane@example.com", mail.outbox[0].recipients())
-        self.assertIn("admin@example.com", mail.outbox[0].recipients())
 
-    def test_a_document_still_awaiting_a_signer_is_left_alone(self) -> None:
+    def test_another_signer_still_to_sign_does_not_hold_this_one_up(self) -> None:
+        """What the whole change is for: a signer waits on nobody for their own copy."""
         self.strand()
         SigningRequest.objects.create(
             document=self.document,
@@ -1551,9 +1553,16 @@ class OutstandingCompletionTests(TestCase):
             expires_at=timezone.now() + timedelta(days=7),
         )
 
-        self.assertEqual(issue_outstanding_completed_documents(), 0)
+        self.assertEqual(issue_outstanding_completed_documents(), 1)
+
+        self.signing_request.refresh_from_db()
         self.document.refresh_from_db()
-        self.assertFalse(self.document.signed_pdf)
+        self.assertTrue(self.signing_request.signed_pdf, "Jane signed, so Jane has a copy")
+        self.assertEqual(
+            self.document.status,
+            Document.StatusEnum.PARTIALLY_SIGNED,
+            "the document is still waiting on Sam, which is a separate matter",
+        )
 
     def test_a_voided_document_is_left_alone(self) -> None:
         self.strand()
@@ -1561,10 +1570,10 @@ class OutstandingCompletionTests(TestCase):
         self.document.save(update_fields=["status"])
 
         self.assertEqual(issue_outstanding_completed_documents(), 0)
-        self.document.refresh_from_db()
-        self.assertFalse(self.document.signed_pdf)
+        self.signing_request.refresh_from_db()
+        self.assertFalse(self.signing_request.signed_pdf)
 
-    def test_a_document_that_already_has_its_copy_is_not_reissued(self) -> None:
+    def test_a_signer_who_already_has_their_copy_is_not_sent_another(self) -> None:
         self.strand()
         self.assertEqual(issue_outstanding_completed_documents(), 1)
 
