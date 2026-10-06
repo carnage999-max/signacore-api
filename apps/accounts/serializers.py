@@ -44,11 +44,13 @@ class EmailRegistrationSerializer(serializers.Serializer):
         return value
 
     def validate(self, attrs):
-        if (
-            attrs["account_type"] == AccountProfile.AccountTypeEnum.COMPANY
-            and not attrs.get("company_name", "").strip()
-        ):
-            raise serializers.ValidationError({"company_name": ["Company name is required for a company account."]})
+        # Every account owns an organisation now, so every registration that is not joining one by
+        # invitation has to name the organisation it is about to create. This used to be asked only
+        # of registrations that said they were for a company, which left two ways to create an
+        # organisation with no name, and - because the role was optional - a registration that
+        # simply left it out raised instead of answering.
+        if not attrs.get("invitation_token", "").strip() and not attrs.get("company_name", "").strip():
+            raise serializers.ValidationError({"company_name": ["Company name is required."]})
         return attrs
 
 

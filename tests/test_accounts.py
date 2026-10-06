@@ -362,6 +362,8 @@ class EmailAccountTests(TestCase):
         self.client.credentials(HTTP_X_SIGNACORE_SECRET="test-signacore-secret")
 
     def register(self, *, account_type: str = "COMPANY"):
+        # The name is sent whatever role is claimed, because the role is ignored and the
+        # organisation it creates still has to be called something.
         return self.client.post(
             "/api/auth/email/register/",
             {
@@ -369,7 +371,7 @@ class EmailAccountTests(TestCase):
                 "password": self.password,
                 "display_name": "Avery Owner",
                 "account_type": account_type,
-                "company_name": "Example Legal" if account_type == "COMPANY" else "",
+                "company_name": "Example Legal",
             },
             format="json",
         )

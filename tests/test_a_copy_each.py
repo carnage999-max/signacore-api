@@ -297,6 +297,41 @@ class SigningNeedsNoAccountTests(TestCase):
         profile = AccountProfile.objects.get(email_hash=email_digest("new@real.com"))
         self.assertEqual(profile.account_type, AccountProfile.AccountTypeEnum.COMPANY)
 
+    def test_registering_without_naming_a_role_at_all_works(self) -> None:
+        """Nothing has to send a role any more, so nothing may depend on one arriving."""
+        response = APIClient().post(
+            "/api/auth/email/register/",
+            {
+                "email": "roleless@real.com",
+                "password": "Correct-horse-battery-staple-93!",
+                "display_name": "No Role",
+                "company_name": "Real Ltd",
+            },
+            format="json",
+            HTTP_X_SIGNACORE_SECRET="test-signacore-secret",
+        )
+
+        self.assertEqual(response.status_code, 201, response.content)
+        profile = AccountProfile.objects.get(email_hash=email_digest("roleless@real.com"))
+        self.assertEqual(profile.account_type, AccountProfile.AccountTypeEnum.COMPANY)
+
+    def test_registering_without_a_company_name_is_refused_not_crashed(self) -> None:
+        """Every account owns an organisation now, and an organisation with no name is not one."""
+        response = APIClient().post(
+            "/api/auth/email/register/",
+            {
+                "email": "nameless@real.com",
+                "password": "Correct-horse-battery-staple-93!",
+                "display_name": "No Company",
+            },
+            format="json",
+            HTTP_X_SIGNACORE_SECRET="test-signacore-secret",
+        )
+
+        self.assertEqual(response.status_code, 400, response.content)
+        self.assertIn("company_name", response.json())
+        self.assertFalse(AccountProfile.objects.filter(email_hash=email_digest("nameless@real.com")).exists())
+
     def test_there_is_no_endpoint_for_a_signer_to_list_what_they_signed(self) -> None:
         """Removed deliberately: the copy reaches them by email, which is theirs and not ours."""
         self.assertEqual(APIClient().get("/api/auth/account/signing-requests/").status_code, 404)

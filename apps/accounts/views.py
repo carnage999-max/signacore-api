@@ -196,11 +196,6 @@ class EmailRegistrationView(APIView):
                 {"detail": "This workspace invitation is invalid or expired."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
-        if invitation is not None and AccountProfile.AccountTypeEnum.COMPANY != AccountProfile.AccountTypeEnum.COMPANY:
-            return Response(
-                {"detail": "This invitation is for a company workspace account."},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
         existing_profile = AccountProfile.objects.select_related("user").filter(email_hash=digest).first()
         if existing_profile is not None:
             existing_user = existing_profile.user
@@ -221,17 +216,16 @@ class EmailRegistrationView(APIView):
 
         try:
             with transaction.atomic():
-                account_type = AccountProfile.AccountTypeEnum.COMPANY
                 user = get_user_model().objects.create_user(
                     username=f"email_{digest[:24]}",
                     email="",
                     password=values["password"],
                     is_active=False,
-                    is_staff=account_type == AccountProfile.AccountTypeEnum.COMPANY,
+                    is_staff=True,
                 )
                 AccountProfile.objects.create(
                     user=user,
-                    account_type=account_type,
+                    account_type=AccountProfile.AccountTypeEnum.COMPANY,
                     email=email,
                     display_name=values["display_name"].strip(),
                 )
@@ -244,9 +238,9 @@ class EmailRegistrationView(APIView):
                     invitation.accepted_at = timezone.now()
                     invitation.save(update_fields=["accepted_at"])
                     enqueue_task(sync_organization_seat_quantity, str(invitation.organization_id))
-                elif account_type == AccountProfile.AccountTypeEnum.COMPANY:
+                else:
                     organization = Organization.objects.create(
-                        name=values["company_name"].strip(),
+                        name=values.get("company_name", "").strip(),
                         created_by=user,
                     )
                     OrganizationMembership.objects.create(
@@ -587,12 +581,7 @@ class OAuthExchangeView(APIView):
                 status=status.HTTP_404_NOT_FOUND,
             )
 
-        if (
-            is_new
-            and AccountProfile.AccountTypeEnum.COMPANY == AccountProfile.AccountTypeEnum.COMPANY
-            and invitation is None
-            and not values.get("company_name", "").strip()
-        ):
+        if is_new and invitation is None and not values.get("company_name", "").strip():
             return Response(
                 {"company_name": ["Company name is required for a new company account."]},
                 status=status.HTTP_400_BAD_REQUEST,
@@ -625,13 +614,12 @@ class OAuthExchangeView(APIView):
                     invitation.save(update_fields=["accepted_at"])
                     enqueue_task(sync_organization_seat_quantity, str(invitation.organization_id))
             elif identity is None:
-                account_type = AccountProfile.AccountTypeEnum.COMPANY
                 username = f"oauth_{verified_identity.provider.lower()}_{digest[:24]}"
                 user = get_user_model().objects.create_user(
                     username=username,
                     email="",
                     is_active=True,
-                    is_staff=account_type == AccountProfile.AccountTypeEnum.COMPANY,
+                    is_staff=True,
                 )
                 user.set_unusable_password()
                 user.save(update_fields=["password"])
@@ -642,7 +630,7 @@ class OAuthExchangeView(APIView):
                 )
                 AccountProfile.objects.create(
                     user=user,
-                    account_type=account_type,
+                    account_type=AccountProfile.AccountTypeEnum.COMPANY,
                     email=verified_identity.email,
                     display_name=display_name,
                 )
@@ -662,9 +650,9 @@ class OAuthExchangeView(APIView):
                     invitation.accepted_at = timezone.now()
                     invitation.save(update_fields=["accepted_at"])
                     enqueue_task(sync_organization_seat_quantity, str(invitation.organization_id))
-                elif account_type == AccountProfile.AccountTypeEnum.COMPANY:
+                else:
                     organization = Organization.objects.create(
-                        name=values["company_name"].strip(),
+                        name=values.get("company_name", "").strip(),
                         created_by=user,
                     )
                     OrganizationMembership.objects.create(
