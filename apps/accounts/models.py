@@ -16,6 +16,10 @@ class AccountProfile(models.Model):
     class AccountTypeEnum(models.TextChoices):
         PLATFORM = "PLATFORM", "Platform"
         COMPANY = "COMPANY", "Company"
+        # Kept so accounts made before signing stopped needing one still read back. Nothing
+        # creates these any more: a signer is identified by the code emailed to their address,
+        # which is what the signing flow has always consulted, and their copy reaches them by
+        # email rather than by logging in to fetch it.
         SIGNER = "SIGNER", "Signer"
 
     user = models.OneToOneField(

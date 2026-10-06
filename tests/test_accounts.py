@@ -3,7 +3,6 @@ from unittest.mock import patch
 from django.contrib.auth import get_user_model
 from django.core import mail
 from django.core.cache import cache
-from django.core.files.base import ContentFile
 from django.test import TestCase, override_settings
 from rest_framework.test import APIClient
 
@@ -15,8 +14,6 @@ from apps.accounts.models import (
     SocialIdentity,
 )
 from apps.billing.models import OrganizationSubscription
-from apps.documents.models import Document
-from apps.signing.models import SigningRequest
 from services.oauth_client import VerifiedOAuthIdentity
 
 
@@ -158,68 +155,6 @@ class OAuthAccountTests(TestCase):
         self.assertEqual(identity.email, "owner@example.com")
         self.assertEqual(identity.user.email, "")
         self.assertEqual(mail.outbox[-1].subject, "Welcome to SignaCore")
-
-    @patch("apps.accounts.views.exchange_oauth_code")
-    def test_existing_identity_cannot_change_account_role(self, exchange_code) -> None:
-        exchange_code.return_value = VerifiedOAuthIdentity(
-            provider="GOOGLE",
-            subject="google-user-456",
-            email="signer@example.com",
-            display_name="Sam Signer",
-        )
-        document_owner = get_user_model().objects.create_user(username="document-owner")
-        organization = Organization.objects.create(name="Sender Company", created_by=document_owner)
-        document = Document.objects.create(
-            title="Offer to sign",
-            original_pdf=ContentFile(b"%PDF-1.4", name="offer.pdf"),
-            created_by=document_owner,
-            organization=organization,
-        )
-        signing_request = SigningRequest.objects.create(
-            document=document,
-            signer_email="signer@example.com",
-        )
-        first_response = self.client.post(
-            "/api/auth/oauth/exchange/",
-            {
-                "intent": "REGISTER",
-                "provider": "GOOGLE",
-                "code": "first-code",
-                "redirect_uri": "https://mysignacore.com/api/auth/oauth/callback/google",
-                "nonce": "first-secure-login-nonce",
-                "account_type": "SIGNER",
-            },
-            format="json",
-        )
-        second_response = self.client.post(
-            "/api/auth/oauth/exchange/",
-            {
-                "intent": "LOGIN",
-                "provider": "GOOGLE",
-                "code": "second-code",
-                "redirect_uri": "https://mysignacore.com/api/auth/oauth/callback/google",
-                "nonce": "second-secure-login-nonce",
-                "account_type": "SIGNER",
-            },
-            format="json",
-        )
-
-        self.assertEqual(first_response.status_code, 200, first_response.json())
-        self.assertEqual(second_response.status_code, 200, second_response.json())
-        self.assertFalse(second_response.json()["is_new"])
-        self.assertEqual(second_response.json()["account_type"], AccountProfile.AccountTypeEnum.SIGNER)
-        self.assertEqual(SocialIdentity.objects.count(), 1)
-        self.assertEqual(Organization.objects.count(), 1)
-        self.assertEqual(mail.outbox[-1].subject, "New sign-in to your SignaCore account")
-        signing_request.refresh_from_db()
-        self.assertEqual(signing_request.signer_user_id, second_response.json()["id"])
-
-        history_response = self.client.get(
-            "/api/auth/account/signing-requests/",
-            HTTP_X_SIGNACORE_ACCOUNT_ID=str(second_response.json()["id"]),
-        )
-        self.assertEqual(history_response.status_code, 200, history_response.json())
-        self.assertEqual(history_response.json()["items"][0]["document_title"], "Offer to sign")
 
     @patch("apps.accounts.views.exchange_oauth_code")
     def test_company_signup_requires_company_name(self, exchange_code) -> None:
@@ -427,6 +362,8 @@ class EmailAccountTests(TestCase):
         self.client.credentials(HTTP_X_SIGNACORE_SECRET="test-signacore-secret")
 
     def register(self, *, account_type: str = "COMPANY"):
+        # The name is sent whatever role is claimed, because the role is ignored and the
+        # organisation it creates still has to be called something.
         return self.client.post(
             "/api/auth/email/register/",
             {
@@ -434,7 +371,7 @@ class EmailAccountTests(TestCase):
                 "password": self.password,
                 "display_name": "Avery Owner",
                 "account_type": account_type,
-                "company_name": "Example Legal" if account_type == "COMPANY" else "",
+                "company_name": "Example Legal",
             },
             format="json",
         )
@@ -500,6 +437,7 @@ class EmailAccountTests(TestCase):
         )
 
     def test_verified_account_can_log_in_with_email_and_password(self) -> None:
+        # The role the page sends is accepted and ignored: an account is for an organisation.
         self.register(account_type="SIGNER")
         self.client.post("/api/auth/email/verify/", self.verification_values(), format="json")
 
@@ -515,7 +453,7 @@ class EmailAccountTests(TestCase):
 
         self.assertEqual(response.status_code, 200, response.json())
         self.assertEqual(response.json()["email"], "owner@example.com")
-        self.assertEqual(response.json()["account_type"], "SIGNER")
+        self.assertEqual(response.json()["account_type"], "COMPANY")
         self.assertEqual(mail.outbox[-1].subject, "New sign-in to your SignaCore account")
 
     def test_login_uses_a_generic_error_for_invalid_credentials(self) -> None:

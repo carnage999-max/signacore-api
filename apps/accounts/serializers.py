@@ -16,12 +16,10 @@ class OAuthExchangeSerializer(serializers.Serializer):
     code = serializers.CharField(max_length=4096, trim_whitespace=False)
     redirect_uri = serializers.URLField(max_length=2048)
     nonce = serializers.CharField(min_length=16, max_length=255)
-    account_type = serializers.ChoiceField(
-        choices=(
-            AccountProfile.AccountTypeEnum.COMPANY,
-            AccountProfile.AccountTypeEnum.SIGNER,
-        )
-    )
+    # Accepted and ignored. An account is for an organisation sending documents; signing one
+    # needs no account at all, and never did - the code emailed to the address is the whole of
+    # the identity the signing flow consults.
+    account_type = serializers.CharField(required=False, allow_blank=True)
     company_name = serializers.CharField(max_length=255, required=False, allow_blank=True)
     display_name = serializers.CharField(max_length=255, required=False, allow_blank=True)
     invitation_token = serializers.CharField(max_length=255, required=False, allow_blank=True)
@@ -31,12 +29,10 @@ class EmailRegistrationSerializer(serializers.Serializer):
     email = serializers.EmailField(max_length=254)
     password = serializers.CharField(min_length=10, max_length=128, trim_whitespace=False, write_only=True)
     display_name = serializers.CharField(max_length=255)
-    account_type = serializers.ChoiceField(
-        choices=(
-            AccountProfile.AccountTypeEnum.COMPANY,
-            AccountProfile.AccountTypeEnum.SIGNER,
-        )
-    )
+    # Accepted and ignored. An account is for an organisation sending documents; signing one
+    # needs no account at all, and never did - the code emailed to the address is the whole of
+    # the identity the signing flow consults.
+    account_type = serializers.CharField(required=False, allow_blank=True)
     company_name = serializers.CharField(max_length=255, required=False, allow_blank=True)
     invitation_token = serializers.CharField(max_length=255, required=False, allow_blank=True)
 
@@ -48,11 +44,13 @@ class EmailRegistrationSerializer(serializers.Serializer):
         return value
 
     def validate(self, attrs):
-        if (
-            attrs["account_type"] == AccountProfile.AccountTypeEnum.COMPANY
-            and not attrs.get("company_name", "").strip()
-        ):
-            raise serializers.ValidationError({"company_name": ["Company name is required for a company account."]})
+        # Every account owns an organisation now, so every registration that is not joining one by
+        # invitation has to name the organisation it is about to create. This used to be asked only
+        # of registrations that said they were for a company, which left two ways to create an
+        # organisation with no name, and - because the role was optional - a registration that
+        # simply left it out raised instead of answering.
+        if not attrs.get("invitation_token", "").strip() and not attrs.get("company_name", "").strip():
+            raise serializers.ValidationError({"company_name": ["Company name is required."]})
         return attrs
 
 
@@ -138,12 +136,3 @@ class AccountSessionSerializer(serializers.Serializer):
     is_superuser = serializers.BooleanField()
     is_new = serializers.BooleanField()
     organizations = serializers.ListField(child=serializers.DictField())
-
-
-class AccountSigningRequestSerializer(serializers.Serializer):
-    id = serializers.UUIDField()
-    document_title = serializers.CharField()
-    company_name = serializers.CharField()
-    status = serializers.CharField()
-    expires_at = serializers.DateTimeField(allow_null=True)
-    signed_at = serializers.DateTimeField(allow_null=True)

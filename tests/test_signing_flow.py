@@ -123,7 +123,9 @@ class SignerFlowTests(TestCase):
         self.assertContains(response, "/static/signing/favicon.ico?v=")
         self.assertNotContains(response, "favicon.svg")
         self.assertContains(response, "Send verification code")
-        self.assertContains(response, "Create a free signer account.")
+        # Signing needs no account; the copy reaches the signer by email.
+        self.assertNotContains(response, "signer account")
+        self.assertContains(response, "emailed to you the moment you sign")
 
     def test_signer_preview_requires_verified_session(self) -> None:
         response = self.client.get(f"/api/sign/{self.signing_request.id}/pages/1/preview/")
