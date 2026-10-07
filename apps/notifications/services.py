@@ -19,6 +19,7 @@ def send_email(
     recipients: list[str],
     attachments: list[tuple[str, bytes, str]] | None = None,
     html_body: str | None = None,
+    headers: dict[str, str] | None = None,
 ) -> None:
     if not recipients:
         return
@@ -28,6 +29,9 @@ def send_email(
         body=body,
         from_email=settings.DEFAULT_FROM_EMAIL,
         to=recipients,
+        # List-Unsubscribe belongs here rather than in the body alone: mail clients surface it as
+        # a button, and an email somebody can leave with one click is one they report less.
+        headers=headers or None,
     )
     if html_body:
         message.attach_alternative(html_body, "text/html")
@@ -265,10 +269,15 @@ def send_signed_copy_email(signing_request) -> None:
 
     name = signing_request.signer_name or "there"
     subject = f"Your signed copy: {document.title}"
+    # The one line of its own business this email does. Every signed document puts SignaCore in
+    # front of somebody who has never heard of it, and until now that attention was spent on
+    # nothing at all. It sits at the end, after the thing they actually came for.
     body = (
         f"Hello {name},\n\n"
         f"Thank you for signing {document.title}. Your completed copy is attached.\n\n"
-        "Keep it for your records - this email is the copy.\n"
+        "Keep it for your records - this email is the copy.\n\n"
+        f"SignaCore is what the sender used to prepare and send it: "
+        f"{settings.SIGNACORE_APP_URL.rstrip('/')}/?from=signed\n"
     )
     send_email(
         subject,
@@ -288,8 +297,68 @@ def send_signed_copy_email(signing_request) -> None:
                 f"Thank you for signing {document.title}. Your completed copy is attached - keep "
                 "it for your records."
             ),
-            footer="This copy carries your own answers. It was sent to you alone.",
+            action_label="See what SignaCore does",
+            action_url=f"{settings.SIGNACORE_APP_URL.rstrip('/')}/?from=signed",
+            footer=(
+                "This copy carries your own answers. It was sent to you alone. "
+                "SignaCore is what the sender used to prepare and send it."
+            ),
         ),
+    )
+
+
+def build_unsubscribe_url(email: str) -> str:
+    """A link that works without an account, because the person reading it does not have one."""
+    from utils.unsubscribe import build_unsubscribe_token
+
+    return f"{settings.SIGNACORE_APP_URL.rstrip('/')}/unsubscribe?token={build_unsubscribe_token(email)}"
+
+
+def send_signer_follow_up_email(signing_request) -> None:
+    """The day after somebody signed, one email about the thing they just used.
+
+    This is the only email SignaCore sends that is not about the document in front of the person
+    reading it, so it is the only one with a way out. It goes once per address, ever - not once
+    per document - and never to an address that has asked us to stop.
+    """
+    email = signing_request.signer_email
+    if not email:
+        return
+
+    document = signing_request.document
+    name = signing_request.signer_name or "there"
+    unsubscribe_url = build_unsubscribe_url(email)
+    subject = "You signed a document with SignaCore"
+    body = (
+        f"Hello {name},\n\n"
+        f"Yesterday you signed {document.title}. The part you used - opening a link, entering a "
+        "code, signing in your browser with nothing to install - is SignaCore.\n\n"
+        "If you ever need signatures on a document of your own, it works the same way from the "
+        "other side. Upload the PDF you already use, SignaCore finds its fields, and whoever you "
+        "send it to signs without creating an account. Five documents a month are free and it "
+        "asks for no card.\n\n"
+        f"Start here: {settings.SIGNACORE_APP_URL.rstrip('/')}/?from=follow-up\n\n"
+        f"If you would rather not hear from us again: {unsubscribe_url}\n"
+    )
+    send_email(
+        subject,
+        body,
+        [email],
+        html_body=build_branded_email_html(
+            name=name,
+            title="You signed a document with SignaCore",
+            message=(
+                f"Yesterday you signed {document.title}. The part you used - a link, a code, and "
+                "nothing to install - is SignaCore.\n\n"
+                "If you ever need signatures on a document of your own, it works the same way "
+                "from the other side. Five documents a month are free, and nobody you send to "
+                "needs an account either."
+            ),
+            action_label="See how it works",
+            action_url=f"{settings.SIGNACORE_APP_URL.rstrip('/')}/?from=follow-up",
+            footer=f"You received this because you signed a document. Unsubscribe: {unsubscribe_url}",
+        ),
+        headers={"List-Unsubscribe": f"<{unsubscribe_url}>"},
     )
 
 

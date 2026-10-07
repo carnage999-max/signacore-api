@@ -51,6 +51,10 @@ class SigningRequest(models.Model):
         null=True,
         blank=True,
     )
+    # When the follow-up about SignaCore itself went to this signer, which is the only email we
+    # send that is not about the document in front of them. Recorded per request, but checked per
+    # address: somebody who signs ten documents hears from us once.
+    follow_up_sent_at = models.DateTimeField(null=True, blank=True)
     signed_at = models.DateTimeField(null=True, blank=True)
     ip_address = EncryptedTextField(null=True, blank=True)
     user_agent = EncryptedTextField(null=True, blank=True)

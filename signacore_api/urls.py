@@ -25,6 +25,7 @@ urlpatterns = [
     path("api/admin/", include("apps.documents.urls")),
     path("api/", include("apps.billing.urls")),
     path("api/sign/", include("apps.signing.urls")),
+    path("api/notifications/", include("apps.notifications.urls")),
     path("sign/<uuid:token>/", SignerPortalView.as_view(), name="signer-portal"),
 ]
 
