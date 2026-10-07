@@ -280,6 +280,7 @@ CELERY_RESULT_BACKEND = env("CELERY_RESULT_BACKEND", REDIS_URL)
 # tasks to a worker that discarded them as unknown.
 CELERY_IMPORTS = (
     "tasks.documents",
+    "tasks.maintenance",
     "tasks.notifications",
     "tasks.signing",
 )
@@ -293,6 +294,13 @@ CELERY_BEAT_SCHEDULE = {
     "issue-outstanding-completed-documents": {
         "task": "tasks.signing.issue_outstanding_completed_documents",
         "schedule": 900,
+    },
+    # Nothing ever removed anything, so encrypted files accumulated for as long as the service
+    # had been running. Nightly is often enough for a leak and rare enough that a mistake in it
+    # has a day to be noticed.
+    "clean-up-nightly": {
+        "task": "tasks.maintenance.clean_up",
+        "schedule": 24 * 3600,
     },
 }
 
@@ -314,6 +322,10 @@ SIGNACORE_SHARED_SECRET = env("SIGNACORE_SHARED_SECRET", "")
 SIGNACORE_SERVICE_USERNAME = env("SIGNACORE_SERVICE_USERNAME", "signacore-service")
 SIGNACORE_APP_URL = env("SIGNACORE_APP_URL", "https://mysignacore.com")
 SIGNACORE_SIGNER_PORTAL_URL = env("SIGNACORE_SIGNER_PORTAL_URL", "https://sign.mysignacore.com")
+# How long a document is kept after its last activity. Zero, the default, keeps everything: the
+# cleanup deletes no document until somebody chooses a number, because the right number is a
+# policy decision and the wrong one is irreversible.
+SIGNACORE_DOCUMENT_RETENTION_DAYS = env_int("SIGNACORE_DOCUMENT_RETENTION_DAYS", 0)
 SIGNING_LINK_EXPIRY_DAYS = env_int("SIGNING_LINK_EXPIRY_DAYS", 7)
 OTP_EXPIRY_MINUTES = env_int("OTP_EXPIRY_MINUTES", 10)
 OTP_RESEND_COOLDOWN_SECONDS = env_int("OTP_RESEND_COOLDOWN_SECONDS", 60)
