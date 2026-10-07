@@ -281,10 +281,18 @@ CELERY_RESULT_BACKEND = env("CELERY_RESULT_BACKEND", REDIS_URL)
 CELERY_IMPORTS = (
     "tasks.documents",
     "tasks.maintenance",
+    "tasks.marketing",
     "tasks.notifications",
     "tasks.signing",
 )
 CELERY_BEAT_SCHEDULE = {
+    # Hourly rather than daily so a signature at any hour is followed up roughly a day later
+    # rather than up to two. The task itself decides whether anything is due, and does nothing
+    # at all unless the follow-up is switched on.
+    "signer-follow-ups-hourly": {
+        "task": "tasks.marketing.send_signer_follow_ups",
+        "schedule": 3600,
+    },
     "expire-signing-links-hourly": {
         "task": "tasks.signing.expire_signing_links",
         "schedule": 3600,
@@ -326,6 +334,9 @@ SIGNACORE_SIGNER_PORTAL_URL = env("SIGNACORE_SIGNER_PORTAL_URL", "https://sign.m
 # cleanup deletes no document until somebody chooses a number, because the right number is a
 # policy decision and the wrong one is irreversible.
 SIGNACORE_DOCUMENT_RETENTION_DAYS = env_int("SIGNACORE_DOCUMENT_RETENTION_DAYS", 0)
+# The follow-up to signers is the only mail SignaCore sends that the recipient is not already
+# expecting, so it is off until somebody decides the sending domain is ready to carry it.
+SIGNACORE_SIGNER_FOLLOW_UP_ENABLED = env_bool("SIGNACORE_SIGNER_FOLLOW_UP_ENABLED", False)
 SIGNING_LINK_EXPIRY_DAYS = env_int("SIGNING_LINK_EXPIRY_DAYS", 7)
 OTP_EXPIRY_MINUTES = env_int("OTP_EXPIRY_MINUTES", 10)
 OTP_RESEND_COOLDOWN_SECONDS = env_int("OTP_RESEND_COOLDOWN_SECONDS", 60)
