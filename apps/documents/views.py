@@ -846,6 +846,7 @@ class AdminDocumentSendView(APIView):
             )
 
         expiry = timezone.now() + timedelta(days=settings.SIGNING_LINK_EXPIRY_DAYS)
+        message = serializer.validated_data.get("message", "")
         with transaction.atomic():
             created_requests = [
                 SigningRequest.objects.create(
@@ -860,7 +861,13 @@ class AdminDocumentSendView(APIView):
             document.status = (
                 Document.StatusEnum.PARTIALLY_SIGNED if signed_request_exists else Document.StatusEnum.SENT
             )
-            document.save(update_fields=["status", "updated_at"])
+            updated_fields = ["status", "updated_at"]
+            # A send with no note does not erase the note a previous send left, because a resend
+            # of that same document should still carry what the sender said the first time.
+            if message:
+                document.send_message = message
+                updated_fields.insert(0, "send_message")
+            document.save(update_fields=updated_fields)
 
         for signing_request in created_requests:
             enqueue_task(send_invitation_email_for_request, str(signing_request.id))
@@ -873,6 +880,9 @@ class AdminDocumentSendView(APIView):
             metadata={
                 "signer_count": len(created_requests),
                 "signer_request_ids": [str(signing_request.id) for signing_request in created_requests],
+                # Whether a note went with it, never the note itself: the trail is read by more
+                # people than the document is.
+                "had_message": bool(message),
             },
         )
         document = Document.objects.prefetch_related("fields", "signing_requests").get(pk=document.pk)

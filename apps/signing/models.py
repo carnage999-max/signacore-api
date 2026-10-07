@@ -32,6 +32,11 @@ class SigningRequest(models.Model):
     otp_hash = models.CharField(max_length=128, null=True, blank=True)
     otp_expires_at = models.DateTimeField(null=True, blank=True)
     otp_last_sent_at = models.DateTimeField(null=True, blank=True)
+    # When this signer last passed the emailed code. The status alone cannot say whether somebody
+    # is signing now or verified days ago and walked away: OTP_VERIFIED is kept until the link
+    # expires, which is a week. A signing session lasts an hour, so this is what makes the
+    # difference between "in progress" and "opened it once" expressible.
+    otp_verified_at = models.DateTimeField(null=True, blank=True)
     # This signer's own completed copy, carrying their answers and nobody else's.
     #
     # A document used to hold one copy for everybody, flattened from every signer's submissions at

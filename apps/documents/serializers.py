@@ -187,11 +187,17 @@ class AdminDocumentDetailSerializer(DocumentSerializer):
 
 class DocumentSendSerializer(serializers.Serializer):
     signers = SignerInputSerializer(many=True)
+    # Optional, and bounded: a note is a sentence or two saying what this is and when it is
+    # needed, not a second document. It reaches every recipient in their invitation email.
+    message = serializers.CharField(max_length=2000, required=False, allow_blank=True, default="")
 
     def validate_signers(self, value):
         if not value:
             raise serializers.ValidationError("At least one signer is required.")
         return value
+
+    def validate_message(self, value: str) -> str:
+        return (value or "").strip()
 
 
 class DocumentUpdateSerializer(serializers.ModelSerializer):
