@@ -62,7 +62,9 @@ def build_branded_email_html(
 ) -> str:
     safe_name = escape(name or "there")
     safe_title = escape(title)
-    safe_message = escape(message)
+    # Escaped first, then the line breaks are put back as markup. In that order the sender's note
+    # cannot carry HTML of its own, and a note written as two paragraphs still reads as two.
+    safe_message = escape(message).replace("\n", "<br>")
     safe_action_label = escape(action_label or "")
     safe_action_url = escape(action_url or "")
     safe_code = escape(code or "")
@@ -148,10 +150,16 @@ def build_branded_email_html(
 
 
 def build_invitation_html(signing_request: SigningRequest, signing_link: str) -> str:
+    # A note from the sender goes above the standing instruction, because somebody who wrote one
+    # wrote it to be read first. Where there is none, the email reads exactly as it did before.
+    note = (signing_request.document.send_message or "").strip()
+    message = "Please review and complete this document. You will verify your email before signing."
+    if note:
+        message = f"{note}\n\n{message}"
     return build_branded_email_html(
         name=signing_request.signer_name or "there",
         title="Signature requested",
-        message="Please review and complete this document. You will verify your email before signing.",
+        message=message,
         action_label="Review and sign",
         action_url=signing_link,
         details=[
@@ -166,10 +174,12 @@ def send_invitation_email(signing_request: SigningRequest) -> None:
     signer_name = signing_request.signer_name or "there"
     subject = f"Signature requested: {signing_request.document.title}"
     signing_link = build_signing_link(signing_request)
+    note = (signing_request.document.send_message or "").strip()
     body = (
         f"Hello {signer_name},\n\n"
         "Se7en Inc. sent you a document to review and sign in Signacore.\n\n"
-        f"Document: {signing_request.document.title}\n"
+        + (f"{note}\n\n" if note else "")
+        + f"Document: {signing_request.document.title}\n"
         f"Signing link: {signing_link}\n"
         f"Link expires: {signing_request.expires_at:%Y-%m-%d %H:%M %Z}\n\n"
         "If you were not expecting this request, ignore this email.\n"

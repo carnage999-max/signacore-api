@@ -334,9 +334,10 @@ class SignerOtpVerifyView(APIView):
             return Response({"otp": ["Invalid OTP."]}, status=status.HTTP_400_BAD_REQUEST)
 
         signing_request.status = SigningRequest.StatusEnum.OTP_VERIFIED
+        signing_request.otp_verified_at = timezone.now()
         signing_request.ip_address = get_client_ip(request)
         signing_request.user_agent = request.META.get("HTTP_USER_AGENT", "")
-        signing_request.save(update_fields=["status", "ip_address", "user_agent", "updated_at"])
+        signing_request.save(update_fields=["status", "otp_verified_at", "ip_address", "user_agent", "updated_at"])
         session_token = build_signer_session_token(str(signing_request.id), signing_request.otp_hash)
         response = Response(
             {"session_token": session_token},

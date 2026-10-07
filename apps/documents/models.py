@@ -32,6 +32,10 @@ class Document(models.Model):
         blank=True,
     )
     status = models.CharField(max_length=32, choices=StatusEnum.choices, default=StatusEnum.DRAFT)
+    # What the sender wanted to say when they sent it. It reaches every recipient in the
+    # invitation email, and is encrypted like everything else somebody typed, because a note
+    # attached to an agreement is as much the agreement's business as the agreement is.
+    send_message = EncryptedTextField(blank=True, default="")
     import_report = models.JSONField(default=dict, blank=True)
     created_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,

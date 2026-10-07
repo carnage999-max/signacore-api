@@ -4,6 +4,11 @@ from .models import FieldSubmission, SigningRequest
 
 
 class SigningRequestSerializer(serializers.ModelSerializer):
+    # Whether this signer's own copy exists yet. Without it the workspace could not tell which
+    # rows have something to download, so it fell back to the whole document being finished - and
+    # a signer who had signed could not have their copy fetched until everybody else had too.
+    signed_copy_ready = serializers.SerializerMethodField()
+
     class Meta:
         model = SigningRequest
         fields = (
@@ -13,11 +18,16 @@ class SigningRequestSerializer(serializers.ModelSerializer):
             "signer_name",
             "status",
             "otp_expires_at",
+            "otp_verified_at",
             "signed_at",
+            "signed_copy_ready",
             "expires_at",
             "ip_address",
             "user_agent",
         )
+
+    def get_signed_copy_ready(self, obj: SigningRequest) -> bool:
+        return bool(obj.signed_pdf)
 
 
 class SignerInputSerializer(serializers.Serializer):
