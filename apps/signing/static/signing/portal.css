@@ -141,6 +141,19 @@ input {
   gap: 24px;
 }
 
+/* Before the code is verified the document panel is hidden, and the second column it was holding
+   open sat empty - a wide black void beside a narrow card, which is the first thing a signer sees
+   and the last impression to want. Until the document is unlocked this is one task, so it gets one
+   column, centred and wide enough to read. */
+.workflow-grid:has(> .document-panel[hidden]) {
+  grid-template-columns: minmax(0, 560px);
+  justify-content: center;
+}
+
+.workflow-grid:has(> .document-panel[hidden]) .workflow-sidebar {
+  gap: 20px;
+}
+
 .workflow-sidebar {
   display: grid;
   gap: 18px;
