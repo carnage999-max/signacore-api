@@ -824,3 +824,32 @@ def build_caption_in_the_next_column_pdf() -> bytes:
         shape.finish(width=0.8)
         shape.commit()
     return _to_bytes(document)
+
+
+def build_letterhead_page_pdf(*, with_title: bool = True) -> bytes:
+    """One page with a letterhead above its title, which is how most forms begin.
+
+    The masthead is the same shape as a question - a run of text with a rule under it - so the
+    only thing separating them on a single page is that nothing is ever asked above the
+    document's own title.
+    """
+    document, page = _new_document()
+
+    page.insert_text((72, 60), "Northwind Studio", fontsize=10)
+    page.insert_text((400, 60), "Form CA-14", fontsize=9)
+    shape = page.new_shape()
+    shape.draw_line((72, 70), (540, 70))
+    shape.finish(width=0.8)
+    shape.commit()
+
+    if with_title:
+        page.insert_text((72, 110), "Contractor Agreement", fontsize=21)
+
+    page.insert_text((72, 160), "FULL LEGAL NAME", fontsize=9)
+    page.insert_text((72, 230), "EMAIL ADDRESS", fontsize=9)
+    for y in (178, 248):
+        shape = page.new_shape()
+        shape.draw_line((72, y), (540, y))
+        shape.finish(width=0.8)
+        shape.commit()
+    return _to_bytes(document)

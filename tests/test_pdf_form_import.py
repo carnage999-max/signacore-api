@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import tempfile
 from datetime import timedelta
 from pathlib import Path
@@ -1799,3 +1800,40 @@ class ErrorReportingTests(SimpleTestCase):
         event = before_send({"a": {"b": [{"c": {"text_value": "Jane Doe"}}]}}, {})
 
         self.assertEqual(event["a"]["b"][0]["c"]["text_value"], "[scrubbed]")
+
+
+class LetterheadIsNotAQuestionTests(TestCase):
+    """A one-page form's letterhead must not arrive as its first field.
+
+    Running-header removal needs pages to repeat across, so on a short document there is nothing
+    to read and it used to keep everything - which put the masthead at the top of the field list
+    on the screen somebody sees immediately after uploading. One page offers a different signal:
+    nothing is ever asked above the document's own title.
+    """
+
+    def analyse(self, pdf_bytes: bytes):
+        with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as handle:
+            handle.write(pdf_bytes)
+            path = handle.name
+        try:
+            return PDFEngine().analyse(path).fields
+        finally:
+            os.unlink(path)
+
+    def test_the_letterhead_above_a_title_is_not_a_field(self) -> None:
+        labels = [field.label for field in self.analyse(builders.build_letterhead_page_pdf())]
+
+        self.assertNotIn("Northwind Studio", labels)
+        self.assertCountEqual(labels, ["FULL LEGAL NAME", "EMAIL ADDRESS"])
+
+    def test_a_form_with_no_title_keeps_what_is_at_its_top(self) -> None:
+        """Without a title there is nothing to be above, so nothing is dropped on a guess."""
+        labels = [field.label for field in self.analyse(builders.build_letterhead_page_pdf(with_title=False))]
+
+        self.assertIn("Northwind Studio", labels)
+
+    def test_a_question_below_the_title_is_never_dropped(self) -> None:
+        """The band alone would reach into the body of a document with a shallow top margin."""
+        labels = [field.label for field in self.analyse(builders.build_letterhead_page_pdf())]
+
+        self.assertIn("FULL LEGAL NAME", labels)

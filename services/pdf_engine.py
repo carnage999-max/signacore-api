@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -44,6 +45,11 @@ BELOW_CAPTION_ALIGNMENT = 12.0
 # How far down a running header can sit. Only applied to something that also repeats on every
 # page, so it does not have to be tight enough to identify a header on its own.
 RUNNING_HEADER_BAND = 120.0
+
+# How much larger than the body a run of text has to be before it counts as the document's own
+# title. Chosen to clear ordinary emphasis - a bold section heading a point or two up - while
+# catching the one line set markedly larger that a form puts its name in.
+TITLE_SIZE_RATIO = 1.35
 # A space wider than this between two words of a row separates one column from the next rather
 # than one word of a caption from the next.
 CAPTION_WORD_GAP = 26.0
@@ -321,12 +327,16 @@ class PDFEngine:
     ) -> list[DetectedField]:
         detected_fields: list[DetectedField] = []
         page_heights: dict[int, float] = {}
+        title_tops: dict[int, float] = {}
         order = 1
         for page_index, page in enumerate(document, start=1):
             if page_index in skip_pages:
                 continue
             page_height = page.rect.height
             page_heights[page_index] = page_height
+            title_top = self._title_top(page)
+            if title_top is not None:
+                title_tops[page_index] = title_top
             line_words = self._collect_line_words(page)
             drawings = page.get_drawings()
             page_candidates: list[DetectedField] = []
@@ -395,11 +405,19 @@ class PDFEngine:
                 candidate.order = index
             detected_fields.extend(deduped_candidates)
             order = len(detected_fields) + 1
-        return self._drop_page_furniture(self._renumber(detected_fields), len(document) - len(skip_pages), page_heights)
+        return self._drop_page_furniture(
+            self._renumber(detected_fields),
+            len(document) - len(skip_pages),
+            page_heights,
+            title_tops,
+        )
 
     @staticmethod
     def _drop_page_furniture(
-        fields: list[DetectedField], page_count: int, page_heights: dict[int, float]
+        fields: list[DetectedField],
+        page_count: int,
+        page_heights: dict[int, float],
+        title_tops: dict[int, float] | None = None,
     ) -> list[DetectedField]:
         """Remove what the top of every page repeats rather than asks for.
 
@@ -417,9 +435,22 @@ class PDFEngine:
 
         Requiring both leaves a repeated question in the body alone, and an initials line at the
         foot of every page, while removing the furniture at the top.
+
+        Repetition needs pages to repeat across, so on a short document there is none to read and
+        this used to give up and keep everything - which left the letterhead of a one-page form
+        detected as its first field, on the screen somebody sees immediately after uploading.
+
+        One page offers a different signal instead: nothing is ever asked above the document's own
+        title. A run of text set markedly larger than the body is that title, and anything in the
+        header band above it is furniture. A form that opens straight into its first question has
+        no such title, and then nothing is dropped - which is the right answer, because without a
+        title there is nothing to be above.
         """
+        title_tops = title_tops or {}
         if page_count < 3:
-            return fields
+            return PDFEngine._renumber(
+                [field for field in fields if not PDFEngine._sits_above_the_title(field, page_heights, title_tops)]
+            )
 
         seen: dict[tuple[int, int, int], set[int]] = {}
         for field in fields:
@@ -433,6 +464,17 @@ class PDFEngine:
                 continue
             kept.append(field)
         return PDFEngine._renumber(kept)
+
+    @staticmethod
+    def _sits_above_the_title(
+        field: DetectedField, page_heights: dict[int, float], title_tops: dict[int, float]
+    ) -> bool:
+        """Whether this field is in the header band and higher up the page than the title."""
+        title_top = title_tops.get(field.page)
+        if title_top is None:
+            return False
+        from_top = page_heights.get(field.page, 0.0) - (field.y + field.height)
+        return from_top <= RUNNING_HEADER_BAND and from_top < title_top
 
     @staticmethod
     def _renumber(fields: list[DetectedField]) -> list[DetectedField]:
@@ -625,6 +667,34 @@ class PDFEngine:
             words.append((glyph.x0, glyph.y0, glyph.x1, glyph.y1, token[0], word[5], word[6], word[7]))
             words.append((glyph.x1, y0, x1, y1, token[1:], word[5], word[6], word[7]))
         return words
+
+    @staticmethod
+    def _title_top(page: fitz.Page) -> float | None:
+        """How far down the page the document's own title begins, if it has one.
+
+        Returned as a distance from the top edge, to match how the header band is measured. None
+        when the page has no run of text markedly larger than the rest, which is the case for a
+        form that opens straight into its first question - and in that case nothing here applies.
+        """
+        sizes: list[tuple[float, float]] = []
+        # "dict" rather than "rawdict": a rawdict span carries its characters and no text of its
+        # own, so asking it for text silently finds nothing on every page.
+        for block in page.get_text("dict").get("blocks", []):
+            for line in block.get("lines", []):
+                for span in line.get("spans", []):
+                    if not span.get("text", "").strip():
+                        continue
+                    sizes.append((round(span.get("size", 0.0), 1), span["bbox"][1]))
+        if not sizes:
+            return None
+
+        largest = max(size for size, _ in sizes)
+        # The body is the size most of the page is set in, not the average: an average is dragged
+        # upwards by the very heading being looked for.
+        body = Counter(size for size, _ in sizes).most_common(1)[0][0]
+        if not body or largest < body * TITLE_SIZE_RATIO:
+            return None
+        return min(top for size, top in sizes if size == largest)
 
     def _checkbox_glyph_boxes(self, page: fitz.Page) -> list[fitz.Rect]:
         """Where each tick box sits, read a character at a time rather than a word at a time."""
