@@ -6,7 +6,7 @@ from django.urls import include, path
 from drf_spectacular.views import SpectacularAPIView, SpectacularRedocView
 from rest_framework.permissions import IsAdminUser
 
-from apps.signing.views import SignerPortalView
+from apps.signing.views import SignerPortalLandingView, SignerPortalView
 
 from .api.health import HealthCheckView
 from .docs import SignacoreApiDocsView
@@ -27,6 +27,9 @@ urlpatterns = [
     path("api/sign/", include("apps.signing.urls")),
     path("api/notifications/", include("apps.notifications.urls")),
     path("sign/<uuid:token>/", SignerPortalView.as_view(), name="signer-portal"),
+    # The door itself. nginx already proxies /sign/ on the signing host, so this needs no server
+    # change; the bare root does, and the deploy note says what to add.
+    path("sign/", SignerPortalLandingView.as_view(), name="signer-portal-landing"),
 ]
 
 if settings.DEBUG:
