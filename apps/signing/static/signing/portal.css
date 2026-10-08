@@ -1052,3 +1052,45 @@ input {
     max-height: 58dvh;
   }
 }
+
+/* ---------------------------------------------------------------- the door, with no document
+
+   The landing page has no document panel at all, so it cannot borrow the signing layout: that
+   grid holds a column open for a document, and here there is never one to put in it. Its own
+   grid instead - as many cards as fit, centred, filling the width rather than hugging one edge. */
+.landing {
+  width: min(1120px, 100%);
+  margin: 0 auto;
+  padding: 0 0 72px;
+}
+
+.landing-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  gap: 20px;
+  align-items: start;
+}
+
+.landing-cards .panel { height: 100%; }
+
+/* Two up rather than as many as fit: four text-heavy cards at three across leaves one orphaned
+   on its own row, and these are paragraphs rather than tiles. */
+@media (min-width: 880px) {
+  .landing-cards { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+
+/* The panel copy had no link colour of its own, so the two links on this page fell back to the
+   browser's dark blue on a near-black card and were all but invisible. */
+.landing .panel-copy a {
+  color: #6ee7f9;
+  text-decoration: underline;
+  text-decoration-color: rgba(110, 231, 249, 0.45);
+  text-underline-offset: 3px;
+}
+
+.landing .panel-copy a:hover { text-decoration-color: #6ee7f9; }
+
+@media (max-width: 720px) {
+  .landing { padding-bottom: 48px; }
+  .landing-cards { grid-template-columns: 1fr; gap: 16px; }
+}

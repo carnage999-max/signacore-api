@@ -135,6 +135,32 @@ class SignerPortalView(TemplateView):
         return context
 
 
+class SignerPortalLandingView(TemplateView):
+    """What the signing host says to somebody who arrives without a link.
+
+    The host answered a raw nginx 404 at its root and a bare Django 404 at /sign/, which is a
+    broken-looking door on the one domain a signer is told to trust. Most people who land here have
+    a link their mail client truncated, or typed the domain from memory, so the page is the answer
+    to that: where the email is, what to do when a link or a code has expired, and who to ask.
+
+    The numbers come from the settings they describe rather than being written into the copy, so
+    the page cannot quietly disagree with what the service actually does.
+    """
+
+    template_name = "signing/portal_landing.html"
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context["signer_portal_css_url"] = versioned_static("signing/portal.css")
+        context["signer_portal_icon_url"] = versioned_static("signing/favicon.ico")
+        context["link_expiry_days"] = settings.SIGNING_LINK_EXPIRY_DAYS
+        context["otp_expiry_minutes"] = settings.OTP_EXPIRY_MINUTES
+        context["otp_cooldown_seconds"] = settings.OTP_RESEND_COOLDOWN_SECONDS
+        context["help_url"] = f"{settings.SIGNACORE_APP_URL.rstrip('/')}/help"
+        context["support_email"] = "info@mysignacore.com"
+        return context
+
+
 class SignerContextView(APIView):
     permission_classes = []
     authentication_classes = []

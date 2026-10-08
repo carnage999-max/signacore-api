@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Signing a document with SignaCore</title>
+    <meta name="description" content="This is where SignaCore documents are signed. You need the link from the email that was sent to you.">
+    <meta name="robots" content="noindex, nofollow">
+    <link rel="icon" href="{{ signer_portal_icon_url }}" sizes="16x16 32x32">
+    <link rel="stylesheet" href="{{ signer_portal_css_url }}">
+  </head>
+  <body>
+    <main class="signacore-app">
+      <div class="landing">
+      <section class="hero">
+        <div>
+          <p class="eyebrow">Signacore</p>
+          <h1 class="hero-title">You need the link from your email.</h1>
+          <p class="hero-copy">
+            This address is where SignaCore documents are opened and signed, but every document has
+            its own link. There is nothing to sign in to here, and no account to create.
+          </p>
+        </div>
+      </section>
+
+      <div class="landing-cards">
+          <div class="panel">
+            <h2>Find the email</h2>
+            <p class="panel-copy">
+              Look for a message from SignaCore with the subject <strong>Signature requested</strong>,
+              sent by whoever asked you to sign. Check spam, promotions, and anything your
+              organisation quarantines before assuming it never arrived.
+            </p>
+          </div>
+
+          <div class="panel">
+            <h2>If the link has expired</h2>
+            <p class="panel-copy">
+              Signing links last {{ link_expiry_days }} days. An expired one cannot be extended from
+              here, and nothing you already entered is lost - ask whoever sent the document to send
+              it again, which issues a fresh link.
+            </p>
+          </div>
+
+          <div class="panel">
+            <h2>If the code has expired</h2>
+            <p class="panel-copy">
+              That is a different thing, and a smaller one. A verification code lasts
+              {{ otp_expiry_minutes }} minutes, and you can ask for a new one from the signing page
+              {{ otp_cooldown_seconds }} seconds after the last.
+            </p>
+            <p class="panel-copy">
+              The code always goes to the address the document was sent to. Forwarding the link does
+              not move the code - that is deliberate, and it is what stops the link alone being
+              enough to sign as somebody else.
+            </p>
+          </div>
+
+          <div class="panel">
+            <h2>Still stuck</h2>
+            <p class="panel-copy">
+              The <a href="{{ help_url }}">help centre</a> covers the rest, and
+              <a href="mailto:{{ support_email }}">{{ support_email }}</a> reaches a person. Say
+              which document you mean and we can usually answer in one reply.
+            </p>
+          </div>
+      </div>
+      </div>
+    </main>
+  </body>
+</html>
