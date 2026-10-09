@@ -1,3 +1,5 @@
+import logging
+
 from celery import shared_task
 
 from apps.documents.models import Document
@@ -19,6 +21,8 @@ from apps.notifications.services import (
     send_subscription_activated_email,
 )
 from apps.signing.models import SigningRequest
+
+logger = logging.getLogger(__name__)
 
 
 @shared_task(name="tasks.notifications.send_invitation_emails")
@@ -163,24 +167,60 @@ def send_subscription_activated(organization_id: str) -> None:
 
 @shared_task(name="tasks.notifications.sync_organization_seat_quantity")
 def sync_organization_seat_quantity(organization_id: str) -> None:
+    """Bill a Business workspace for the people in it after the team changes.
+
+    Seats are set once at checkout and would otherwise stay at whatever the workspace looked
+    like that day, so a team that grows keeps paying for the size it signed up at.
+    """
     from django.conf import settings
 
     from apps.accounts.models import Organization
     from apps.billing.models import OrganizationSubscription
+    from apps.billing.seats import get_organization_seat_count
     from services.stripe_client import StripeAPIClient
 
     organization = Organization.objects.filter(pk=organization_id).first()
     subscription = OrganizationSubscription.objects.filter(organization=organization).first() if organization else None
     if not subscription or not subscription.stripe_subscription_id or not settings.STRIPE_SECRET_KEY:
         return None
-    if subscription.plan != OrganizationSubscription.PlanEnum.BUSINESS:
-        quantity = 1
-    else:
-        quantity = max(
-            organization.memberships.filter(status="ACTIVE", user__is_active=True).count(),
-            1,
-        )
-    StripeAPIClient().update_subscription_quantity(subscription.stripe_subscription_id, quantity)
+
+    quantity = get_organization_seat_count(organization, subscription.plan)
+    if subscription.stripe_subscription_quantity == quantity and subscription.stripe_subscription_item_id:
+        return None
+
+    client = StripeAPIClient()
+    item_id = subscription.stripe_subscription_item_id
+    if not item_id:
+        # Subscriptions opened before the id was stored, and any whose webhook was missed. Ask
+        # Stripe once and keep the answer rather than fetching it on every team change.
+        remote = client.retrieve_subscription(subscription.stripe_subscription_id)
+        items = remote.get("items") if isinstance(remote.get("items"), dict) else {}
+        item_data = items.get("data") if isinstance(items.get("data"), list) else []
+        first_item = item_data[0] if item_data and isinstance(item_data[0], dict) else {}
+        item_id = str(first_item.get("id") or "")
+        if not item_id:
+            logger.warning(
+                "Stripe subscription has no item to bill seats against",
+                extra={
+                    "organization_id": organization_id,
+                    "stripe_subscription_id": subscription.stripe_subscription_id,
+                },
+            )
+            return None
+        subscription.stripe_subscription_item_id = item_id
+        if isinstance(first_item.get("quantity"), int):
+            subscription.stripe_subscription_quantity = first_item["quantity"]
+        subscription.save(update_fields=["stripe_subscription_item_id", "stripe_subscription_quantity", "updated_at"])
+        if subscription.stripe_subscription_quantity == quantity:
+            return None
+
+    updated = client.update_subscription_item_quantity(item_id, quantity)
+    # Record what Stripe says it is now billing rather than what we asked for, so a request that
+    # was adjusted at the other end does not leave us believing something untrue.
+    subscription.stripe_subscription_quantity = (
+        updated.get("quantity") if isinstance(updated.get("quantity"), int) else quantity
+    )
+    subscription.save(update_fields=["stripe_subscription_quantity", "updated_at"])
     return None
 
 

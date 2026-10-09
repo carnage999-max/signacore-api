@@ -84,6 +84,13 @@ class OrganizationSubscription(models.Model):
     stripe_customer_id = models.CharField(max_length=255, blank=True)
     stripe_subscription_id = models.CharField(max_length=255, blank=True)
     stripe_price_id = models.CharField(max_length=255, blank=True)
+    # Stripe counts seats on a subscription *item*, not on the subscription, and an update that
+    # does not name the item adds a second one instead of changing the first. Remembering the id
+    # is what lets a seat change be an update.
+    stripe_subscription_item_id = models.CharField(max_length=255, blank=True)
+    # The quantity Stripe last told us it was billing. Kept so a seat change that works out to
+    # the same number does not become a pointless write against the customer's subscription.
+    stripe_subscription_quantity = models.PositiveIntegerField(null=True, blank=True)
     current_period_end = models.DateTimeField(null=True, blank=True)
     cancel_at_period_end = models.BooleanField(default=False)
     created_at = models.DateTimeField(auto_now_add=True)

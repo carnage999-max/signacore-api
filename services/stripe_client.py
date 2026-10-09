@@ -65,11 +65,18 @@ class StripeAPIClient(BaseAPIClient):
         )
         return response.json()
 
-    def update_subscription_quantity(self, subscription_id: str, quantity: int) -> dict[str, Any]:
+    def update_subscription_item_quantity(self, subscription_item_id: str, quantity: int) -> dict[str, Any]:
+        """Change the seat count on one subscription item.
+
+        This has to name the item. Posting `items[0][quantity]` to the subscription without an
+        `items[0][id]` does not change the existing line - Stripe reads an item with no id as a
+        new one to add, and rejects it for having no price. Addressing the item directly removes
+        the chance of getting that wrong.
+        """
         response = self.post(
-            f"/subscriptions/{subscription_id}",
+            f"/subscription_items/{subscription_item_id}",
             data={
-                "items[0][quantity]": str(max(quantity, 1)),
+                "quantity": str(max(quantity, 1)),
                 "proration_behavior": "create_prorations",
             },
         )

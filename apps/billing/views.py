@@ -14,6 +14,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from apps.accounts.models import Organization, OrganizationMembership
+from apps.billing.seats import get_organization_seat_count
 from apps.documents.auth import HasValidSignacoreSecret
 from apps.documents.models import AdminAuditLog
 from apps.documents.views import get_request_actor_and_organization, log_admin_event
@@ -54,18 +55,6 @@ def get_organization_subscription(organization: Organization) -> OrganizationSub
     return subscription
 
 
-def get_organization_seat_count(organization: Organization, plan: str) -> int:
-    if plan != OrganizationSubscription.PlanEnum.BUSINESS:
-        return 1
-    return max(
-        organization.memberships.filter(
-            status=OrganizationMembership.StatusEnum.ACTIVE,
-            user__is_active=True,
-        ).count(),
-        1,
-    )
-
-
 def timestamp_to_datetime(value) -> datetime | None:
     if not isinstance(value, (int, float)):
         return None
@@ -94,6 +83,8 @@ def sync_subscription_object(payload: dict, *, notify: bool = True) -> bool:
     first_item = item_data[0] if item_data and isinstance(item_data[0], dict) else {}
     price = first_item.get("price") if isinstance(first_item.get("price"), dict) else {}
     price_id = str(price.get("id") or "")
+    item_id = str(first_item.get("id") or "")
+    item_quantity = first_item.get("quantity")
     period_end = payload.get("current_period_end") or first_item.get("current_period_end")
     stripe_status = str(payload.get("status") or "none").upper()
     valid_statuses = {value for value, _ in OrganizationSubscription.StatusEnum.choices}
@@ -103,6 +94,11 @@ def sync_subscription_object(payload: dict, *, notify: bool = True) -> bool:
     subscription.stripe_customer_id = customer_id or subscription.stripe_customer_id
     subscription.stripe_subscription_id = subscription_id or subscription.stripe_subscription_id
     subscription.stripe_price_id = price_id or subscription.stripe_price_id
+    # Every subscription webhook carries the item, so the id we need to bill seats against keeps
+    # itself current here for free - including for subscriptions opened before it was stored.
+    subscription.stripe_subscription_item_id = item_id or subscription.stripe_subscription_item_id
+    if isinstance(item_quantity, int):
+        subscription.stripe_subscription_quantity = item_quantity
     metadata_plan = str(metadata.get("plan") or "").upper()
     valid_plans = {value for value, _ in OrganizationSubscription.PlanEnum.choices}
     if metadata_plan in valid_plans:
