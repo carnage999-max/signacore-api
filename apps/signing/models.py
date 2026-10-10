@@ -56,6 +56,10 @@ class SigningRequest(models.Model):
     # send that is not about the document in front of them. Recorded per request, but checked per
     # address: somebody who signs ten documents hears from us once.
     follow_up_sent_at = models.DateTimeField(null=True, blank=True)
+    # A SHA-256 of the completed copy as it was delivered, certificate pages included. The
+    # certificate inside it cannot state this - a document cannot contain its own hash - so it
+    # is kept here, and it is what proves the copy in our archive is the copy that was sent.
+    signed_pdf_sha256 = models.CharField(max_length=64, blank=True, default="")
     signed_at = models.DateTimeField(null=True, blank=True)
     ip_address = EncryptedTextField(null=True, blank=True)
     user_agent = EncryptedTextField(null=True, blank=True)

@@ -30,6 +30,13 @@ class Document(models.Model):
     source = models.CharField(max_length=32, choices=SourceEnum.choices, default=SourceEnum.UPLOADED)
     authored_content = EncryptedTextField(blank=True, default="")
     original_pdf = models.FileField(storage=encrypted_file_storage, upload_to=original_pdf_upload_to)
+    # A SHA-256 of the file exactly as it was uploaded, before anything was drawn on it.
+    #
+    # This is the number printed on every certificate of completion. It is what lets somebody
+    # holding a copy of the agreement show that the document the signature was made against is
+    # the document they are holding, rather than taking our word for it. Computed once, at
+    # upload, and never recomputed: a fingerprint that can change is not a fingerprint.
+    original_sha256 = models.CharField(max_length=64, blank=True, default="")
     signed_pdf = models.FileField(
         storage=encrypted_file_storage,
         upload_to=signed_pdf_upload_to,

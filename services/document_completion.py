@@ -11,8 +11,11 @@ import logging
 from contextlib import ExitStack
 
 from apps.documents.models import Document
+from services.completion_certificate import append_certificate, build_certificate
 from services.pdf_engine import PDFEngine
+from services.pdf_sanitizer import assert_sanitized
 from utils.file_storage import save_encrypted_field_file, temporary_output_file, temporary_plaintext_file
+from utils.fingerprint import sha256_of_path
 
 logger = logging.getLogger(__name__)
 
@@ -60,13 +63,22 @@ def issue_signed_copy(signing_request) -> None:
             output_path,
             _sender_payload(document, stack) + _flatten_payload(submissions, stack),
         )
+        # The certificate goes on after the answers are drawn, so the fingerprint it quotes is
+        # of the document as uploaded rather than of a file that includes the certificate - a
+        # document cannot state its own hash.
+        append_certificate(output_path, build_certificate(document, [signing_request]))
+        # Flatten sanitises what it produces; these pages are added afterwards, so the promise
+        # that a delivered copy carries no active content is checked again on the final file
+        # rather than assumed from an earlier one.
+        assert_sanitized(output_path)
+        signing_request.signed_pdf_sha256 = sha256_of_path(output_path)
         save_encrypted_field_file(
             signing_request.signed_pdf,
             output_path,
             filename=f"{signing_request.id}-signed.pdf",
         )
 
-    signing_request.save(update_fields=["signed_pdf", "updated_at"])
+    signing_request.save(update_fields=["signed_pdf", "signed_pdf_sha256", "updated_at"])
 
 
 def refresh_document_status(document: Document) -> None:
@@ -228,6 +240,8 @@ def issue_completed_document(document: Document) -> None:
             )
 
         PDFEngine().flatten(source_path, output_path, _sender_payload(document, stack) + flatten_submissions)
+        append_certificate(output_path, build_certificate(document, list(document.signing_requests.all())))
+        assert_sanitized(output_path)
         save_encrypted_field_file(document.signed_pdf, output_path, filename=f"{document.id}-signed.pdf")
 
     document.status = Document.StatusEnum.COMPLETED

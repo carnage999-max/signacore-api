@@ -37,6 +37,7 @@ from tasks.notifications import (
     send_invitation_email_for_request,
 )
 from utils.file_storage import temporary_plaintext_file
+from utils.fingerprint import sha256_of_bytes, sha256_of_path
 from utils.pdf_preview import (
     build_preview_matrix,
     prepare_page_for_preview,
@@ -474,9 +475,12 @@ class AdminDocumentsView(APIView):
             )
             with temporary_plaintext_file(document.original_pdf, suffix=".pdf") as pdf_path:
                 import_result = engine.analyse(pdf_path)
+                # Taken here, from the file as uploaded, before a single field is drawn on it.
+                # This is the number every certificate of completion quotes.
+                document.original_sha256 = sha256_of_path(pdf_path)
             detected_fields = import_result.fields
             document.import_report = import_result.report.as_dict()
-            document.save(update_fields=["import_report", "updated_at"])
+            document.save(update_fields=["import_report", "original_sha256", "updated_at"])
             DocumentField.objects.bulk_create(
                 [
                     DocumentField(
@@ -543,6 +547,10 @@ class AdminAuthoredDocumentView(APIView):
                 created_by=actor,
                 organization=organization,
             )
+            # An authored document is rendered rather than uploaded, so its fingerprint is of
+            # the bytes we produced - which is still the file the signature is made against.
+            document.original_sha256 = sha256_of_bytes(pdf_bytes)
+            document.save(update_fields=["original_sha256", "updated_at"])
             DocumentField.objects.bulk_create(
                 [
                     DocumentField(
