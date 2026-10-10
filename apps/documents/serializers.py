@@ -50,6 +50,8 @@ class DocxImportSerializer(serializers.Serializer):
 
 
 class DocumentFieldSerializer(serializers.ModelSerializer):
+    is_prefilled = serializers.BooleanField(read_only=True)
+
     class Meta:
         model = DocumentField
         fields = (
@@ -69,8 +71,10 @@ class DocumentFieldSerializer(serializers.ModelSerializer):
             "options",
             "group_key",
             "option_value",
+            "prefilled_value",
+            "is_prefilled",
         )
-        read_only_fields = ("id", "detection_source")
+        read_only_fields = ("id", "detection_source", "prefilled_value", "is_prefilled")
 
 
 class ManualDocumentFieldCreateSerializer(serializers.ModelSerializer):
@@ -112,6 +116,7 @@ class DocumentFieldUpdateSerializer(serializers.ModelSerializer):
             "options",
             "group_key",
             "option_value",
+            "prefilled_value",
         )
         extra_kwargs = {
             "field_type": {"required": False},
@@ -128,7 +133,39 @@ class DocumentFieldUpdateSerializer(serializers.ModelSerializer):
             "options": {"required": False, "allow_null": True},
             "group_key": {"required": False},
             "option_value": {"required": False},
+            "prefilled_value": {"required": False, "allow_null": True, "allow_blank": True},
         }
+
+    # A sender may fill in the parts of an agreement that are theirs to fill. A signature and a
+    # set of initials are never among them: one party producing another party's mark is forgery,
+    # whatever the interface called it, and the value of the whole product rests on that line
+    # holding. Refused here rather than in the editor, because the editor is not the only way in.
+    UNFILLABLE_BY_THE_SENDER = frozenset(
+        {
+            DocumentField.FieldTypeEnum.SIGNATURE,
+            DocumentField.FieldTypeEnum.INITIALS,
+        }
+    )
+
+    def validate(self, attrs):
+        attrs = super().validate(attrs)
+        if "prefilled_value" not in attrs:
+            return attrs
+        if not str(attrs.get("prefilled_value") or "").strip():
+            return attrs
+
+        # The type being saved now, which is not always the type already stored: a single request
+        # may change both at once.
+        field_type = attrs.get("field_type") or getattr(self.instance, "field_type", None)
+        if field_type in self.UNFILLABLE_BY_THE_SENDER:
+            raise serializers.ValidationError(
+                {
+                    "prefilled_value": [
+                        "A signature or set of initials can only be made by the person signing.",
+                    ]
+                }
+            )
+        return attrs
 
 
 class DocumentSerializer(serializers.ModelSerializer):

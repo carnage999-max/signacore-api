@@ -764,7 +764,18 @@ class AdminDocumentFieldDetailView(APIView):
         )
         serializer = DocumentFieldUpdateSerializer(field, data=request.data, partial=True)
         serializer.is_valid(raise_exception=True)
-        serializer.save()
+        # Who answered for the sender, and when. A value on the document that nobody is named
+        # against is the kind of thing a dispute turns on, so it is stamped where it is set
+        # rather than inferred later from an audit line.
+        if "prefilled_value" in serializer.validated_data:
+            actor = get_admin_actor(request)
+            has_value = bool(str(serializer.validated_data.get("prefilled_value") or "").strip())
+            serializer.save(
+                prefilled_at=timezone.now() if has_value else None,
+                prefilled_by=actor if has_value else None,
+            )
+        else:
+            serializer.save()
         log_admin_event(
             request,
             AdminAuditLog.ActionEnum.FIELD_UPDATE,

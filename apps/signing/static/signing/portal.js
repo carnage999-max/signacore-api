@@ -154,6 +154,8 @@
   }
 
   function fieldIsComplete(field) {
+    // Nothing is outstanding about a field the sender already answered.
+    if (field.is_prefilled) return true;
     const value = getFieldValue(field.id);
     if (!value) return false;
     if (field.field_type === "TEXT" || field.field_type === "MULTILINE") {
@@ -184,13 +186,13 @@
   function outstandingRequiredFields() {
     if (!state.context) return [];
     return state.context.fields
-      .filter((field) => field.is_required && !fieldIsComplete(field))
+      .filter((field) => !field.is_prefilled && field.is_required && !fieldIsComplete(field))
       .sort((first, second) => first.page - second.page || first.order - second.order);
   }
 
   function updateProgressSummary() {
     if (!nodes.progressSummary || !state.context) return;
-    const total = state.context.fields.filter((field) => field.is_required).length;
+    const total = state.context.fields.filter((field) => !field.is_prefilled && field.is_required).length;
     const outstanding = outstandingRequiredFields().length;
     if (!total) {
       nodes.progressSummary.textContent = `${state.context.fields.length} field${state.context.fields.length === 1 ? "" : "s"} to review`;
@@ -303,6 +305,7 @@
     nodes.fieldList.innerHTML = "";
 
     state.context.fields.forEach((field) => {
+      if (field.is_prefilled) return;
       const item = document.createElement("div");
       const complete = fieldIsComplete(field);
       item.className = "field-list-item";
@@ -328,7 +331,7 @@
   function renderFieldRail() {
     if (!nodes.fieldRail || !state.context) return;
 
-    const fields = state.context.fields;
+    const fields = state.context.fields.filter((field) => !field.is_prefilled);
     nodes.fieldRail.hidden = state.submitted || fields.length === 0;
     nodes.fieldRail.innerHTML = "";
 
@@ -348,6 +351,24 @@
       mark.addEventListener("click", () => focusField(field));
       nodes.fieldRail.appendChild(mark);
     });
+  }
+
+  function buildPrefilledField(field) {
+    // Drawn, not operated. The sender has already answered this and the signer cannot change it,
+    // so there is no control here to focus, tab into, or submit - only the value, where it sits
+    // on the page, so the agreement reads whole.
+    const value = document.createElement("span");
+    value.className = "prefilled-value";
+    const isTickBox = field.field_type === "CHECKBOX" || field.field_type === "RADIO";
+    const raw = String(field.prefilled_value ?? "");
+    if (isTickBox) {
+      const ticked = ["true", "1", "yes", "on"].includes(raw.trim().toLowerCase());
+      value.textContent = ticked ? "\u2713" : "";
+    } else {
+      value.textContent = raw;
+    }
+    value.title = `Completed by the sender: ${field.label}`;
+    return value;
   }
 
   function markFieldFilled(node, isFilled) {
@@ -775,9 +796,11 @@
           const isTickBox = field.field_type === "CHECKBOX" || field.field_type === "RADIO";
           const minHeightPercent = isTextual || field.field_type === "DROPDOWN" ? 1.15 : isTickBox ? 1.2 : 1.8;
 
-          fieldNode.className = `field-overlay ${typeClassName} ${field.is_required ? "field-overlay-required" : ""} ${
-            state.fieldErrors[field.id] ? "field-error" : ""
-          } ${fieldIsComplete(field) ? "field-filled" : ""}`;
+          fieldNode.className = `field-overlay ${typeClassName} ${
+            field.is_prefilled ? "field-overlay-prefilled" : field.is_required ? "field-overlay-required" : ""
+          } ${state.fieldErrors[field.id] ? "field-error" : ""} ${
+            !field.is_prefilled && fieldIsComplete(field) ? "field-filled" : ""
+          }`;
           fieldNode.style.top = `${top}%`;
           fieldNode.style.left = `${left}%`;
           fieldNode.style.width = `${width}%`;
@@ -787,7 +810,9 @@
           fieldNode.title = field.label;
 
           let fieldContent;
-          if (field.field_type === "TEXT") {
+          if (field.is_prefilled) {
+            fieldContent = buildPrefilledField(field);
+          } else if (field.field_type === "TEXT") {
             fieldContent = buildTextField(field);
           } else if (field.field_type === "MULTILINE") {
             fieldContent = buildMultilineField(field);
@@ -1203,6 +1228,7 @@
     state.fieldErrors = {};
 
     state.context.fields.forEach((field) => {
+      if (field.is_prefilled) return;
       const value = getFieldValue(field.id);
       if (!value) return;
 

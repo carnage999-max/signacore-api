@@ -1094,3 +1094,25 @@ input {
   .landing { padding-bottom: 48px; }
   .landing-cards { grid-template-columns: 1fr; gap: 16px; }
 }
+
+/* ------------------------------------------------- what the sender already filled in
+   Part of the agreement rather than part of the work. Drawn on the page where it belongs, in
+   the ink of the document rather than the blue of a field waiting for an answer, and carrying
+   no control: there is nothing here to focus, tab into, or change. */
+.field-overlay-prefilled {
+  background: transparent;
+  box-shadow: none;
+  pointer-events: none;
+}
+
+.prefilled-value {
+  display: block;
+  width: 100%;
+  padding: 0 2px;
+  overflow: hidden;
+  color: #16202e;
+  font-size: var(--field-font-size, 11px);
+  line-height: 1.1;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}

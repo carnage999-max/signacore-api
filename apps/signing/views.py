@@ -407,6 +407,17 @@ class SignerSubmitView(APIView):
         for document_field in signing_request.document.fields.all():
             field_type_key = f"field_{document_field.id}_type"
             selected_type = request.data.get(field_type_key)
+
+            # Already answered by the sender. Not the signer's to complete, and not theirs to
+            # change either: a value they could overwrite is not a value the sender can rely on
+            # having sent. Refused rather than ignored, so a client that tries is told.
+            if document_field.is_prefilled:
+                if selected_type:
+                    field_errors[str(document_field.id)] = [
+                        "This field was completed by the sender and cannot be changed.",
+                    ]
+                continue
+
             if not selected_type:
                 if document_field.is_required:
                     field_errors[str(document_field.id)] = ["This field is required."]

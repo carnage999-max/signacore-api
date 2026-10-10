@@ -97,7 +97,31 @@ class DocumentField(models.Model):
     # the options of a group sit apart on the page and a tick has to be drawn in the right one.
     # Rows sharing a group are the alternatives of a single choice.
     group_key = models.CharField(max_length=64, blank=True, default="")
+    # What the sender filled in before the document went out.
+    #
+    # Plenty of an agreement is the sender's to complete - the property, the dates, the amounts -
+    # and asking the signer to supply it is both work they cannot do and an invitation to get it
+    # wrong. A field with a value here is shown to the signer as part of the document rather than
+    # as something to fill, and is drawn onto every copy exactly as the sender left it.
+    #
+    # Never a signature or a set of initials. Those are the signer's alone, and a product that
+    # let one party produce another party's mark would be worth less than no product at all. The
+    # serializer refuses it and a test holds the line.
+    prefilled_value = EncryptedTextField(null=True, blank=True)
+    prefilled_at = models.DateTimeField(null=True, blank=True)
+    prefilled_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="signacore_prefilled_fields",
+    )
     option_value = EncryptedTextField(max_length=255, blank=True, default="")
+
+    @property
+    def is_prefilled(self) -> bool:
+        """Whether the sender has already answered this, leaving nothing for the signer to do."""
+        return bool(self.prefilled_value)
 
     class Meta:
         ordering = ("page", "order")
