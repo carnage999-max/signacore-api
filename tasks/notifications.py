@@ -1,5 +1,6 @@
 import logging
 
+import httpx
 from celery import shared_task
 
 from apps.documents.models import Document
@@ -23,6 +24,36 @@ from apps.notifications.services import (
 from apps.signing.models import SigningRequest
 
 logger = logging.getLogger(__name__)
+
+# Seats are the one piece of work here that moves money. An email that fails to send is noticed
+# by the person waiting for it; a seat count that fails to reach Stripe is noticed by nobody,
+# and the workspace is quietly billed for the wrong number of people until somebody changes the
+# team again. So this one retries, and the rest do not.
+#
+# Only for failures that say nothing about the request. A 400 means the request was wrong and
+# will be wrong again next time; a timeout or a 502 means Stripe was having a bad minute.
+RETRYABLE_STRIPE_STATUSES = frozenset({408, 409, 425, 429, 500, 502, 503, 504})
+SEAT_SYNC_MAX_RETRIES = 5
+SEAT_SYNC_FIRST_DELAY_SECONDS = 30
+SEAT_SYNC_MAX_DELAY_SECONDS = 600
+
+
+def seat_sync_should_retry(error: Exception) -> bool:
+    """Whether trying this again could plausibly give a different answer."""
+    if isinstance(error, httpx.HTTPStatusError):
+        return error.response.status_code in RETRYABLE_STRIPE_STATUSES
+    # Timeouts, refused connections, DNS: the request never got an answer to be wrong about.
+    return isinstance(error, httpx.TransportError)
+
+
+def seat_sync_retry_delay(attempt: int) -> int:
+    """Back off, with a ceiling.
+
+    An outage ends for everybody at once, so a fixed delay turns the recovery into a stampede
+    against the same endpoint. Doubling with a cap spreads it out and still gives up inside an
+    hour rather than retrying for ever.
+    """
+    return min(SEAT_SYNC_MAX_DELAY_SECONDS, SEAT_SYNC_FIRST_DELAY_SECONDS * (2**attempt))
 
 
 @shared_task(name="tasks.notifications.send_invitation_emails")
@@ -172,19 +203,22 @@ def send_subscription_activated(organization_id: str) -> None:
     return None
 
 
-@shared_task(name="tasks.notifications.sync_organization_seat_quantity")
-def sync_organization_seat_quantity(organization_id: str) -> None:
+@shared_task(bind=True, name="tasks.notifications.sync_organization_seat_quantity")
+def sync_organization_seat_quantity(self, organization_id: str) -> None:
     """Bill a Business workspace for the people in it after the team changes.
 
     Seats are set once at checkout and would otherwise stay at whatever the workspace looked
     like that day, so a team that grows keeps paying for the size it signed up at.
+
+    Safe to run again. It works out the seat count from the membership and compares it against
+    what Stripe last reported, so a retry after a response went missing sends the same number to
+    an item that already carries it, which Stripe treats as no change and prorates nothing.
     """
     from django.conf import settings
 
     from apps.accounts.models import Organization
     from apps.billing.models import OrganizationSubscription
     from apps.billing.seats import get_organization_seat_count
-    from services.stripe_client import StripeAPIClient
 
     organization = Organization.objects.filter(pk=organization_id).first()
     subscription = OrganizationSubscription.objects.filter(organization=organization).first() if organization else None
@@ -194,6 +228,32 @@ def sync_organization_seat_quantity(organization_id: str) -> None:
     quantity = get_organization_seat_count(organization, subscription.plan)
     if subscription.stripe_subscription_quantity == quantity and subscription.stripe_subscription_item_id:
         return None
+
+    try:
+        _push_seat_quantity(subscription, quantity)
+    except httpx.HTTPError as error:
+        if not seat_sync_should_retry(error) or self.request.retries >= SEAT_SYNC_MAX_RETRIES:
+            # Out of attempts, or the request itself is the problem. Raising puts it in front of
+            # somebody rather than leaving a workspace quietly billed for the wrong number.
+            logger.exception(
+                "Could not bill the workspace for its current seats",
+                extra={"organization_id": organization_id, "attempts": self.request.retries + 1},
+            )
+            raise
+        # Celery re-raises instead of scheduling when a task is called outside a worker, which
+        # is what the eager fallback in enqueue_task does when the broker is unreachable. The
+        # failure surfaces in the request that caused it, which is the right place for it.
+        raise self.retry(
+            exc=error,
+            countdown=seat_sync_retry_delay(self.request.retries),
+            max_retries=SEAT_SYNC_MAX_RETRIES,
+        )
+    return None
+
+
+def _push_seat_quantity(subscription, quantity: int) -> None:
+    """Tell Stripe what to bill, fetching the item id first if we have never seen it."""
+    from services.stripe_client import StripeAPIClient
 
     client = StripeAPIClient()
     item_id = subscription.stripe_subscription_item_id
@@ -208,10 +268,7 @@ def sync_organization_seat_quantity(organization_id: str) -> None:
         if not item_id:
             logger.warning(
                 "Stripe subscription has no item to bill seats against",
-                extra={
-                    "organization_id": organization_id,
-                    "stripe_subscription_id": subscription.stripe_subscription_id,
-                },
+                extra={"stripe_subscription_id": subscription.stripe_subscription_id},
             )
             return None
         subscription.stripe_subscription_item_id = item_id

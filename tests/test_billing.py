@@ -7,6 +7,8 @@ import time
 from decimal import Decimal
 from unittest.mock import patch
 
+import httpx
+from celery.exceptions import Retry
 from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.test import TestCase, override_settings
@@ -17,7 +19,13 @@ from apps.billing.models import BillingPlanConfiguration, OrganizationSubscripti
 from apps.billing.views import sync_subscription_object
 from apps.documents.models import AdminAuditLog
 from services.stripe_client import StripeAPIClient
-from tasks.notifications import sync_organization_seat_quantity
+from tasks.notifications import (
+    SEAT_SYNC_MAX_DELAY_SECONDS,
+    SEAT_SYNC_MAX_RETRIES,
+    seat_sync_retry_delay,
+    seat_sync_should_retry,
+    sync_organization_seat_quantity,
+)
 
 
 @override_settings(
@@ -628,3 +636,119 @@ class StripeSeatRequestTests(TestCase):
         StripeAPIClient().update_subscription_item_quantity("si_123", 0)
 
         self.assertEqual(post.call_args.kwargs["data"]["quantity"], "1")
+
+
+class SeatSyncRetryTests(TestCase):
+    """Seats are the one piece of work here that moves money.
+
+    An email that fails to send is noticed by the person waiting for it. A seat count that fails
+    to reach Stripe is noticed by nobody, and the workspace is quietly billed for the wrong
+    number of people until somebody changes the team again.
+    """
+
+    def status_error(self, code: int) -> httpx.HTTPStatusError:
+        request = httpx.Request("POST", "https://api.stripe.com/v1/subscription_items/si_1")
+        return httpx.HTTPStatusError("boom", request=request, response=httpx.Response(code, request=request))
+
+    def test_a_bad_minute_at_stripe_is_worth_trying_again(self) -> None:
+        for code in (429, 500, 502, 503, 504):
+            with self.subTest(code=code):
+                self.assertTrue(seat_sync_should_retry(self.status_error(code)))
+
+    def test_a_request_stripe_rejected_is_not(self) -> None:
+        """A 400 means the request was wrong and will be wrong again. Retrying only hides it."""
+        for code in (400, 401, 403, 404, 422):
+            with self.subTest(code=code):
+                self.assertFalse(seat_sync_should_retry(self.status_error(code)))
+
+    def test_a_request_that_never_got_an_answer_is_worth_trying_again(self) -> None:
+        request = httpx.Request("POST", "https://api.stripe.com/v1/subscription_items/si_1")
+        self.assertTrue(seat_sync_should_retry(httpx.ConnectTimeout("timed out", request=request)))
+        self.assertTrue(seat_sync_should_retry(httpx.ConnectError("refused", request=request)))
+
+    def test_the_wait_grows_and_then_stops_growing(self) -> None:
+        """An outage ends for everybody at once; a fixed delay makes the recovery a stampede."""
+        delays = [seat_sync_retry_delay(attempt) for attempt in range(SEAT_SYNC_MAX_RETRIES + 1)]
+
+        self.assertEqual(delays[0], 30)
+        self.assertEqual(delays, sorted(delays))
+        self.assertLessEqual(max(delays), SEAT_SYNC_MAX_DELAY_SECONDS)
+        # Five attempts have to fit inside something a person would wait for.
+        self.assertLess(sum(delays[:SEAT_SYNC_MAX_RETRIES]), 3600)
+
+
+@override_settings(
+    SIGNACORE_SHARED_SECRET="test-signacore-secret",
+    STRIPE_SECRET_KEY="sk_test_secret",
+    EMAIL_BACKEND="django.core.mail.backends.locmem.EmailBackend",
+)
+class SeatSyncRetryBehaviourTests(TestCase):
+    """What the task actually does when Stripe does not answer."""
+
+    def setUp(self) -> None:
+        self.owner = get_user_model().objects.create_user(
+            username="retry-owner", email="retry@example.com", password="password123"
+        )
+        self.organization = Organization.objects.create(name="Retry Company", created_by=self.owner)
+        OrganizationMembership.objects.create(
+            organization=self.organization,
+            user=self.owner,
+            role=OrganizationMembership.RoleEnum.OWNER,
+        )
+        OrganizationSubscription.objects.create(
+            organization=self.organization,
+            plan=OrganizationSubscription.PlanEnum.BUSINESS,
+            status=OrganizationSubscription.StatusEnum.ACTIVE,
+            stripe_customer_id="cus_retry",
+            stripe_subscription_id="sub_retry",
+            stripe_subscription_item_id="si_retry",
+            stripe_subscription_quantity=9,
+        )
+
+    def failing_client(self, error: Exception):
+        client = patch("services.stripe_client.StripeAPIClient").start()
+        self.addCleanup(patch.stopall)
+        client.return_value.update_subscription_item_quantity.side_effect = error
+        return client
+
+    def timeout(self) -> httpx.ConnectTimeout:
+        request = httpx.Request("POST", "https://api.stripe.com/v1/subscription_items/si_retry")
+        return httpx.ConnectTimeout("timed out", request=request)
+
+    def rejected(self) -> httpx.HTTPStatusError:
+        request = httpx.Request("POST", "https://api.stripe.com/v1/subscription_items/si_retry")
+        return httpx.HTTPStatusError("bad request", request=request, response=httpx.Response(400, request=request))
+
+    def test_a_timeout_is_scheduled_to_be_tried_again(self) -> None:
+        self.failing_client(self.timeout())
+
+        # Celery re-raises rather than scheduling when a task is called outside a worker, so the
+        # decision is what can be observed here. The scheduling itself is Celery's to do.
+        with patch.object(sync_organization_seat_quantity, "retry", side_effect=Retry()) as retry:
+            with self.assertRaises(Retry):
+                sync_organization_seat_quantity(str(self.organization.id))
+
+        self.assertEqual(retry.call_count, 1)
+        self.assertEqual(retry.call_args.kwargs["countdown"], 30)
+        self.assertEqual(retry.call_args.kwargs["max_retries"], SEAT_SYNC_MAX_RETRIES)
+
+    def test_a_rejected_request_is_raised_rather_than_repeated(self) -> None:
+        """Retrying a 400 five times hides it for half an hour and changes nothing."""
+        self.failing_client(self.rejected())
+
+        with patch.object(sync_organization_seat_quantity, "retry") as retry:
+            with self.assertRaises(httpx.HTTPStatusError):
+                sync_organization_seat_quantity(str(self.organization.id))
+
+        self.assertFalse(retry.called)
+
+    def test_the_quantity_is_not_recorded_when_the_call_failed(self) -> None:
+        """Otherwise a retry would see a number that matches and decide there is nothing to do."""
+        self.failing_client(self.timeout())
+
+        with patch.object(sync_organization_seat_quantity, "retry", side_effect=Retry()):
+            with self.assertRaises(Retry):
+                sync_organization_seat_quantity(str(self.organization.id))
+
+        subscription = OrganizationSubscription.objects.get(organization=self.organization)
+        self.assertEqual(subscription.stripe_subscription_quantity, 9)
