@@ -32,12 +32,14 @@ from utils.pdf_preview import (
     preview_is_unchanged,
     with_preview_caching,
 )
+from utils.request_meta import get_client_ip, get_user_agent
 from utils.signer_session import build_signer_session_token, verify_signer_session_token
 from utils.static_assets import versioned_static
 from utils.task_dispatch import enqueue_task
 from utils.throttling import SignacoreRateThrottle
 
-from .models import FieldSubmission, SigningRequest
+from .events import record_signing_event
+from .models import FieldSubmission, SigningEvent, SigningRequest
 from .serializers import FieldSubmissionSerializer, SignerOtpSerializer, SigningRequestSerializer
 
 logger = logging.getLogger(__name__)
@@ -51,17 +53,6 @@ def mask_email(email: str) -> str:
     if len(local_part) <= 1:
         return f"{local_part[0]}***@{domain}"
     return f"{local_part[0]}***@{domain}"
-
-
-def get_client_ip(request) -> str:
-    real_ip = str(request.META.get("HTTP_X_REAL_IP", "")).strip()
-    if real_ip:
-        return real_ip
-
-    forwarded_for = str(request.META.get("HTTP_X_FORWARDED_FOR", "")).strip()
-    if forwarded_for:
-        return forwarded_for.split(",")[0].strip()
-    return str(request.META.get("REMOTE_ADDR", "")).strip()
 
 
 def get_signing_request_or_404(token):
@@ -171,6 +162,7 @@ class SignerContextView(APIView):
     def get(self, request, token):
         signing_request = get_signing_request_or_404(token)
         access_message = get_access_message(signing_request)
+        record_signing_event(signing_request, SigningEvent.EventEnum.OPENED, request=request)
         if not has_verified_signer_session(request, signing_request):
             return Response(
                 {
@@ -328,6 +320,12 @@ class SignerOtpSendView(APIView):
         signing_request.otp_last_sent_at = now
         signing_request.save(update_fields=["otp_hash", "otp_expires_at", "otp_last_sent_at", "updated_at"])
         enqueue_task(send_otp_email, str(signing_request.id), otp)
+        record_signing_event(
+            signing_request,
+            SigningEvent.EventEnum.CODE_SENT,
+            request=request,
+            detail=f"Code sent to {mask_email(signing_request.signer_email)}",
+        )
         return Response(
             {
                 "masked_email": mask_email(signing_request.signer_email),
@@ -362,8 +360,14 @@ class SignerOtpVerifyView(APIView):
         signing_request.status = SigningRequest.StatusEnum.OTP_VERIFIED
         signing_request.otp_verified_at = timezone.now()
         signing_request.ip_address = get_client_ip(request)
-        signing_request.user_agent = request.META.get("HTTP_USER_AGENT", "")
+        signing_request.user_agent = get_user_agent(request)
         signing_request.save(update_fields=["status", "otp_verified_at", "ip_address", "user_agent", "updated_at"])
+        record_signing_event(
+            signing_request,
+            SigningEvent.EventEnum.CODE_VERIFIED,
+            request=request,
+            detail=f"Code confirmed at {mask_email(signing_request.signer_email)}",
+        )
         session_token = build_signer_session_token(str(signing_request.id), signing_request.otp_hash)
         response = Response(
             {"session_token": session_token},
@@ -468,8 +472,15 @@ class SignerSubmitView(APIView):
             signing_request.status = SigningRequest.StatusEnum.SIGNED
             signing_request.signed_at = timezone.now()
             signing_request.ip_address = get_client_ip(request)
-            signing_request.user_agent = request.META.get("HTTP_USER_AGENT", "")
+            signing_request.user_agent = get_user_agent(request)
             signing_request.save(update_fields=["status", "signed_at", "ip_address", "user_agent", "updated_at"])
+            field_count = len(submissions_to_create)
+            record_signing_event(
+                signing_request,
+                SigningEvent.EventEnum.SIGNED,
+                request=request,
+                detail=f"{field_count} assigned {'field' if field_count == 1 else 'fields'} completed",
+            )
 
             document = signing_request.document
 

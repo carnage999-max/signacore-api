@@ -76,11 +76,18 @@ def send_completion_emails(document_id: str) -> None:
 
 @shared_task(name="tasks.notifications.send_signed_copy")
 def send_signed_copy(signing_request_id: str) -> None:
+    from apps.signing.events import record_signing_event
+    from apps.signing.models import SigningEvent
+
     signing_request = SigningRequest.objects.select_related("document").filter(pk=signing_request_id).first()
     if signing_request is None:
         return None
 
     send_signed_copy_email(signing_request)
+    # Recorded after the send, so the trail says a copy went out rather than that one was meant
+    # to. There is no request here to take an address from: this is the service acting, not a
+    # person, and an address borrowed from somewhere else would be a lie in the record.
+    record_signing_event(signing_request, SigningEvent.EventEnum.COPY_DELIVERED)
     return None
 
 
