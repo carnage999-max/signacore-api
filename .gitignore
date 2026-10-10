@@ -16,3 +16,10 @@ storage-test/
 staticfiles/
 staticfiles-test/
 todo.json
+
+# Coverage output. The run is reproducible; its artefacts are not worth keeping in the history.
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+.pytest_cache/

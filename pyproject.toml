@@ -41,3 +41,39 @@ exclude = [
 
 [tool.ruff.lint]
 select = ["E4", "E7", "E9", "F"]
+
+[tool.pytest.ini_options]
+DJANGO_SETTINGS_MODULE = "signacore_api.settings"
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+# Coverage is measured on every run, locally as well as in CI, so the number in a pull request
+# is the number a developer already saw.
+addopts = "--cov --cov-report=term-missing"
+
+[tool.coverage.run]
+source = ["apps", "services", "tasks", "utils", "signacore_api"]
+branch = true
+omit = [
+    # Generated, and a migration that is not exercised by a test is exercised by every test that
+    # builds the database.
+    "*/migrations/*",
+    "*/__pycache__/*",
+    "manage.py",
+    "signacore_api/wsgi.py",
+    "signacore_api/asgi.py",
+]
+
+[tool.coverage.report]
+# Measured at 85.8% when this was introduced, so the floor is set just under it. The point is to
+# stop coverage sliding backwards, not to pass a number somebody picked because it was round: a
+# target above what the suite actually reaches turns every build red on the day it lands, and
+# one well below it says nothing at all. Raise it as the figure climbs.
+fail_under = 85
+show_missing = true
+skip_covered = true
+precision = 1
+exclude_also = [
+    "if TYPE_CHECKING:",
+    "raise NotImplementedError",
+    "if __name__ == .__main__.:",
+]
