@@ -10,6 +10,7 @@ from .views import (
     AdminDocumentDetailView,
     AdminDocumentDownloadView,
     AdminDocumentFieldDetailView,
+    AdminDocumentFieldSignatureView,
     AdminDocumentFieldsView,
     AdminDocumentPagePreviewView,
     AdminDocumentSendView,
@@ -59,6 +60,11 @@ urlpatterns = [
         name="admin-signing-request-resend",
     ),
     path("documents/<uuid:document_id>/fields/", AdminDocumentFieldsView.as_view(), name="admin-document-fields"),
+    path(
+        "documents/<uuid:document_id>/fields/<uuid:field_id>/signature/",
+        AdminDocumentFieldSignatureView.as_view(),
+        name="admin-document-field-signature",
+    ),
     path(
         "documents/<uuid:document_id>/fields/<uuid:field_id>/",
         AdminDocumentFieldDetailView.as_view(),

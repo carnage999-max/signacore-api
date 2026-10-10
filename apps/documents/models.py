@@ -5,7 +5,12 @@ from django.db import models
 
 from apps.accounts.models import Organization
 from utils.encryption import EncryptedEmailField, EncryptedTextField
-from utils.file_storage import encrypted_file_storage, original_pdf_upload_to, signed_pdf_upload_to
+from utils.file_storage import (
+    encrypted_file_storage,
+    original_pdf_upload_to,
+    sender_signature_upload_to,
+    signed_pdf_upload_to,
+)
 
 
 class Document(models.Model):
@@ -69,6 +74,10 @@ class DocumentField(models.Model):
         DROPDOWN = "DROPDOWN", "Dropdown"
         RADIO = "RADIO", "Radio option"
 
+    class AssignedToEnum(models.TextChoices):
+        SENDER = "SENDER", "The sender"
+        SIGNER = "SIGNER", "The signer"
+
     class DetectionSourceEnum(models.TextChoices):
         ACROFORM = "ACROFORM", "AcroForm"
         ANCHOR = "ANCHOR", "Anchor tag"
@@ -98,6 +107,44 @@ class DocumentField(models.Model):
     # Rows sharing a group are the alternatives of a single choice.
     group_key = models.CharField(max_length=64, blank=True, default="")
     option_value = EncryptedTextField(max_length=255, blank=True, default="")
+
+    # Whose field this is.
+    #
+    # Most of an agreement is the sender's to complete - the property, the dates, the amounts,
+    # and their own signature on their own contract. Until there was a word for that, every
+    # field belonged to whoever opened the link, so a landlord could not put the rent on their
+    # own lease, let alone sign it.
+    #
+    # Existing fields are the signer's, which is what they already were.
+    assigned_to = models.CharField(max_length=16, choices=AssignedToEnum.choices, default=AssignedToEnum.SIGNER)
+
+    # What the sender answered, for a field that is theirs. Text and ticks here; a signature is
+    # an image and lives below.
+    sender_value = EncryptedTextField(null=True, blank=True)
+    sender_signature = models.FileField(
+        storage=encrypted_file_storage,
+        upload_to=sender_signature_upload_to,
+        max_length=255,
+        null=True,
+        blank=True,
+    )
+    # A sender's signature is a signature. It carries the same weight as the one the other party
+    # makes, is disputed in the same way, and so is recorded the same way: who made it, when, and
+    # from where.
+    sender_filled_at = models.DateTimeField(null=True, blank=True)
+    sender_filled_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="signacore_sender_filled_fields",
+    )
+    sender_filled_ip = EncryptedTextField(null=True, blank=True)
+
+    @property
+    def is_filled_by_sender(self) -> bool:
+        """Whether the sender has already answered this, leaving nothing for the signer to do."""
+        return bool(self.sender_value) or bool(self.sender_signature)
 
     class Meta:
         ordering = ("page", "order")

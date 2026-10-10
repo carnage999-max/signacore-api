@@ -36,6 +36,11 @@ def signed_pdf_upload_to(instance, filename: str) -> str:
     return f"signacore/signed/{uuid.uuid4()}.pdf"
 
 
+def sender_signature_upload_to(instance, filename: str) -> str:
+    """The sender's own signature on their own field, kept apart from the signers'."""
+    return f"signacore/signatures/sender-{instance.id}.png"
+
+
 def signature_image_upload_to(instance, filename: str) -> str:
     return f"signacore/signatures/{uuid.uuid4()}.png"
 

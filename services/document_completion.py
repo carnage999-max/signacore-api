@@ -55,7 +55,11 @@ def issue_signed_copy(signing_request) -> None:
     with ExitStack() as stack:
         source_path = stack.enter_context(temporary_plaintext_file(document.original_pdf, suffix=".pdf"))
         output_path = stack.enter_context(temporary_output_file(suffix=".pdf"))
-        PDFEngine().flatten(source_path, output_path, _flatten_payload(submissions, stack))
+        PDFEngine().flatten(
+            source_path,
+            output_path,
+            _sender_payload(document, stack) + _flatten_payload(submissions, stack),
+        )
         save_encrypted_field_file(
             signing_request.signed_pdf,
             output_path,
@@ -83,6 +87,60 @@ def refresh_document_status(document: Document) -> None:
     if document.status != status:
         document.status = status
         document.save(update_fields=["status", "updated_at"])
+
+
+def _sender_payload(document, stack) -> list[dict]:
+    """What the sender answered on their own fields, drawn the way a signer's answers are.
+
+    These carry no FieldSubmission - nobody submitted them, the sender set them on the document
+    before it went out - so without this every completed copy would arrive with the agreement's
+    own terms missing, and the sender's signature absent from a contract they signed.
+    """
+    from apps.documents.models import DocumentField
+
+    payload = []
+    for field in document.fields.all():
+        if not field.is_filled_by_sender:
+            continue
+        if field.sender_signature:
+            payload.append(
+                {
+                    "page": field.page,
+                    "field_type": field.field_type,
+                    "max_length": field.max_length,
+                    "is_comb": field.is_comb,
+                    "x": field.x,
+                    "y": field.y,
+                    "width": field.width,
+                    "height": field.height,
+                    "value_type": "SIGNATURE_PNG",
+                    "text_value": "",
+                    "image_path": str(
+                        stack.enter_context(temporary_plaintext_file(field.sender_signature, suffix=".png"))
+                    ),
+                }
+            )
+            continue
+        is_tick = field.field_type in {
+            DocumentField.FieldTypeEnum.CHECKBOX,
+            DocumentField.FieldTypeEnum.RADIO,
+        }
+        payload.append(
+            {
+                "page": field.page,
+                "field_type": field.field_type,
+                "max_length": field.max_length,
+                "is_comb": field.is_comb,
+                "x": field.x,
+                "y": field.y,
+                "width": field.width,
+                "height": field.height,
+                "value_type": "CHECKBOX" if is_tick else "TEXT",
+                "text_value": field.sender_value,
+                "image_path": "",
+            }
+        )
+    return payload
 
 
 def _flatten_payload(submissions, stack) -> list[dict]:
@@ -169,7 +227,7 @@ def issue_completed_document(document: Document) -> None:
                 }
             )
 
-        PDFEngine().flatten(source_path, output_path, flatten_submissions)
+        PDFEngine().flatten(source_path, output_path, _sender_payload(document, stack) + flatten_submissions)
         save_encrypted_field_file(document.signed_pdf, output_path, filename=f"{document.id}-signed.pdf")
 
     document.status = Document.StatusEnum.COMPLETED

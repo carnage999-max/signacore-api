@@ -5,6 +5,7 @@ from .views import (
     SignerOtpSendView,
     SignerOtpVerifyView,
     SignerPagePreviewView,
+    SignerSenderSignatureView,
     SignerSignedCopyView,
     SignerSubmitView,
 )
@@ -12,6 +13,11 @@ from .views import (
 urlpatterns = [
     path("<uuid:token>/", SignerContextView.as_view(), name="signer-context"),
     path("<uuid:token>/pages/<int:page_number>/preview/", SignerPagePreviewView.as_view(), name="signer-page-preview"),
+    path(
+        "<uuid:token>/fields/<uuid:field_id>/sender-signature/",
+        SignerSenderSignatureView.as_view(),
+        name="signer-sender-signature",
+    ),
     path("<uuid:token>/otp/send/", SignerOtpSendView.as_view(), name="signer-otp-send"),
     path("<uuid:token>/otp/verify/", SignerOtpVerifyView.as_view(), name="signer-otp-verify"),
     path("<uuid:token>/submit/", SignerSubmitView.as_view(), name="signer-submit"),
