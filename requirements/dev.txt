@@ -4,6 +4,12 @@ pre-commit>=4.0,<5.0
 black>=25.1,<27.0
 isort>=6.0,<7.0
 ruff>=0.11,<1.0
+pytest>=8.3,<9.0
+pytest-django>=4.9,<5.0
+pytest-cov>=6.0,<8.0
+# Splits the suite across the runner's cores. The suite is mostly PDF work and password hashing,
+# which is CPU-bound and parallelises well; on one core it was taking over five minutes.
+pytest-xdist>=3.6,<4.0
 # Used by the test that reads docker-compose.yml. It arrives as a dependency of pre-commit anyway,
 # but a test that depends on it should say so.
 PyYAML>=6.0,<7.0
