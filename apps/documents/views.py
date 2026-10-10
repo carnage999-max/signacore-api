@@ -26,7 +26,8 @@ from rest_framework.views import APIView
 
 from apps.accounts.models import AccountProfile, OrganizationMembership
 from apps.billing.entitlements import PlanFeatureEnum, require_feature, require_monthly_document_capacity
-from apps.signing.models import SigningRequest
+from apps.signing.events import record_signing_event
+from apps.signing.models import SigningEvent, SigningRequest
 from services.authored_pdf import AuthoredPDFRenderer
 from services.docx_import import DocxImporter, DocxImportError
 from services.pdf_engine import PDFEngine
@@ -43,6 +44,8 @@ from utils.pdf_preview import (
     preview_is_unchanged,
     with_preview_caching,
 )
+from utils.request_meta import get_client_ip as get_request_ip
+from utils.request_meta import get_user_agent
 from utils.task_dispatch import enqueue_task
 from utils.throttling import SignacoreRateThrottle
 
@@ -102,12 +105,17 @@ def get_scoped_document(request, document_id, *, prefetch: tuple[str, ...] = ())
     return get_object_or_404(queryset, pk=document_id)
 
 
-def get_request_ip(request) -> str:
-    real_ip = request.META.get("HTTP_X_REAL_IP", "").strip()
-    if real_ip:
-        return real_ip
-    forwarded_for = request.META.get("HTTP_X_FORWARDED_FOR", "")
-    return forwarded_for.split(",")[0].strip() if forwarded_for else request.META.get("REMOTE_ADDR", "")
+def describe_actor(request) -> str:
+    """Who did this, for a signer's trail rather than for the admin log.
+
+    The display name if the workspace set one, the email address otherwise, and a plain
+    description when neither is available. Never a user id: this ends up in front of whoever is
+    reading the history of an agreement.
+    """
+    actor = get_admin_actor(request) or get_signacore_service_user()
+    profile = getattr(actor, "signacore_profile", None)
+    name = (getattr(profile, "display_name", "") or "").strip()
+    return name or (getattr(actor, "email", "") or "").strip() or "the workspace"
 
 
 def get_admin_login_url() -> str:
@@ -136,7 +144,7 @@ def log_admin_event(
         summary=summary,
         metadata=metadata or {},
         ip_address=get_request_ip(request),
-        user_agent=request.META.get("HTTP_USER_AGENT", ""),
+        user_agent=get_user_agent(request),
     )
 
 
@@ -488,7 +496,9 @@ class AdminDocumentsView(APIView):
                 },
             )
 
-        document = Document.objects.prefetch_related("fields", "signing_requests").get(pk=document.pk)
+        document = Document.objects.prefetch_related("fields", "signing_requests", "signing_requests__events").get(
+            pk=document.pk
+        )
         payload = serialize_document_detail(document)
         payload["page_count"] = page_count
         return Response(payload, status=status.HTTP_201_CREATED)
@@ -544,7 +554,9 @@ class AdminAuthoredDocumentView(APIView):
                 metadata={"field_count": len(rendered_fields)},
             )
 
-        document = Document.objects.prefetch_related("fields", "signing_requests").get(pk=document.pk)
+        document = Document.objects.prefetch_related("fields", "signing_requests", "signing_requests__events").get(
+            pk=document.pk
+        )
         return Response(serialize_document_detail(document), status=status.HTTP_201_CREATED)
 
 
@@ -589,7 +601,9 @@ class AdminAuthoredDocumentDetailView(APIView):
     serializer_class = AuthoredDocumentSerializer
 
     def get(self, request, document_id):
-        document = get_scoped_document(request, document_id, prefetch=("fields", "signing_requests"))
+        document = get_scoped_document(
+            request, document_id, prefetch=("fields", "signing_requests", "signing_requests__events")
+        )
         if document.source != Document.SourceEnum.AUTHORED:
             raise ValidationError({"document": ["Only authored documents can be opened here."]})
         try:
@@ -648,7 +662,9 @@ class AdminAuthoredDocumentDetailView(APIView):
                 metadata={"field_count": len(rendered_fields)},
             )
 
-        document = Document.objects.prefetch_related("fields", "signing_requests").get(pk=document.pk)
+        document = Document.objects.prefetch_related("fields", "signing_requests", "signing_requests__events").get(
+            pk=document.pk
+        )
         return Response(serialize_document_detail(document), status=status.HTTP_200_OK)
 
 
@@ -659,7 +675,9 @@ class AdminDocumentDetailView(APIView):
 
     @extend_schema(operation_id="admin_documents_get")
     def get(self, request, document_id):
-        document = get_scoped_document(request, document_id, prefetch=("fields", "signing_requests"))
+        document = get_scoped_document(
+            request, document_id, prefetch=("fields", "signing_requests", "signing_requests__events")
+        )
         log_admin_event(
             request,
             AdminAuditLog.ActionEnum.DOCUMENT_VIEW,
@@ -802,7 +820,9 @@ class AdminDocumentSendView(APIView):
     serializer_class = DocumentSendSerializer
 
     def post(self, request, document_id):
-        document = get_scoped_document(request, document_id, prefetch=("fields", "signing_requests"))
+        document = get_scoped_document(
+            request, document_id, prefetch=("fields", "signing_requests", "signing_requests__events")
+        )
         actor, organization = get_request_actor_and_organization(request)
         require_monthly_document_capacity(actor, organization, operation="send", document=document)
         serializer = DocumentSendSerializer(data=request.data)
@@ -871,6 +891,12 @@ class AdminDocumentSendView(APIView):
 
         for signing_request in created_requests:
             enqueue_task(send_invitation_email_for_request, str(signing_request.id))
+            record_signing_event(
+                signing_request,
+                SigningEvent.EventEnum.SENT,
+                request=request,
+                detail=f"Sent by {describe_actor(request)}",
+            )
         log_admin_event(
             request,
             AdminAuditLog.ActionEnum.SIGNING_REQUEST_SEND,
@@ -885,7 +911,9 @@ class AdminDocumentSendView(APIView):
                 "had_message": bool(message),
             },
         )
-        document = Document.objects.prefetch_related("fields", "signing_requests").get(pk=document.pk)
+        document = Document.objects.prefetch_related("fields", "signing_requests", "signing_requests__events").get(
+            pk=document.pk
+        )
         payload = serialize_document_detail(document)
         payload["signer_count"] = len(created_requests)
         return Response(payload, status=status.HTTP_200_OK)
@@ -995,7 +1023,9 @@ class AdminSigningRequestResendView(APIView):
     serializer_class = AdminDocumentDetailSerializer
 
     def post(self, request, document_id, signing_request_id):
-        document = get_scoped_document(request, document_id, prefetch=("signing_requests", "fields"))
+        document = get_scoped_document(
+            request, document_id, prefetch=("signing_requests", "signing_requests__events", "fields")
+        )
         signing_request = get_object_or_404(
             SigningRequest.objects.prefetch_related("submissions"),
             pk=signing_request_id,
@@ -1016,7 +1046,18 @@ class AdminSigningRequestResendView(APIView):
             )
 
         expiry = timezone.now() + timedelta(days=settings.SIGNING_LINK_EXPIRY_DAYS)
+        discarded_signature = signing_request.status == SigningRequest.StatusEnum.SIGNED
         with transaction.atomic():
+            record_signing_event(
+                signing_request,
+                SigningEvent.EventEnum.REOPENED,
+                request=request,
+                detail=(
+                    f"Reopened by {describe_actor(request)}, discarding a completed signature"
+                    if discarded_signature
+                    else f"Reopened by {describe_actor(request)}"
+                ),
+            )
             signing_request.submissions.all().delete()
             signing_request.status = SigningRequest.StatusEnum.PENDING
             signing_request.otp_hash = ""
@@ -1058,6 +1099,12 @@ class AdminSigningRequestResendView(APIView):
             document.save(update_fields=["status", "signed_pdf", "updated_at"])
 
         enqueue_task(send_invitation_email_for_request, str(signing_request.id))
+        record_signing_event(
+            signing_request,
+            SigningEvent.EventEnum.SENT,
+            request=request,
+            detail=f"Re-sent by {describe_actor(request)}",
+        )
         log_admin_event(
             request,
             AdminAuditLog.ActionEnum.SIGNING_REQUEST_RESEND,
@@ -1066,7 +1113,9 @@ class AdminSigningRequestResendView(APIView):
             target_id=signing_request.id,
             metadata={"document_id": str(document.id)},
         )
-        document = Document.objects.prefetch_related("fields", "signing_requests").get(pk=document.pk)
+        document = Document.objects.prefetch_related("fields", "signing_requests", "signing_requests__events").get(
+            pk=document.pk
+        )
         return Response(serialize_document_detail(document), status=status.HTTP_200_OK)
 
 
@@ -1076,7 +1125,7 @@ class AdminDocumentVoidView(APIView):
     serializer_class = DocumentUpdateSerializer
 
     def post(self, request, document_id):
-        document = get_scoped_document(request, document_id, prefetch=("signing_requests",))
+        document = get_scoped_document(request, document_id, prefetch=("signing_requests", "signing_requests__events"))
         if document.status not in {Document.StatusEnum.SENT, Document.StatusEnum.PARTIALLY_SIGNED}:
             return Response(
                 {"status": ["Only sent or partially signed documents can be voided."]},
@@ -1102,7 +1151,9 @@ class AdminDocumentVoidView(APIView):
             target_id=document.id,
             metadata={"reason_provided": bool(reason)},
         )
-        document = Document.objects.prefetch_related("fields", "signing_requests").get(pk=document.pk)
+        document = Document.objects.prefetch_related("fields", "signing_requests", "signing_requests__events").get(
+            pk=document.pk
+        )
         return Response(AdminDocumentDetailSerializer(document).data, status=status.HTTP_200_OK)
 
 

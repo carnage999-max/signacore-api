@@ -1,6 +1,15 @@
 from rest_framework import serializers
 
-from .models import FieldSubmission, SigningRequest
+from .models import FieldSubmission, SigningEvent, SigningRequest
+
+
+class SigningEventSerializer(serializers.ModelSerializer):
+    label = serializers.CharField(source="get_event_display", read_only=True)
+
+    class Meta:
+        model = SigningEvent
+        fields = ("id", "event", "label", "at", "ip_address", "user_agent", "detail")
+        read_only_fields = fields
 
 
 class SigningRequestSerializer(serializers.ModelSerializer):
@@ -8,6 +17,9 @@ class SigningRequestSerializer(serializers.ModelSerializer):
     # rows have something to download, so it fell back to the whole document being finished - and
     # a signer who had signed could not have their copy fetched until everybody else had too.
     signed_copy_ready = serializers.SerializerMethodField()
+    # The history behind this signature, oldest first. The single ip_address and user_agent below
+    # are the last ones seen; these are every one of them, with what each was doing at the time.
+    events = SigningEventSerializer(many=True, read_only=True)
 
     class Meta:
         model = SigningRequest
@@ -24,6 +36,7 @@ class SigningRequestSerializer(serializers.ModelSerializer):
             "expires_at",
             "ip_address",
             "user_agent",
+            "events",
         )
 
     def get_signed_copy_ready(self, obj: SigningRequest) -> bool:

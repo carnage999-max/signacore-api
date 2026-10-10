@@ -2,6 +2,7 @@ import uuid
 
 from django.conf import settings
 from django.db import models
+from django.utils import timezone
 
 from apps.documents.models import Document, DocumentField
 from utils.encryption import EncryptedEmailField, EncryptedTextField
@@ -72,6 +73,48 @@ class SigningRequest(models.Model):
         if update_fields is not None and "signer_email" in update_fields:
             kwargs["update_fields"] = set(update_fields) | {"signer_email_hash"}
         return super().save(*args, **kwargs)
+
+
+class SigningEvent(models.Model):
+    """One thing that happened to a signing request, and where it happened from.
+
+    SigningRequest carries a single ip_address and user_agent, written when the code is verified
+    and overwritten when the document is signed. That is a snapshot, not a history: a signer who
+    verified on one network and signed on another left no trace of the first, and a document
+    nobody ever opened looked exactly like one opened ten times.
+
+    Rows here are only ever added. Nothing in the product updates or deletes one, because the
+    value of a trail is that it was not edited afterwards.
+    """
+
+    class EventEnum(models.TextChoices):
+        SENT = "SENT", "Signing request sent"
+        OPENED = "OPENED", "Document opened"
+        CODE_SENT = "CODE_SENT", "Verification code sent"
+        CODE_VERIFIED = "CODE_VERIFIED", "Email verified"
+        SIGNED = "SIGNED", "Signed and submitted"
+        REOPENED = "REOPENED", "Reopened for correction"
+        COPY_DELIVERED = "COPY_DELIVERED", "Completed copy emailed"
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    signing_request = models.ForeignKey(SigningRequest, on_delete=models.CASCADE, related_name="events")
+    event = models.CharField(max_length=32, choices=EventEnum.choices)
+    # Set explicitly rather than by auto_now_add, so the backfill of existing requests can record
+    # when each thing actually happened instead of when the migration ran.
+    at = models.DateTimeField(default=timezone.now)
+    ip_address = EncryptedTextField(null=True, blank=True)
+    user_agent = EncryptedTextField(null=True, blank=True)
+    # Anything worth saying about this one event, such as the address a code went to. Encrypted,
+    # because for most events that is somebody's email address.
+    detail = EncryptedTextField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ("at", "created_at")
+        indexes = [models.Index(fields=["signing_request", "at"])]
+
+    def __str__(self) -> str:
+        return f"{self.get_event_display()} at {self.at:%Y-%m-%d %H:%M:%S}"
 
 
 class FieldSubmission(models.Model):
