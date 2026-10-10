@@ -309,6 +309,10 @@ class SignerSenderSignatureView(APIView):
     authentication_classes = []
     throttle_classes = [SignacoreRateThrottle]
     throttle_scope = "signer_preview"
+    # This returns a PNG rather than a serialized object, but the schema generator cannot know
+    # that and warns on every build without one. The page preview beside it says the same thing
+    # for the same reason.
+    serializer_class = SigningRequestSerializer
 
     def get(self, request, token, field_id):
         signing_request = get_signing_request_or_404(token)
