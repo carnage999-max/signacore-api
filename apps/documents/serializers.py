@@ -50,7 +50,13 @@ class DocxImportSerializer(serializers.Serializer):
 
 
 class DocumentFieldSerializer(serializers.ModelSerializer):
-    is_prefilled = serializers.BooleanField(read_only=True)
+    is_filled_by_sender = serializers.BooleanField(read_only=True)
+    # Whether there is a mark to draw, rather than where it is kept. The signer's portal renders
+    # from this and has no business holding a path into our storage.
+    has_sender_signature = serializers.SerializerMethodField()
+
+    def get_has_sender_signature(self, field) -> bool:
+        return bool(field.sender_signature)
 
     class Meta:
         model = DocumentField
@@ -71,10 +77,12 @@ class DocumentFieldSerializer(serializers.ModelSerializer):
             "options",
             "group_key",
             "option_value",
-            "prefilled_value",
-            "is_prefilled",
+            "assigned_to",
+            "sender_value",
+            "is_filled_by_sender",
+            "has_sender_signature",
         )
-        read_only_fields = ("id", "detection_source", "prefilled_value", "is_prefilled")
+        read_only_fields = ("id", "detection_source", "sender_value", "is_filled_by_sender", "has_sender_signature")
 
 
 class ManualDocumentFieldCreateSerializer(serializers.ModelSerializer):
@@ -116,7 +124,8 @@ class DocumentFieldUpdateSerializer(serializers.ModelSerializer):
             "options",
             "group_key",
             "option_value",
-            "prefilled_value",
+            "assigned_to",
+            "sender_value",
         )
         extra_kwargs = {
             "field_type": {"required": False},
@@ -133,24 +142,31 @@ class DocumentFieldUpdateSerializer(serializers.ModelSerializer):
             "options": {"required": False, "allow_null": True},
             "group_key": {"required": False},
             "option_value": {"required": False},
-            "prefilled_value": {"required": False, "allow_null": True, "allow_blank": True},
+            "assigned_to": {"required": False},
+            "sender_value": {"required": False, "allow_null": True, "allow_blank": True},
         }
-
-    # A sender may fill in the parts of an agreement that are theirs to fill. A signature and a
-    # set of initials are never among them: one party producing another party's mark is forgery,
-    # whatever the interface called it, and the value of the whole product rests on that line
-    # holding. Refused here rather than in the editor, because the editor is not the only way in.
-    UNFILLABLE_BY_THE_SENDER = frozenset(
-        {
-            DocumentField.FieldTypeEnum.SIGNATURE,
-            DocumentField.FieldTypeEnum.INITIALS,
-        }
-    )
 
     def validate(self, attrs):
         attrs = super().validate(attrs)
-        if "prefilled_value" not in attrs:
+        if "sender_value" not in attrs:
             return attrs
+        if not str(attrs.get("sender_value") or "").strip():
+            return attrs
+
+        # Whose field this is after the request, which is not always whose it was before: one
+        # request may reassign a field and answer it at the same time, and a check reading only
+        # the stored owner would let that through.
+        #
+        # The rule is about ownership, not about type. A sender signing their own signature
+        # field on their own contract is ordinary and necessary - a lease has a landlord's
+        # signature as well as a tenant's. What must never happen is one party producing the
+        # other party's mark, and that is a question of whose field it is.
+        assigned_to = attrs.get("assigned_to") or getattr(self.instance, "assigned_to", None)
+        if assigned_to != DocumentField.AssignedToEnum.SENDER:
+            raise serializers.ValidationError(
+                {"sender_value": ["Only a field assigned to the sender can be answered by the sender."]}
+            )
+        return attrs
         if not str(attrs.get("prefilled_value") or "").strip():
             return attrs
 

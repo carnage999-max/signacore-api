@@ -295,6 +295,43 @@ class SignerSignedCopyView(APIView):
         return response
 
 
+class SignerSenderSignatureView(APIView):
+    """The mark the other party already made, shown to the person being asked to sign.
+
+    Somebody agreeing to a countersigned contract should be able to see that it is countersigned
+    before they add their own name to it, not only afterwards on the copy that arrives by email.
+
+    Gated on the same verified session as the document itself, and only ever for a field the
+    sender owns: nothing here can reach a signature belonging to another signer.
+    """
+
+    permission_classes = []
+    authentication_classes = []
+    throttle_classes = [SignacoreRateThrottle]
+    throttle_scope = "signer_preview"
+
+    def get(self, request, token, field_id):
+        signing_request = get_signing_request_or_404(token)
+        if not has_verified_signer_session(request, signing_request):
+            return Response({"detail": "Verification required."}, status=status.HTTP_403_FORBIDDEN)
+
+        field = get_object_or_404(
+            DocumentField,
+            pk=field_id,
+            document=signing_request.document,
+            assigned_to=DocumentField.AssignedToEnum.SENDER,
+        )
+        if not field.sender_signature:
+            raise Http404
+
+        with temporary_plaintext_file(field.sender_signature, suffix=".png") as path:
+            payload = Path(path).read_bytes()
+        response = HttpResponse(payload, content_type="image/png")
+        # Private: it is one party's signature on one agreement, not a public asset.
+        response["Cache-Control"] = "private, max-age=300"
+        return response
+
+
 class SignerOtpSendView(APIView):
     permission_classes = []
     authentication_classes = []
@@ -408,10 +445,12 @@ class SignerSubmitView(APIView):
             field_type_key = f"field_{document_field.id}_type"
             selected_type = request.data.get(field_type_key)
 
-            # Already answered by the sender. Not the signer's to complete, and not theirs to
-            # change either: a value they could overwrite is not a value the sender can rely on
-            # having sent. Refused rather than ignored, so a client that tries is told.
-            if document_field.is_prefilled:
+            # The sender's field. Never the signer's to complete, and not theirs to change
+            # either: a value they could overwrite is not a value the sender can rely on having
+            # sent. Keyed on whose field it is rather than on whether it has a value, or a
+            # sender who left their own field blank would hand it to the signer by accident.
+            # Refused rather than ignored, so a client that tries is told.
+            if document_field.assigned_to == DocumentField.AssignedToEnum.SENDER:
                 if selected_type:
                     field_errors[str(document_field.id)] = [
                         "This field was completed by the sender and cannot be changed.",

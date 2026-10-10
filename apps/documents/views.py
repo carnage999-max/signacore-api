@@ -110,6 +110,23 @@ def get_request_ip(request) -> str:
     return forwarded_for.split(",")[0].strip() if forwarded_for else request.META.get("REMOTE_ADDR", "")
 
 
+def _sender_answer_stamp(request) -> dict:
+    """Who answered for the sender, when, and from where.
+
+    A value on an agreement that nobody is named against is the kind of thing a dispute turns
+    on, and a sender's signature is a signature: it is recorded the way the other party's is.
+    """
+    return {
+        "sender_filled_at": timezone.now(),
+        "sender_filled_by": get_admin_actor(request),
+        "sender_filled_ip": get_request_ip(request),
+    }
+
+
+def _sender_answer_cleared() -> dict:
+    return {"sender_filled_at": None, "sender_filled_by": None, "sender_filled_ip": ""}
+
+
 def get_admin_login_url() -> str:
     return f"{settings.SIGNACORE_APP_URL.rstrip('/')}/admin/login"
 
@@ -764,16 +781,20 @@ class AdminDocumentFieldDetailView(APIView):
         )
         serializer = DocumentFieldUpdateSerializer(field, data=request.data, partial=True)
         serializer.is_valid(raise_exception=True)
-        # Who answered for the sender, and when. A value on the document that nobody is named
-        # against is the kind of thing a dispute turns on, so it is stamped where it is set
-        # rather than inferred later from an audit line.
-        if "prefilled_value" in serializer.validated_data:
-            actor = get_admin_actor(request)
-            has_value = bool(str(serializer.validated_data.get("prefilled_value") or "").strip())
-            serializer.save(
-                prefilled_at=timezone.now() if has_value else None,
-                prefilled_by=actor if has_value else None,
-            )
+        reassigned_to_signer = (
+            serializer.validated_data.get("assigned_to") == DocumentField.AssignedToEnum.SIGNER
+            and field.assigned_to == DocumentField.AssignedToEnum.SENDER
+        )
+        if reassigned_to_signer:
+            # Handing a field back to the signer takes the sender's answer with it, signature
+            # included. Leaving it behind would draw one party's mark on a field the other party
+            # is now being asked to complete.
+            if field.sender_signature:
+                field.sender_signature.delete(save=False)
+            serializer.save(sender_value="", sender_signature=None, **_sender_answer_cleared())
+        elif "sender_value" in serializer.validated_data:
+            has_value = bool(str(serializer.validated_data.get("sender_value") or "").strip())
+            serializer.save(**(_sender_answer_stamp(request) if has_value else _sender_answer_cleared()))
         else:
             serializer.save()
         log_admin_event(
@@ -805,6 +826,99 @@ class AdminDocumentFieldDetailView(APIView):
             metadata={"document_id": str(document_id)},
         )
         return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+class AdminDocumentFieldSignatureView(APIView):
+    """The sender signing their own field on their own contract.
+
+    A separate endpoint because a signature is an image rather than a value, and because this is
+    not an edit to a field's shape: it is one party making their mark, recorded with who made
+    it, when, and from where, exactly as the other party's is.
+    """
+
+    authentication_classes = []
+    permission_classes = [HasValidSignacoreSecret]
+    parser_classes = [MultiPartParser, FormParser]
+    serializer_class = DocumentFieldSerializer
+
+    def post(self, request, document_id, field_id):
+        _, organization = get_request_actor_and_organization(request)
+        field = get_object_or_404(
+            DocumentField,
+            pk=field_id,
+            document_id=document_id,
+            document__organization=organization,
+        )
+        if field.assigned_to != DocumentField.AssignedToEnum.SENDER:
+            return Response(
+                {"detail": "Only a field assigned to the sender can be signed by the sender."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if field.field_type not in {
+            DocumentField.FieldTypeEnum.SIGNATURE,
+            DocumentField.FieldTypeEnum.INITIALS,
+        }:
+            return Response(
+                {"detail": "This field is not a signature or set of initials."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        image = request.FILES.get("signature")
+        if image is None:
+            return Response({"signature": ["A signature image is required."]}, status=status.HTTP_400_BAD_REQUEST)
+
+        if field.sender_signature:
+            field.sender_signature.delete(save=False)
+        field.sender_signature = image
+        for attribute, value in _sender_answer_stamp(request).items():
+            setattr(field, attribute, value)
+        field.save(
+            update_fields=[
+                "sender_signature",
+                "sender_filled_at",
+                "sender_filled_by",
+                "sender_filled_ip",
+            ]
+        )
+        log_admin_event(
+            request,
+            AdminAuditLog.ActionEnum.FIELD_UPDATE,
+            f"Signed their own field: {field.label}.",
+            target_type="document_field",
+            target_id=field.id,
+            metadata={"document_id": str(document_id), "signed_by_sender": True},
+        )
+        return Response(DocumentFieldSerializer(field).data, status=status.HTTP_200_OK)
+
+    def delete(self, request, document_id, field_id):
+        _, organization = get_request_actor_and_organization(request)
+        field = get_object_or_404(
+            DocumentField,
+            pk=field_id,
+            document_id=document_id,
+            document__organization=organization,
+        )
+        if field.sender_signature:
+            field.sender_signature.delete(save=False)
+        field.sender_signature = None
+        for attribute, value in _sender_answer_cleared().items():
+            setattr(field, attribute, value)
+        field.save(
+            update_fields=[
+                "sender_signature",
+                "sender_filled_at",
+                "sender_filled_by",
+                "sender_filled_ip",
+            ]
+        )
+        log_admin_event(
+            request,
+            AdminAuditLog.ActionEnum.FIELD_UPDATE,
+            f"Removed their own signature from: {field.label}.",
+            target_type="document_field",
+            target_id=field.id,
+            metadata={"document_id": str(document_id)},
+        )
+        return Response(DocumentFieldSerializer(field).data, status=status.HTTP_200_OK)
 
 
 class AdminDocumentSendView(APIView):
@@ -853,6 +967,25 @@ class AdminDocumentSendView(APIView):
         if already_present:
             return Response(
                 {"signers": [f"Signer already exists on this document: {', '.join(already_present)}."]},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        unanswered = [
+            field.label
+            for field in document.fields.all()
+            if field.assigned_to == DocumentField.AssignedToEnum.SENDER
+            and field.is_required
+            and not field.is_filled_by_sender
+        ]
+        if unanswered:
+            # These are the sender's own fields, so nobody downstream will ever fill them. Sent
+            # as they are, the agreement arrives with its own terms blank and no one to ask.
+            return Response(
+                {
+                    "fields": [
+                        "Your own fields are not finished yet: " + ", ".join(sorted(unanswered)) + ".",
+                    ]
+                },
                 status=status.HTTP_400_BAD_REQUEST,
             )
 

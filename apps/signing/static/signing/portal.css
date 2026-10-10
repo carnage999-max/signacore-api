@@ -1099,13 +1099,13 @@ input {
    Part of the agreement rather than part of the work. Drawn on the page where it belongs, in
    the ink of the document rather than the blue of a field waiting for an answer, and carrying
    no control: there is nothing here to focus, tab into, or change. */
-.field-overlay-prefilled {
+.field-overlay-sender {
   background: transparent;
   box-shadow: none;
   pointer-events: none;
 }
 
-.prefilled-value {
+.sender-answered-value {
   display: block;
   width: 100%;
   padding: 0 2px;
@@ -1115,4 +1115,12 @@ input {
   line-height: 1.1;
   white-space: nowrap;
   text-overflow: ellipsis;
+}
+
+.sender-answered-mark {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  object-position: left center;
 }

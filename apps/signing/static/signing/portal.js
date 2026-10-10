@@ -149,13 +149,19 @@
     return payload;
   }
 
+  // Whose field it is decides whether the signer is asked for it. A sender field with no
+  // value is still not the signer's; the service refuses it before it ever gets here.
+  function isSendersField(field) {
+    return field.assigned_to === "SENDER";
+  }
+
   function getFieldValue(fieldId) {
     return state.values[fieldId] || null;
   }
 
   function fieldIsComplete(field) {
     // Nothing is outstanding about a field the sender already answered.
-    if (field.is_prefilled) return true;
+    if (isSendersField(field)) return true;
     const value = getFieldValue(field.id);
     if (!value) return false;
     if (field.field_type === "TEXT" || field.field_type === "MULTILINE") {
@@ -186,13 +192,13 @@
   function outstandingRequiredFields() {
     if (!state.context) return [];
     return state.context.fields
-      .filter((field) => !field.is_prefilled && field.is_required && !fieldIsComplete(field))
+      .filter((field) => !isSendersField(field) && field.is_required && !fieldIsComplete(field))
       .sort((first, second) => first.page - second.page || first.order - second.order);
   }
 
   function updateProgressSummary() {
     if (!nodes.progressSummary || !state.context) return;
-    const total = state.context.fields.filter((field) => !field.is_prefilled && field.is_required).length;
+    const total = state.context.fields.filter((field) => !isSendersField(field) && field.is_required).length;
     const outstanding = outstandingRequiredFields().length;
     if (!total) {
       nodes.progressSummary.textContent = `${state.context.fields.length} field${state.context.fields.length === 1 ? "" : "s"} to review`;
@@ -305,7 +311,7 @@
     nodes.fieldList.innerHTML = "";
 
     state.context.fields.forEach((field) => {
-      if (field.is_prefilled) return;
+      if (isSendersField(field)) return;
       const item = document.createElement("div");
       const complete = fieldIsComplete(field);
       item.className = "field-list-item";
@@ -331,7 +337,7 @@
   function renderFieldRail() {
     if (!nodes.fieldRail || !state.context) return;
 
-    const fields = state.context.fields.filter((field) => !field.is_prefilled);
+    const fields = state.context.fields.filter((field) => !isSendersField(field));
     nodes.fieldRail.hidden = state.submitted || fields.length === 0;
     nodes.fieldRail.innerHTML = "";
 
@@ -353,14 +359,24 @@
     });
   }
 
-  function buildPrefilledField(field) {
+  function buildSenderAnsweredField(field) {
     // Drawn, not operated. The sender has already answered this and the signer cannot change it,
     // so there is no control here to focus, tab into, or submit - only the value, where it sits
     // on the page, so the agreement reads whole.
+    if (field.has_sender_signature) {
+      // The other party's mark, shown where it sits on the page. An image rather than a word,
+      // because "Signed" is a claim and this is the thing itself.
+      const mark = document.createElement("img");
+      mark.className = "sender-answered-mark";
+      mark.src = `/api/sign/${app.dataset.signingToken}/fields/${field.id}/sender-signature/`;
+      mark.alt = `${field.label}, already signed by the sender`;
+      return mark;
+    }
+
     const value = document.createElement("span");
-    value.className = "prefilled-value";
+    value.className = "sender-answered-value";
     const isTickBox = field.field_type === "CHECKBOX" || field.field_type === "RADIO";
-    const raw = String(field.prefilled_value ?? "");
+    const raw = String(field.sender_value ?? "");
     if (isTickBox) {
       const ticked = ["true", "1", "yes", "on"].includes(raw.trim().toLowerCase());
       value.textContent = ticked ? "\u2713" : "";
@@ -797,9 +813,9 @@
           const minHeightPercent = isTextual || field.field_type === "DROPDOWN" ? 1.15 : isTickBox ? 1.2 : 1.8;
 
           fieldNode.className = `field-overlay ${typeClassName} ${
-            field.is_prefilled ? "field-overlay-prefilled" : field.is_required ? "field-overlay-required" : ""
+            isSendersField(field) ? "field-overlay-sender" : field.is_required ? "field-overlay-required" : ""
           } ${state.fieldErrors[field.id] ? "field-error" : ""} ${
-            !field.is_prefilled && fieldIsComplete(field) ? "field-filled" : ""
+            !isSendersField(field) && fieldIsComplete(field) ? "field-filled" : ""
           }`;
           fieldNode.style.top = `${top}%`;
           fieldNode.style.left = `${left}%`;
@@ -810,8 +826,8 @@
           fieldNode.title = field.label;
 
           let fieldContent;
-          if (field.is_prefilled) {
-            fieldContent = buildPrefilledField(field);
+          if (isSendersField(field)) {
+            fieldContent = buildSenderAnsweredField(field);
           } else if (field.field_type === "TEXT") {
             fieldContent = buildTextField(field);
           } else if (field.field_type === "MULTILINE") {
@@ -1228,7 +1244,7 @@
     state.fieldErrors = {};
 
     state.context.fields.forEach((field) => {
-      if (field.is_prefilled) return;
+      if (isSendersField(field)) return;
       const value = getFieldValue(field.id);
       if (!value) return;
 
