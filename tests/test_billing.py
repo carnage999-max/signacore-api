@@ -14,7 +14,10 @@ from rest_framework.test import APIClient
 
 from apps.accounts.models import Organization, OrganizationMembership
 from apps.billing.models import BillingPlanConfiguration, OrganizationSubscription, StripeWebhookEvent
+from apps.billing.views import sync_subscription_object
 from apps.documents.models import AdminAuditLog
+from services.stripe_client import StripeAPIClient
+from tasks.notifications import sync_organization_seat_quantity
 
 
 @override_settings(
@@ -417,3 +420,211 @@ class BillingApiTests(TestCase):
         signed_payload = str(timestamp).encode() + b"." + payload
         digest = hmac.new(b"whsec_test_secret", signed_payload, hashlib.sha256).hexdigest()
         return f"t={timestamp},v1={digest}"
+
+
+@override_settings(
+    SIGNACORE_SHARED_SECRET="test-signacore-secret",
+    STRIPE_SECRET_KEY="sk_test_secret",
+    EMAIL_BACKEND="django.core.mail.backends.locmem.EmailBackend",
+)
+class SeatQuantitySyncTests(TestCase):
+    """Billing a Business workspace for the people actually in it.
+
+    Seats are set once, at checkout. Everything after that - somebody accepting an invitation,
+    somebody being removed - depends on this task, and a workspace that is charged per member
+    has to be charged for the members it has.
+    """
+
+    def setUp(self) -> None:
+        self.owner = get_user_model().objects.create_user(
+            username="seat-owner",
+            email="seat-owner@example.com",
+            password="password123",
+        )
+        self.organization = Organization.objects.create(name="Seat Company", created_by=self.owner)
+        OrganizationMembership.objects.create(
+            organization=self.organization,
+            user=self.owner,
+            role=OrganizationMembership.RoleEnum.OWNER,
+        )
+        self.subscription = OrganizationSubscription.objects.create(
+            organization=self.organization,
+            plan=OrganizationSubscription.PlanEnum.BUSINESS,
+            status=OrganizationSubscription.StatusEnum.ACTIVE,
+            stripe_customer_id="cus_seat",
+            stripe_subscription_id="sub_seat",
+            stripe_subscription_item_id="si_seat",
+            stripe_subscription_quantity=1,
+        )
+
+    def add_member(self, suffix: str) -> OrganizationMembership:
+        user = get_user_model().objects.create_user(
+            username=f"member-{suffix}",
+            email=f"member-{suffix}@example.com",
+            password="password123",
+        )
+        return OrganizationMembership.objects.create(
+            organization=self.organization,
+            user=user,
+            role=OrganizationMembership.RoleEnum.MEMBER,
+        )
+
+    @patch("services.stripe_client.StripeAPIClient")
+    def test_growing_the_team_bills_for_the_new_seats(self, stripe_client_class) -> None:
+        self.add_member("a")
+        self.add_member("b")
+        stripe_client_class.return_value.update_subscription_item_quantity.return_value = {"quantity": 3}
+
+        sync_organization_seat_quantity(str(self.organization.id))
+
+        stripe_client_class.return_value.update_subscription_item_quantity.assert_called_once_with("si_seat", 3)
+        self.subscription.refresh_from_db()
+        self.assertEqual(self.subscription.stripe_subscription_quantity, 3)
+
+    @patch("services.stripe_client.StripeAPIClient")
+    def test_the_update_names_the_subscription_item(self, stripe_client_class) -> None:
+        """The bug this exists to stop coming back.
+
+        Sending a quantity to the subscription without naming the item does not change the seats:
+        Stripe reads an item with no id as a new line to add. The call has to address the item.
+        """
+        self.add_member("a")
+        stripe_client_class.return_value.update_subscription_item_quantity.return_value = {"quantity": 2}
+
+        sync_organization_seat_quantity(str(self.organization.id))
+
+        client = stripe_client_class.return_value
+        self.assertFalse(client.update_subscription_quantity.called)
+        item_id, quantity = client.update_subscription_item_quantity.call_args.args
+        self.assertEqual(item_id, "si_seat")
+        self.assertEqual(quantity, 2)
+
+    @patch("services.stripe_client.StripeAPIClient")
+    def test_removing_a_member_releases_the_seat(self, stripe_client_class) -> None:
+        membership = self.add_member("a")
+        self.subscription.stripe_subscription_quantity = 2
+        self.subscription.save(update_fields=["stripe_subscription_quantity"])
+        membership.status = OrganizationMembership.StatusEnum.SUSPENDED
+        membership.save(update_fields=["status"])
+        stripe_client_class.return_value.update_subscription_item_quantity.return_value = {"quantity": 1}
+
+        sync_organization_seat_quantity(str(self.organization.id))
+
+        stripe_client_class.return_value.update_subscription_item_quantity.assert_called_once_with("si_seat", 1)
+
+    @patch("services.stripe_client.StripeAPIClient")
+    def test_a_deactivated_user_does_not_hold_a_seat(self, stripe_client_class) -> None:
+        membership = self.add_member("a")
+        membership.user.is_active = False
+        membership.user.save(update_fields=["is_active"])
+        stripe_client_class.return_value.update_subscription_item_quantity.return_value = {"quantity": 1}
+
+        sync_organization_seat_quantity(str(self.organization.id))
+
+        self.assertFalse(stripe_client_class.return_value.update_subscription_item_quantity.called)
+
+    @patch("services.stripe_client.StripeAPIClient")
+    def test_no_change_means_no_call(self, stripe_client_class) -> None:
+        sync_organization_seat_quantity(str(self.organization.id))
+
+        self.assertFalse(stripe_client_class.return_value.update_subscription_item_quantity.called)
+
+    @patch("services.stripe_client.StripeAPIClient")
+    def test_other_plans_stay_at_one_seat(self, stripe_client_class) -> None:
+        self.add_member("a")
+        self.add_member("b")
+        self.subscription.plan = OrganizationSubscription.PlanEnum.PROFESSIONAL
+        self.subscription.stripe_subscription_quantity = 4
+        self.subscription.save(update_fields=["plan", "stripe_subscription_quantity"])
+        stripe_client_class.return_value.update_subscription_item_quantity.return_value = {"quantity": 1}
+
+        sync_organization_seat_quantity(str(self.organization.id))
+
+        stripe_client_class.return_value.update_subscription_item_quantity.assert_called_once_with("si_seat", 1)
+
+    @patch("services.stripe_client.StripeAPIClient")
+    def test_an_older_subscription_learns_its_item_id_once(self, stripe_client_class) -> None:
+        """Subscriptions opened before the id was stored still have to be billable."""
+        self.subscription.stripe_subscription_item_id = ""
+        self.subscription.stripe_subscription_quantity = None
+        self.subscription.save(update_fields=["stripe_subscription_item_id", "stripe_subscription_quantity"])
+        self.add_member("a")
+        client = stripe_client_class.return_value
+        client.retrieve_subscription.return_value = {
+            "id": "sub_seat",
+            "items": {"data": [{"id": "si_recovered", "quantity": 1}]},
+        }
+        client.update_subscription_item_quantity.return_value = {"quantity": 2}
+
+        sync_organization_seat_quantity(str(self.organization.id))
+
+        client.update_subscription_item_quantity.assert_called_once_with("si_recovered", 2)
+        self.subscription.refresh_from_db()
+        self.assertEqual(self.subscription.stripe_subscription_item_id, "si_recovered")
+        self.assertEqual(self.subscription.stripe_subscription_quantity, 2)
+
+    @patch("services.stripe_client.StripeAPIClient")
+    def test_a_workspace_without_a_subscription_is_left_alone(self, stripe_client_class) -> None:
+        self.subscription.stripe_subscription_id = ""
+        self.subscription.save(update_fields=["stripe_subscription_id"])
+
+        sync_organization_seat_quantity(str(self.organization.id))
+
+        self.assertFalse(stripe_client_class.return_value.update_subscription_item_quantity.called)
+
+    def test_the_webhook_records_the_item_the_seats_are_billed_on(self) -> None:
+        """The id is in every subscription webhook, so it should never need fetching twice."""
+        self.subscription.stripe_subscription_item_id = ""
+        self.subscription.save(update_fields=["stripe_subscription_item_id"])
+
+        sync_subscription_object(
+            {
+                "id": "sub_seat",
+                "customer": "cus_seat",
+                "status": "active",
+                "cancel_at_period_end": False,
+                "metadata": {"organization_id": str(self.organization.id), "plan": "BUSINESS"},
+                "items": {"data": [{"id": "si_from_webhook", "quantity": 5, "price": {"id": "price_seat"}}]},
+            },
+            notify=False,
+        )
+
+        self.subscription.refresh_from_db()
+        self.assertEqual(self.subscription.stripe_subscription_item_id, "si_from_webhook")
+        self.assertEqual(self.subscription.stripe_subscription_quantity, 5)
+
+
+@override_settings(STRIPE_SECRET_KEY="sk_test_secret")
+class StripeSeatRequestTests(TestCase):
+    """What actually goes over the wire when seats change.
+
+    The original defect was not in which method got called, it was in the body of the request:
+    a quantity posted to the subscription with no item id. Stripe reads that as a new line to
+    add rather than a change to the existing one, so the seat count never moved. Asserting on
+    the request is the only way that failure is visible from a test.
+    """
+
+    @patch("services.stripe_client.BaseAPIClient.post")
+    def test_the_quantity_is_addressed_to_the_item(self, post) -> None:
+        post.return_value.json.return_value = {"id": "si_123", "quantity": 4}
+
+        StripeAPIClient().update_subscription_item_quantity("si_123", 4)
+
+        path = post.call_args.args[0]
+        data = post.call_args.kwargs["data"]
+        self.assertEqual(path, "/subscription_items/si_123")
+        self.assertEqual(data["quantity"], "4")
+        self.assertEqual(data["proration_behavior"], "create_prorations")
+        # Nothing addressed at the subscription, and no bare items[] that Stripe would read as
+        # a line to add.
+        self.assertNotIn("/subscriptions/", path)
+        self.assertFalse([key for key in data if key.startswith("items[")])
+
+    @patch("services.stripe_client.BaseAPIClient.post")
+    def test_a_quantity_below_one_is_not_sent(self, post) -> None:
+        """Stripe rejects a zero quantity; an empty workspace still owns its subscription."""
+        post.return_value.json.return_value = {"id": "si_123", "quantity": 1}
+
+        StripeAPIClient().update_subscription_item_quantity("si_123", 0)
+
+        self.assertEqual(post.call_args.kwargs["data"]["quantity"], "1")
